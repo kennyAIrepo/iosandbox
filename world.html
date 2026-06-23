@@ -53,6 +53,11 @@ video.h{display:none}
   border:1px solid rgba(80,200,150,.35);border-radius:6px;color:#8fe;font-size:10px;cursor:pointer;
   font-family:inherit;opacity:0;transition:opacity .4s}
 #saveBtn.show{opacity:1}
+#pubBtn{position:fixed;top:14px;right:326px;z-index:25;padding:6px 14px;background:rgba(60,48,20,.6);
+  border:1px solid rgba(212,168,67,.5);border-radius:6px;color:#f0c25a;font-size:10px;cursor:pointer;
+  font-family:inherit;opacity:0;transition:opacity .4s}
+#pubBtn.show{opacity:1}
+#pubBtn:hover{background:rgba(212,168,67,.25)}
 #jumpBtn{position:fixed;top:14px;right:170px;z-index:25;padding:6px 14px;background:rgba(30,40,60,.55);
   border:1px solid rgba(110,160,230,.35);border-radius:6px;color:#9bf;font-size:10px;cursor:pointer;
   font-family:inherit;opacity:0;transition:opacity .4s}
@@ -165,6 +170,7 @@ video.h{display:none}
 <div id="debug"></div>
 <button id="camBtn">📷 CAM</button>
 <button id="jumpBtn">🎯 JUMP</button>
+<button id="pubBtn" title="Publish to the public web — anyone can enter">🌐 PUBLISH</button>
 <button id="saveBtn">💾 SAVE</button>
 <button id="exitBtn">⏏ EXIT</button>
 
@@ -844,6 +850,7 @@ function enterWorld() {
   els.legend.classList.add('show');
   els.exit.classList.add('show');
   document.getElementById('saveBtn').classList.add('show');
+  document.getElementById('pubBtn').classList.add('show');
   document.getElementById('jumpBtn').classList.add('show');
   document.getElementById('camBtn').classList.add('show');
   refreshCamBtn();
@@ -877,6 +884,7 @@ document.getElementById('shapes').addEventListener('click', e => {
 wireSketchfab();
 
 document.getElementById('saveBtn').addEventListener('click', () => saveCurrentWorld());
+document.getElementById('pubBtn').addEventListener('click', () => publishCurrentWorld());
 
 // Before leaving a built session, offer to save the world (the "save world" prompt).
 els.exit.addEventListener('click', async () => {
@@ -963,11 +971,12 @@ async function renderLibrary(chat) {
   const worlds = await WorldStore.listWorlds().catch(() => []);
   if (!worlds.length) return;
   const lib = document.createElement('div'); lib.id = 'bLib';
-  const title = document.createElement('div'); title.className = 'bLibTitle'; title.textContent = 'your saved worlds — click to reopen and keep building';
+  const title = document.createElement('div'); title.className = 'bLibTitle'; title.textContent = 'your private drafts (this device) — click to reopen & keep building · use 🌐 Publish inside to share';
   const row = document.createElement('div'); row.className = 'bLibRow';
   worlds.forEach(w => {
     const card = document.createElement('button'); card.className = 'bcard';
-    card.innerHTML = '🌐 ' + w.name + ' <small>' + ((w.objects || []).length) + ' objects</small>';
+    const badge = w.publishedAs ? ' <small style="color:#f0c25a">● public</small>' : ' <small>draft</small>';
+    card.innerHTML = '🛠 ' + w.name + ' <small>' + ((w.objects || []).length) + ' objects</small>' + badge;
     card.addEventListener('click', () => openSavedWorld(w));
     const del = document.createElement('span'); del.className = 'bdel'; del.textContent = '✕'; del.title = 'delete';
     del.addEventListener('click', async ev => { ev.stopPropagation(); if (confirm('Delete saved world “' + w.name + '”?')) { await WorldStore.deleteWorld(w.name); card.remove(); } });
@@ -1064,25 +1073,68 @@ async function saveCurrentWorld() {
     await WorldStore.saveWorld(rec);
     await WorldStore.exportFile(rec);                    // also drop a .json on disk
     currentWorld = { name: rec.name, base: rec.base };
-    // Publish to the cloud so it's live at h0p3.io/world/<name> (best-effort).
-    let share = '';
-    try { const url = await publishWorld(rec); share = ' · live at ' + url; }
-    catch (e) { share = ' · (cloud publish skipped: ' + e.message + ')'; }
-    sayAI('saved “' + rec.name + '” — library + .hopeworld.json on disk' + share);
+    // Save = PRIVATE DRAFT only (this device + .json backup). It stays in Build.
+    // It becomes communal/public only when the user explicitly hits 🌐 Publish.
+    sayAI('saved draft “' + rec.name + '” — private, in your Build library. Hit 🌐 Publish to share it with everyone.');
     return true;
   } catch (e) { sayAI('save failed: ' + e.message); return false; }
 }
 
-// Publish a world record to the cloud (Vercel Blob) → returns its shareable URL.
-async function publishWorld(rec) {
-  const slug = (rec.name || 'world').trim().replace(/[^\w-]+/g, '_').slice(0, 80);
-  const portable = await WorldStore.toPortable(rec);
-  const r = await fetch('/api/world/' + encodeURIComponent(slug), {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(portable),
-  });
-  if (!r.ok) throw new Error('publish ' + r.status);
-  const { url } = await r.json().catch(() => ({}));
-  return url || (location.origin + '/world/' + slug);
+// Slugify a world name into its public URL segment.
+function worldSlug(name) { return (name || 'world').trim().replace(/[^\w-]+/g, '_').slice(0, 80); }
+
+// Push the current world to the COMMUNAL public cloud. Explicit, one-time choice:
+// the world leaves the private Build area and joins the public "other worlds" set,
+// live at h0p3.io/world/<chosen-name> for anyone with the link.
+async function publishCurrentWorld() {
+  if (!world) return;
+  // Make sure there's a current snapshot to publish (save a draft first if needed).
+  if (!currentWorld || !currentWorld.name) { const ok = await saveCurrentWorld(); if (!ok) return; }
+  const suggested = (currentWorld && currentWorld.name) || 'my world';
+  let name = prompt('PUBLISH to the public web.\n\nChoose the public name (becomes the link h0p3.io/world/<name>).\nAnyone with the link can enter. Re-publishing the same name updates it.', suggested);
+  if (!name || !name.trim()) return;
+  name = name.trim();
+  const slug = worldSlug(name);
+
+  // Collision guard: warn before overwriting a DIFFERENT existing public world.
+  try {
+    const head = await fetch('/api/world/' + encodeURIComponent(slug));
+    if (head.ok && name !== (currentWorld && currentWorld.name)) {
+      if (!confirm('A public world named “' + slug + '” already exists. Overwrite it?')) return;
+    }
+  } catch { /* offline check — proceed to publish attempt */ }
+
+  sayAI('publishing “' + name + '” to the public cloud…');
+  try {
+    // Snapshot the live world under the chosen public name.
+    const p = world.getAvatarPosition();
+    const rec = {
+      name,
+      base: (currentWorld && currentWorld.base) || { source: 'default', url: WORLD_CONFIG.modelUrl, autoScale: false },
+      avatar: { spawn: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], yaw: nav.yaw, pitch: nav.pitch },
+      environment: world.getEnvironment(),
+      objects: world.snapshot(),
+      scripts: world.scripts,
+    };
+    const portable = await WorldStore.toPortable(rec);
+    const r = await fetch('/api/world/' + encodeURIComponent(slug), {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(portable),
+    });
+    if (!r.ok) {
+      const err = (await r.json().catch(() => ({}))).error || ('HTTP ' + r.status);
+      throw new Error(err);
+    }
+    const { url } = await r.json().catch(() => ({}));
+    const link = url || (location.origin + '/world/' + slug);
+    // Mark the local draft as published (so Build shows it's live) and record the link.
+    try { const d = await WorldStore.loadWorld(currentWorld.name).catch(() => null); if (d) { d.publishedAs = slug; d.publishedUrl = link; await WorldStore.saveWorld(d); } } catch {}
+    try { await navigator.clipboard.writeText(link); } catch {}
+    sayAI('✅ published! Live at ' + link + ' (link copied). It’s now in the public “other worlds” menu.');
+    prompt('Your world is LIVE and public. Share this link — anyone can enter:', link);
+  } catch (e) {
+    sayAI('⚠ publish failed: ' + e.message);
+    alert('Publish failed: ' + e.message + '\n\nIf this says the BLOB token is missing, connect the Blob store to the Vercel project and redeploy.');
+  }
 }
 
 // Boot the chosen scene as a full world, then drop the user in.

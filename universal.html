@@ -226,6 +226,7 @@ body::after{
       <h1 class="title reveal" style="animation-delay:.48s">OTHER<br><em>WORLDS</em></h1>
       <p class="desc reveal" style="animation-delay:.56s">Drop into hosted 3D space as an embodied avatar. Navigate by hand, voice or key — first-person, or watch yourself stand in the scene.</p>
       <span class="enter">Cross over <span class="arr">→</span></span>
+      <button class="buildlink reveal" id="exploreBtn" style="animation-delay:.60s">▦ Explore worlds</button>
       <button class="buildlink reveal" id="buildOwn" style="animation-delay:.62s">＋ Build your own world</button>
     </div>
   </section>
@@ -239,6 +240,21 @@ body::after{
 </div>
 
 <div id="cross"></div>
+
+<!-- Communal published-worlds picker -->
+<div id="worldsModal" style="position:fixed;inset:0;z-index:200;display:none;background:rgba(5,7,11,.86);backdrop-filter:blur(8px);
+  align-items:center;justify-content:center;padding:30px;font-family:var(--mono)">
+  <div style="width:min(820px,92vw);max-height:82vh;overflow:auto;background:#0b0f16;border:1px solid var(--line2);border-radius:14px;padding:26px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+      <h2 style="font-family:var(--display);font-size:20px;color:var(--blue-hi);letter-spacing:1px">OTHER WORLDS</h2>
+      <button id="worldsClose" style="background:none;border:1px solid var(--line2);color:var(--mute);border-radius:6px;padding:5px 10px;cursor:pointer;font-family:inherit;font-size:11px">✕ close</button>
+    </div>
+    <div style="font-size:11px;color:var(--mute);margin-bottom:18px">Worlds published by the community — click one to step inside.</div>
+    <div id="worldsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
+      <div id="worldsStatus" style="color:var(--mute);font-size:12px;grid-column:1/-1">loading…</div>
+    </div>
+  </div>
+</div>
 
 <script>
 const stage = document.getElementById('stage');
@@ -309,6 +325,39 @@ if(buildOwn) buildOwn.addEventListener('click',e=>{
   cross.classList.add('go');
   setTimeout(()=>{ window.location.href='/build'; },560);
 });
+
+/* "explore worlds" → communal picker of published worlds (h0p3.io/world/<name>) */
+const worldsModal=document.getElementById('worldsModal');
+const exploreBtn=document.getElementById('exploreBtn');
+function prettyName(slug){ return String(slug).replace(/_/g,' '); }
+async function openWorlds(){
+  worldsModal.style.display='flex';
+  const grid=document.getElementById('worldsGrid');
+  grid.innerHTML='<div id="worldsStatus" style="color:var(--mute);font-size:12px;grid-column:1/-1">loading…</div>';
+  try{
+    const r=await fetch('/api/world');
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const { worlds=[] }=await r.json();
+    if(!worlds.length){ grid.innerHTML='<div style="color:var(--mute);font-size:12px;grid-column:1/-1">No public worlds yet — be the first: ＋ Build your own world, then 🌐 Publish.</div>'; return; }
+    grid.innerHTML='';
+    worlds.forEach(w=>{
+      const card=document.createElement('a');
+      card.href='/world/'+encodeURIComponent(w.name);
+      card.style.cssText='display:block;padding:16px;border:1px solid var(--line2);border-radius:10px;background:#0e131c;color:var(--ink);text-decoration:none;transition:border-color .2s';
+      card.onmouseenter=()=>card.style.borderColor='var(--blue-hi)';
+      card.onmouseleave=()=>card.style.borderColor='';
+      const d=w.uploadedAt?new Date(w.uploadedAt).toLocaleDateString():'';
+      card.innerHTML='<div style="font-size:14px;color:var(--blue-hi);margin-bottom:6px">🌐 '+prettyName(w.name)+'</div>'+
+                     '<div style="font-size:10px;color:var(--mute)">h0p3.io/world/'+w.name+(d?' · '+d:'')+'</div>';
+      grid.appendChild(card);
+    });
+  }catch(e){
+    grid.innerHTML='<div style="color:#e08;font-size:12px;grid-column:1/-1">couldn’t load worlds: '+e.message+'</div>';
+  }
+}
+if(exploreBtn) exploreBtn.addEventListener('click',e=>{ e.stopPropagation(); openWorlds(); });
+document.getElementById('worldsClose').addEventListener('click',()=>{ worldsModal.style.display='none'; });
+worldsModal.addEventListener('click',e=>{ if(e.target===worldsModal) worldsModal.style.display='none'; });
 
 /* keyboard: ← / → focus, Enter to go */
 let focusIdx=-1;
