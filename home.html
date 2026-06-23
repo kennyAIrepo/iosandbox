@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>h0p3 — spatial runtime</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+:root{
+  --void:#04070a;
+  --green:#5dff9b;--green-mid:#43e07a;--green-hi:#b7ffce;--green-dim:#2fa262;--green-deep:#176b3e;
+  --ink:#d7ecdd;--mute:#5d7468;
+  --line:rgba(73,231,134,.18);--line-soft:rgba(73,231,134,.08);
+  --font-display:'Space Grotesk',system-ui,sans-serif;--font-mono:'Space Grotesk',system-ui,sans-serif;
+  --pad:clamp(20px,5vw,72px);--glow:0 0 14px rgba(93,255,155,.55);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--void);color:var(--ink);font-family:var(--font-mono);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"zero" 0,"tnum" 1}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+::selection{background:var(--green);color:#02110a}
+:focus-visible{outline:2px solid var(--green);outline-offset:3px;border-radius:4px}
+
+/* ===== 3D GRID CANVAS ===== */
+#bg{position:fixed;inset:0;z-index:0;display:block;pointer-events:none}
+.vignette{position:fixed;inset:0;z-index:1;pointer-events:none;
+  background:radial-gradient(ellipse 78% 62% at 50% 44%,transparent 30%,rgba(4,7,10,.55) 72%,var(--void) 100%)}
+.hero-fade{position:fixed;left:0;top:0;bottom:0;width:62%;z-index:1;pointer-events:none;
+  background:linear-gradient(90deg,rgba(4,7,10,.82) 0%,rgba(4,7,10,.5) 38%,transparent 78%)}
+
+/* ===== TOP BAR ===== */
+.topbar{position:fixed;top:0;left:0;right:0;z-index:60;display:flex;align-items:center;gap:26px;padding:14px var(--pad);
+  background:linear-gradient(180deg,rgba(4,7,10,.92),rgba(4,7,10,.4) 70%,transparent);backdrop-filter:blur(9px)}
+.brand{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.12em;font-size:16px}
+.brand .mark{width:24px;height:24px;display:grid;grid-template-columns:1fr 1fr;gap:3px}
+.brand .mark i{border-radius:4px;display:block}
+.brand .mark i:nth-child(1){background:#4f9d60}
+.brand .mark i:nth-child(2){background:#3f5f8f}
+.brand .mark i:nth-child(3){background:#8f7a3c}
+.brand .mark i:nth-child(4){background:#4f9d60}
+.brand b{color:var(--green);text-shadow:var(--glow)}
+.nav{display:flex;align-items:center;gap:2px;margin-left:6px;font-size:13px;letter-spacing:.04em}
+.nav a,.menu-btn{padding:8px 12px;border-radius:8px;color:var(--mute);transition:.18s}
+.nav a:hover,.menu-btn:hover{color:var(--green);background:rgba(73,231,134,.07)}
+.spacer{flex:1}
+.tag-new{font-size:10px;color:var(--void);background:var(--green);padding:2px 6px;border-radius:5px;font-weight:700;letter-spacing:.06em}
+.btn{font-size:13px;letter-spacing:.03em;padding:9px 16px;border-radius:9px;border:1px solid var(--line);color:var(--ink);transition:.18s;white-space:nowrap}
+.btn:hover{border-color:var(--green);color:var(--green);box-shadow:var(--glow)}
+.btn-solid{background:var(--green);color:#02110a;border-color:var(--green);font-weight:600;box-shadow:0 0 22px rgba(93,255,155,.35)}
+.btn-solid:hover{background:var(--green-hi);border-color:var(--green-hi);color:#02110a}
+.menu-wrap{position:relative}
+.menu-btn{display:flex;align-items:center;gap:7px;font-size:13px;border:1px solid var(--line);border-radius:9px}
+.menu-btn .car{transition:transform .2s;color:var(--green)}
+.menu-wrap.open .menu-btn{color:var(--green);border-color:var(--green);box-shadow:var(--glow)}
+.menu-wrap.open .car{transform:rotate(180deg)}
+.menu-panel{position:absolute;top:calc(100% + 10px);left:0;width:336px;background:rgba(7,13,12,.97);border:1px solid var(--line);border-radius:14px;padding:8px;opacity:0;visibility:hidden;transform:translateY(-6px);transition:.18s;box-shadow:0 24px 70px rgba(0,0,0,.7),0 0 30px rgba(73,231,134,.08);backdrop-filter:blur(10px)}
+.menu-wrap.open .menu-panel{opacity:1;visibility:visible;transform:translateY(0)}
+.menu-panel .mitem{display:flex;gap:12px;align-items:flex-start;padding:11px 12px;border-radius:10px;transition:background .15s}
+.menu-panel .mitem:hover{background:rgba(73,231,134,.07)}
+.menu-panel .ic{color:var(--green);font-size:15px;width:20px;text-align:center;margin-top:1px;text-shadow:var(--glow)}
+.menu-panel .mt{font-size:13px;color:var(--ink);font-weight:600;letter-spacing:.02em}
+.menu-panel .ms{font-size:11px;color:var(--mute);line-height:1.45}
+.menu-div{height:1px;background:var(--line-soft);margin:6px 10px}
+
+/* ===== LAYOUT ===== */
+main{position:relative;z-index:2}
+.wrap{max-width:1320px;margin:0 auto;padding:0 var(--pad)}
+.eyebrow{font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--green-mid);display:flex;align-items:center;gap:10px}
+.eyebrow::before{content:"";width:26px;height:1px;background:var(--green-mid);box-shadow:var(--glow)}
+
+/* HERO */
+.hero{padding:132px 0 90px;display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(28px,5vw,72px);align-items:center;min-height:100vh}
+.hero h1{font-family:var(--font-display);font-weight:600;line-height:1.02;letter-spacing:-.02em;font-size:clamp(2.7rem,6vw,5rem);margin:22px 0 0}
+.hero h1 em{font-style:normal;color:var(--green);text-shadow:0 0 26px rgba(93,255,155,.65)}
+.hero .lede{margin-top:22px;max-width:46ch;color:#aebfb4;font-size:15.5px}
+.hero .lede b{color:var(--ink);font-weight:600}
+.hero .cta-row{display:flex;gap:12px;margin-top:30px;flex-wrap:wrap}
+.cta-lg{font-size:14px;padding:13px 22px;border-radius:11px}
+.meta-row{display:flex;gap:26px;margin-top:36px;flex-wrap:wrap}
+.meta{font-size:11.5px;color:var(--mute);letter-spacing:.04em}
+.meta b{color:var(--green);font-weight:600;display:block;font-size:13px;margin-bottom:1px;text-shadow:0 0 10px rgba(93,255,155,.4)}
+
+/* MIRROR */
+.mirror{position:relative;aspect-ratio:4/5;border-radius:18px;overflow:hidden;cursor:pointer;background:radial-gradient(120% 90% at 50% 8%,#0a1a14,#03100b 72%);border:1px solid var(--line);box-shadow:0 0 0 1px rgba(73,231,134,.08),0 30px 90px rgba(0,0,0,.6),0 0 60px rgba(73,231,134,.12),inset 0 0 70px rgba(73,231,134,.05);transition:transform .3s,box-shadow .3s,border-color .3s}
+.mirror:hover{transform:translateY(-4px);border-color:rgba(93,255,155,.5);box-shadow:0 30px 90px rgba(0,0,0,.6),0 0 80px rgba(73,231,134,.28)}
+.mirror video,.mirror canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.mirror video{transform:scaleX(-1)}
+.mirror canvas{z-index:2}
+.mirror .scrim{position:absolute;inset:0;z-index:3;background:linear-gradient(180deg,transparent 40%,rgba(3,11,7,.78));pointer-events:none}
+.mirror .scan{position:absolute;inset:0;z-index:3;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(73,231,134,.05) 0 1px,transparent 1px 3px);mix-blend-mode:screen;opacity:.5}
+.hud-c{position:absolute;width:26px;height:26px;border:2px solid var(--green);z-index:4;opacity:.9;box-shadow:var(--glow)}
+.hud-c.tl{top:14px;left:14px;border-right:0;border-bottom:0;border-radius:6px 0 0 0}
+.hud-c.tr{top:14px;right:14px;border-left:0;border-bottom:0;border-radius:0 6px 0 0}
+.hud-c.bl{bottom:14px;left:14px;border-right:0;border-top:0;border-radius:0 0 0 6px}
+.hud-c.br{bottom:14px;right:14px;border-left:0;border-top:0;border-radius:0 0 6px 0}
+.live{position:absolute;top:16px;left:50%;transform:translateX(-50%);z-index:5;display:flex;align-items:center;gap:7px;font-size:10.5px;letter-spacing:.16em;color:var(--green);background:rgba(4,12,8,.65);padding:5px 12px;border-radius:20px;border:1px solid var(--line)}
+.live .dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 10px var(--green);animation:blink 1.4s ease-in-out infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
+.mirror .enter{position:absolute;left:0;right:0;bottom:0;z-index:5;padding:18px 20px;display:flex;justify-content:space-between;align-items:flex-end;gap:12px}
+.mirror .enter .l1{font-family:var(--font-display);font-size:18px;font-weight:600;color:var(--ink)}
+.mirror .enter .l2{font-size:11px;color:var(--mute);letter-spacing:.04em;margin-top:2px}
+.mirror .enter .go{font-size:12px;letter-spacing:.04em;color:#02110a;background:var(--green);padding:9px 15px;border-radius:9px;font-weight:600;white-space:nowrap;transition:.2s;display:flex;align-items:center;gap:6px;box-shadow:0 0 20px rgba(93,255,155,.4)}
+.mirror:hover .enter .go{background:var(--green-hi)}
+.mirror .hint{position:absolute;inset:0;z-index:4;display:grid;place-items:center;text-align:center;color:var(--mute);font-size:11px;letter-spacing:.08em;padding:24px;pointer-events:none}
+
+/* WAYS IN — circuit spine */
+.ways-sec{padding:54px 0 36px;position:relative}
+.sec-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:34px;flex-wrap:wrap}
+.sec-head h2{font-family:var(--font-display);font-weight:600;font-size:clamp(1.6rem,2.8vw,2.2rem);letter-spacing:-.01em}
+.sec-head h2 b{color:var(--green);text-shadow:0 0 18px rgba(93,255,155,.5)}
+.sec-head p{color:var(--mute);font-size:13px;max-width:42ch}
+.ways{position:relative;padding-left:46px}
+.ways .spine{position:absolute;left:14px;top:8px;bottom:8px;width:1.5px;background:linear-gradient(180deg,transparent,var(--green-mid) 8%,var(--green-mid) 92%,transparent);box-shadow:0 0 12px rgba(73,231,134,.5)}
+.way{position:relative;display:grid;grid-template-columns:64px 1fr auto;align-items:center;gap:22px;padding:24px 22px 24px 6px;border-top:1px solid var(--line-soft);transition:.25s;overflow:hidden}
+.way:last-child{border-bottom:1px solid var(--line-soft)}
+.way::before{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(73,231,134,.08),transparent 55%);opacity:0;transition:opacity .25s}
+.way:hover::before,.way:focus-visible::before{opacity:1}
+.way .pip{position:absolute;left:-39px;top:50%;transform:translateY(-50%);width:13px;height:13px;border-radius:50%;background:var(--void);border:2px solid var(--green-dim);transition:.25s;z-index:2}
+.way:hover .pip,.way:focus-visible .pip{border-color:var(--green);background:var(--green);box-shadow:0 0 16px 3px rgba(93,255,155,.7)}
+.way .pip::after{content:"";position:absolute;left:50%;top:50%;width:30px;height:1.5px;background:var(--green-mid);transform:translateY(-50%);opacity:0;transition:.25s;box-shadow:0 0 8px var(--green)}
+.way:hover .pip::after,.way:focus-visible .pip::after{opacity:.7}
+.way .w-idx{font-family:var(--font-display);font-size:30px;font-weight:600;color:var(--green-deep);transition:.25s;letter-spacing:-.02em}
+.way:hover .w-idx,.way:focus-visible .w-idx{color:var(--green);text-shadow:0 0 18px rgba(93,255,155,.6)}
+.way .w-mid{min-width:0}
+.way .w-ttl{font-family:var(--font-display);font-size:21px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.way .w-kind{font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--green-mid)}
+.way .w-desc{font-size:12.5px;color:#94a69b;margin-top:7px;max-width:62ch;line-height:1.55}
+.way .w-go{display:inline-flex;align-items:center;gap:9px;font-size:12.5px;color:var(--green);letter-spacing:.04em;font-weight:600;white-space:nowrap;transition:gap .25s,text-shadow .25s}
+.way .w-go .arr{transition:transform .25s}
+.way:hover .w-go,.way:focus-visible .w-go{text-shadow:0 0 14px rgba(93,255,155,.6)}
+.way:hover .w-go .arr,.way:focus-visible .w-go .arr{transform:translateX(6px)}
+
+/* PITCH BAND */
+.band{position:relative;padding:78px 0 56px;margin-top:30px}
+.band-inner{position:relative;z-index:1;border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);padding:48px 0;display:grid;grid-template-columns:.9fr 1.1fr;gap:clamp(24px,5vw,64px);align-items:center}
+.band h3{font-family:var(--font-display);font-weight:500;font-size:clamp(1.5rem,2.8vw,2.3rem);line-height:1.18;letter-spacing:-.01em}
+.band h3 em{font-style:normal;color:var(--green);text-shadow:0 0 20px rgba(93,255,155,.55)}
+.band p{color:#a0b1a6;font-size:14.5px;max-width:54ch}
+.band p+p{margin-top:14px}
+.creds{position:relative;z-index:1;padding:40px 0 8px}
+.creds .lab{font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--mute);text-align:center;margin-bottom:20px}
+.creds .row{display:flex;flex-wrap:wrap;justify-content:center;gap:14px 36px;align-items:center;opacity:.85}
+.creds .row span{font-size:13px;letter-spacing:.06em;color:#9aa69e}
+.creds .row span b{color:var(--green-mid);font-weight:600}
+
+/* FOOTER */
+footer{position:relative;z-index:2;border-top:1px solid var(--line-soft);margin-top:48px;padding:46px 0 40px}
+.foot{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:flex-start}
+.foot .col h4{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin-bottom:12px}
+.foot .col a{display:block;font-size:13px;color:#9aa69e;padding:3px 0;transition:color .15s}
+.foot .col a:hover{color:var(--green)}
+.foot .end{display:flex;flex-direction:column;gap:6px;text-align:right}
+.foot .end .v{font-size:11px;color:var(--mute);letter-spacing:.1em}
+.foot .end .b{font-family:var(--font-display);font-size:15px;color:var(--ink)}
+.foot .end .b b{color:var(--green);text-shadow:var(--glow)}
+
+/* SHELL */
+.shell{position:fixed;inset:0;z-index:200;background:var(--void);display:none;flex-direction:column}
+.shell.on{display:flex}
+.shell-bar{display:flex;align-items:center;gap:8px;padding:10px 16px;flex-wrap:wrap;position:relative;z-index:2;background:linear-gradient(180deg,rgba(5,12,9,.97),rgba(5,12,9,.82));border-bottom:1px solid var(--line)}
+.shell-bar .gicon{width:30px;height:30px;border:1.5px solid var(--green);border-radius:7px;display:grid;place-items:center;color:var(--green);font-size:13px;box-shadow:var(--glow)}
+.chip{font-size:12px;letter-spacing:.03em;color:var(--mute);padding:7px 13px;border-radius:8px;display:flex;align-items:center;gap:7px;transition:.16s;border:1px solid transparent}
+.chip:hover{color:var(--green);background:rgba(73,231,134,.07)}
+.chip.active{color:#02110a;background:var(--green);font-weight:600;box-shadow:0 0 18px rgba(93,255,155,.4)}
+.chip .gl{color:var(--green)}.chip.active .gl{color:#02110a}
+.shell-bar .sep{width:1px;height:18px;background:var(--line);margin:0 4px}
+.shell-bar .exit{margin-left:auto;border:1px solid var(--line);border-radius:8px;padding:7px 14px;font-size:12px;color:var(--ink);display:flex;gap:8px;align-items:center;transition:.16s}
+.shell-bar .exit:hover{border-color:var(--green);color:var(--green);box-shadow:var(--glow)}
+.shell-frame{flex:1;position:relative;background:#000}
+.shell-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+.shell-load{position:absolute;inset:0;display:grid;place-items:center;color:var(--mute);font-size:12px;letter-spacing:.1em;z-index:1}
+.shell-load .cur{color:var(--green);animation:blink 1s step-end infinite}
+
+@media (max-width:980px){
+  .hero{grid-template-columns:1fr;padding-top:108px;min-height:auto}
+  .mirror{max-width:440px;margin:0 auto;width:100%}
+  .band-inner{grid-template-columns:1fr}.nav{display:none}
+  .hero-fade{width:100%;background:linear-gradient(180deg,rgba(4,7,10,.7),transparent 30%)}
+  .way{grid-template-columns:48px 1fr;gap:16px}
+  .way .w-go{grid-column:2;justify-self:start;margin-top:4px}
+}
+@media (max-width:560px){.menu-panel{width:min(336px,calc(100vw - 32px))}.meta-row{gap:16px}.foot{flex-direction:column}.foot .end{text-align:left}.ways{padding-left:34px}.way .pip{left:-31px}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<!-- 3D GRID -->
+<canvas id="bg"></canvas>
+<div class="vignette"></div>
+<div class="hero-fade"></div>
+
+<!-- TOP BAR -->
+<header class="topbar">
+  <a class="brand" href="#top"><span class="mark"><i></i><i></i><i></i><i></i></span>h<b>0</b>p<b>3</b></a>
+  <nav class="nav">
+    <a href="#overview">Overview</a><a href="#endpoints">Endpoints</a>
+    <a href="/universal.html#worlds">Worlds</a>
+    <a href="/build">Build <span class="tag-new">new</span></a>
+  </nav>
+  <div class="menu-wrap" id="menuWrap">
+    <button class="menu-btn" id="menuBtn" aria-haspopup="true" aria-expanded="false">menu <span class="car">▾</span></button>
+    <div class="menu-panel" role="menu">
+      <a class="mitem" role="menuitem" href="#overview"><span class="ic">◇</span><span><span class="mt">Overview</span><span class="ms">What h0p3 is, in one screen — and how to enter.</span></span></a>
+      <a class="mitem" role="menuitem" href="#" data-enter="mirror"><span class="ic">◉</span><span><span class="mt">The Mirror · live AR</span><span class="ms">Your camera becomes the interface. Holo body + hand tracking, effects, games.</span></span></a>
+      <div class="menu-div"></div>
+      <a class="mitem" role="menuitem" href="/universal.html#worlds"><span class="ic">⊕</span><span><span class="mt">Other Worlds</span><span class="ms">Drop into hosted 3D scenes the community has published.</span></span></a>
+      <a class="mitem" role="menuitem" href="/build"><span class="ic">▤</span><span><span class="mt">Build a World</span><span class="ms">Compose from blocks in the browser, publish to a public URL.</span></span></a>
+      <a class="mitem" role="menuitem" href="/build"><span class="ic">✦</span><span><span class="mt">Your Worlds</span><span class="ms">Your drafts on this device — reopen and keep building.</span></span></a>
+      <div class="menu-div"></div>
+      <a class="mitem" role="menuitem" href="mailto:hello@h0p3.io"><span class="ic">✉</span><span><span class="mt">Contact &amp; Enterprise</span><span class="ms">Studios &amp; agencies running 20+ camera rigs — talk to us.</span></span></a>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <a class="btn" href="mailto:sales@h0p3.io">Contact sales</a>
+  <button class="btn btn-solid" data-enter="mirror">Enter the mirror</button>
+</header>
+
+<main id="top">
+  <section class="wrap hero" id="overview">
+    <div class="hero-copy">
+      <div class="eyebrow">the world's first browser-native spatial runtime</div>
+      <h1>Your room is the&nbsp;<em>interface</em>.</h1>
+      <p class="lede"><b>h0p3 is the world's first browser-native spatial runtime engine — headsetless VR that runs in a tab.</b> No headset, no download, no code: open a link on any camera and full-body + hand tracking wraps effects, physics and presence around you, live. Author worlds end-to-end in the browser and publish them to a public URL.</p>
+      <div class="cta-row">
+        <button class="btn btn-solid cta-lg" data-enter="mirror">Step into the mirror →</button>
+        <a class="btn cta-lg" href="/universal.html#worlds">Explore worlds</a>
+      </div>
+      <div class="meta-row">
+        <div class="meta"><b>headsetless VR</b>runs on any camera</div>
+        <div class="meta"><b>no download · no code</b>open a link, start authoring</div>
+        <div class="meta"><b>end-to-end</b>capture → build → publish</div>
+      </div>
+    </div>
+    <div class="mirror" id="mirror" role="button" tabindex="0" aria-label="Live camera mirror — click to enter DEI">
+      <video id="mirrorVideo" autoplay playsinline muted></video>
+      <canvas id="mirrorCanvas"></canvas>
+      <div class="hint" id="mirrorHint">requesting camera…<br>your stream stays on-device</div>
+      <div class="scan"></div><div class="scrim"></div>
+      <span class="hud-c tl"></span><span class="hud-c tr"></span><span class="hud-c bl"></span><span class="hud-c br"></span>
+      <div class="live"><span class="dot"></span> LIVE · YOUR CAMERA</div>
+      <div class="enter"><div><div class="l1">The Mirror</div><div class="l2">holo-body + hand tracking, live in the glass</div></div><div class="go">enter ◉</div></div>
+    </div>
+  </section>
+
+  <section class="wrap ways-sec" id="endpoints">
+    <div class="sec-head">
+      <h2>Four ways <b>in</b>.</h2>
+      <p>One runtime, four endpoints — augment your room, walk into worlds, build a new one, or open what you've shipped.</p>
+    </div>
+    <div class="ways">
+      <div class="spine"></div>
+      <div class="way" data-enter="mirror" role="button" tabindex="0">
+        <span class="pip"></span><span class="w-idx">01</span>
+        <span class="w-mid"><span class="w-ttl">The Mirror <span class="w-kind">live AR · DEI</span></span><span class="w-desc">The room you're already in, augmented. Body and hand tracking wrap effects, physics and games around you — live, in the glass.</span></span>
+        <span class="w-go">enter <span class="arr">→</span></span>
+      </div>
+      <a class="way" href="/universal.html#worlds">
+        <span class="pip"></span><span class="w-idx">02</span>
+        <span class="w-mid"><span class="w-ttl">Other Worlds <span class="w-kind">hosted 3D</span></span><span class="w-desc">Drop into scenes the community has published, as an embodied avatar. Navigate by hand, voice or key — first-person, or watch yourself stand inside them.</span></span>
+        <span class="w-go">explore <span class="arr">→</span></span>
+      </a>
+      <a class="way" href="/build" id="build">
+        <span class="pip"></span><span class="w-idx">03</span>
+        <span class="w-mid"><span class="w-ttl">Build a World <span class="w-kind">browser editor</span></span><span class="w-desc">Compose from blocks in the browser — worlds, avatars, gestures, goals — then publish straight to a public URL.</span></span>
+        <span class="w-go">open builder <span class="arr">→</span></span>
+      </a>
+      <a class="way" href="/build" id="you">
+        <span class="pip"></span><span class="w-idx">04</span>
+        <span class="w-mid"><span class="w-ttl">Your Worlds <span class="w-kind">your drafts</span></span><span class="w-desc">Everything you've built on this device — reopen, keep editing, and publish a public link when it's ready.</span></span>
+        <span class="w-go">open your space <span class="arr">→</span></span>
+      </a>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="wrap"><div class="band-inner">
+      <h3>Spatial computing<br>with <em>nothing to install</em>.</h3>
+      <div>
+        <p>Today spatial experiences mean a headset, a download, a wall of cameras. h0p3 collapses that into a link. The webcam already on every phone and laptop becomes a full-body, full-hand tracking rig — and the page renders effects, physics and avatars in real time, in the browser.</p>
+        <p>For studios and agencies running 20+ camera rigs for a single shot, that's the whole stack in a tab: capture, render, publish. For everyone else, it's the first spatial layer you can reach without leaving the web.</p>
+      </div>
+    </div></div>
+  </section>
+
+  <section class="wrap creds">
+    <div class="lab">built &amp; shown at</div>
+    <div class="row"><span><b>NYU</b> ITP</span><span>Microsoft <b>Garage</b></span><span>NYU Leslie <b>eLab</b></span><span><b>UN</b> Ethical AI Panel</span><span><b>BitBasel</b></span></div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div class="col"><h4>Endpoints</h4><a href="#" data-enter="mirror">The Mirror — live AR</a><a href="/universal.html#worlds">Other Worlds</a><a href="/build">Build a World</a><a href="/build">Your Worlds</a></div>
+    <div class="col"><h4>Company</h4><a href="#overview">Overview</a><a href="mailto:hello@h0p3.io">hello@h0p3.io</a><a href="mailto:sales@h0p3.io">Enterprise — sales@h0p3.io</a></div>
+    <div class="end"><div class="b">h<b>0</b>p<b>3</b></div><div class="v">spatial runtime · v0.5 · made in NYC</div></div>
+  </div>
+</footer>
+
+<div class="shell" id="shell" aria-hidden="true">
+  <div class="shell-bar">
+    <div class="gicon">▦</div>
+    <button class="chip active" data-mode="mirror"><span class="gl">◉</span> mirror</button>
+    <button class="chip" data-mode="worlds"><span class="gl">⊕</span> worlds</button>
+    <button class="chip" data-mode="build"><span class="gl">▤</span> build</button>
+    <button class="chip" data-mode="assets"><span class="gl">✦</span> assets</button>
+    <div class="sep"></div>
+    <span class="chip" style="cursor:default;color:var(--mute)">games · effects · physics</span>
+    <button class="exit" id="shellExit">⟵ exit to landing</button>
+  </div>
+  <div class="shell-frame">
+    <div class="shell-load" id="shellLoad">booting DEI runtime<span class="cur">▋</span></div>
+    <iframe id="shellFrame" title="DEI runtime" allow="camera; microphone; fullscreen; xr-spatial-tracking; accelerometer; gyroscope"></iframe>
+  </div>
+</div>
+
+<script>
+/* ================= 3D NEON GRID — WebGL volumetric lattice ================= */
+(function(){
+  const canvas=document.getElementById('bg');
+  if(!window.THREE) return;
+  const reduce=matchMedia('(prefers-reduced-motion:reduce)').matches;
+  let renderer;
+  try{ renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true,powerPreference:'high-performance'}); }
+  catch(e){ return; }
+  renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));
+  renderer.setClearColor(0x04070a,1);
+
+  const scene=new THREE.Scene();
+  scene.fog=new THREE.FogExp2(0x04070a,0.05);
+  const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,150);
+  camera.position.set(0,1.0,8);
+  const world=new THREE.Group(); scene.add(world);
+
+  /* lattice geometry */
+  const halfW=12, stepX=2.0;
+  const yL=[-2.6,-1.0,0.6,2.2,3.8];
+  const floorY=yL[0], ceilY=yL[yL.length-1];
+  const stepZ=3.0, zCount=24, zFront=6, zBack=zFront-stepZ*zCount;
+
+  /* glowing dots through the volume */
+  const P=[],S=[],PH=[],BR=[];
+  for(let x=-halfW;x<=halfW;x+=stepX){
+    for(let yi=0;yi<yL.length;yi++){
+      const y=yL[yi], vfac=1-(yi/(yL.length-1))*0.55; /* floor brighter than ceiling */
+      for(let k=0;k<zCount;k++){
+        const z=zFront-k*stepZ, hub=Math.random()<0.022;
+        P.push(x,y,z); S.push(hub?0.55:0.11+Math.random()*0.05);
+        PH.push(Math.random()*6.283); BR.push((hub?1.0:0.30+Math.random()*0.26)*vfac);
+      }
+    }
+  }
+  const dg=new THREE.BufferGeometry();
+  dg.setAttribute('position',new THREE.Float32BufferAttribute(P,3));
+  dg.setAttribute('aSize',new THREE.Float32BufferAttribute(S,1));
+  dg.setAttribute('aPhase',new THREE.Float32BufferAttribute(PH,1));
+  dg.setAttribute('aBright',new THREE.Float32BufferAttribute(BR,1));
+  const dotMat=new THREE.ShaderMaterial({
+    transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+    uniforms:{ uTime:{value:0}, uDpr:{value:Math.min(devicePixelRatio||1,2)} },
+    vertexShader:[
+      'attribute float aSize; attribute float aPhase; attribute float aBright;',
+      'uniform float uTime; uniform float uDpr; varying float vA;',
+      'void main(){',
+      ' vec4 mv=modelViewMatrix*vec4(position,1.0);',
+      ' float dist=-mv.z;',
+      ' float tw=0.62+0.38*sin(uTime*1.6+aPhase);',
+      ' float near=smoothstep(0.4,3.0,dist);',
+      ' float far=smoothstep(98.0,10.0,dist);',
+      ' vA=aBright*tw*near*far;',
+      ' gl_PointSize=aSize*uDpr*(360.0/dist);',
+      ' gl_Position=projectionMatrix*mv;',
+      '}'
+    ].join('\n'),
+    fragmentShader:[
+      'varying float vA;',
+      'void main(){',
+      ' float d=length(gl_PointCoord-0.5);',
+      ' float core=smoothstep(0.5,0.0,d);',
+      ' vec3 col=mix(vec3(0.45,1.0,0.66),vec3(0.16,0.78,0.40),d*1.6);',
+      ' gl_FragColor=vec4(col, core*core*vA);',
+      '}'
+    ].join('\n')
+  });
+  world.add(new THREE.Points(dg,dotMat));
+
+  /* grid lines: floor + ceiling + side walls */
+  const L=[];
+  function seg(ax,ay,az,bx,by,bz){ L.push(ax,ay,az,bx,by,bz); }
+  [floorY,ceilY].forEach(Y=>{
+    for(let x=-halfW;x<=halfW;x+=stepX) seg(x,Y,zFront,x,Y,zBack);
+    for(let k=0;k<=zCount;k++){ const z=zFront-k*stepZ; seg(-halfW,Y,z,halfW,Y,z); }
+  });
+  for(let k=0;k<=zCount;k++){ const z=zFront-k*stepZ; seg(-halfW,floorY,z,-halfW,ceilY,z); seg(halfW,floorY,z,halfW,ceilY,z); }
+  const lg=new THREE.BufferGeometry();
+  lg.setAttribute('position',new THREE.Float32BufferAttribute(L,3));
+  world.add(new THREE.LineSegments(lg,new THREE.LineBasicMaterial({color:0x49e786,transparent:true,opacity:0.15,blending:THREE.AdditiveBlending,fog:true})));
+
+  /* interaction + render loop */
+  let mx=0,my=0,tmx=0,tmy=0;
+  if(!reduce) addEventListener('pointermove',e=>{tmx=(e.clientX/innerWidth-0.5);tmy=(e.clientY/innerHeight-0.5);},{passive:true});
+  function resize(){ camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth,innerHeight,false); }
+  addEventListener('resize',resize); resize();
+  const clock=new THREE.Clock(); let trav=0;
+  function frame(){
+    const dt=Math.min(clock.getDelta(),0.05), t=clock.elapsedTime;
+    mx+=(tmx-mx)*0.04; my+=(tmy-my)*0.04;
+    trav+=dt*(stepZ/7); if(trav>=stepZ) trav-=stepZ; world.position.z=trav;
+    camera.position.x=Math.sin(t*0.12)*0.5+mx*1.6;
+    camera.position.y=1.0-my*0.8;
+    camera.lookAt(0,0.5,-12);
+    dotMat.uniforms.uTime.value=t;
+    renderer.render(scene,camera);
+    if(!reduce) requestAnimationFrame(frame);
+  }
+  if(reduce){ renderer.render(scene,camera); } else frame();
+})();
+
+/* ================= UI: menu / shell / mirror ================= */
+const menuWrap=document.getElementById('menuWrap'),menuBtn=document.getElementById('menuBtn');
+menuBtn.addEventListener('click',e=>{e.stopPropagation();const o=menuWrap.classList.toggle('open');menuBtn.setAttribute('aria-expanded',o)});
+document.addEventListener('click',e=>{if(!menuWrap.contains(e.target)){menuWrap.classList.remove('open');menuBtn.setAttribute('aria-expanded','false')}});
+
+const shell=document.getElementById('shell'),frame=document.getElementById('shellFrame'),shellLoad=document.getElementById('shellLoad');
+/* Root-relative routes so this works on h0p3.io AND *.vercel.app / preview. */
+const ROUTES={mirror:'/play',worlds:'/universal.html#worlds',build:'/build',assets:'/build'};
+function enterShell(mode='mirror'){setMode(mode,true);shell.classList.add('on');shell.setAttribute('aria-hidden','false');document.body.style.overflow='hidden';shellLoad.style.display='grid';frame.onload=()=>{shellLoad.style.display='none'};if(frame.src!==location.origin+ROUTES[mode])frame.src=ROUTES[mode]}
+function exitShell(){shell.classList.remove('on');shell.setAttribute('aria-hidden','true');document.body.style.overflow=''}
+function setMode(mode,silent){document.querySelectorAll('.chip[data-mode]').forEach(c=>c.classList.toggle('active',c.dataset.mode===mode));if(!silent&&shell.classList.contains('on')){shellLoad.style.display='grid';frame.src=ROUTES[mode]}}
+document.getElementById('shellExit').addEventListener('click',exitShell);
+document.querySelectorAll('.chip[data-mode]').forEach(c=>c.addEventListener('click',()=>setMode(c.dataset.mode)));
+document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(shell.classList.contains('on'))exitShell();menuWrap.classList.remove('open')}});
+document.querySelectorAll('[data-enter]').forEach(el=>{const mode=el.dataset.enter;el.addEventListener('click',e=>{e.preventDefault();menuWrap.classList.remove('open');enterShell(mode)});el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();enterShell(mode)}})});
+document.getElementById('mirror').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();enterShell('mirror')}});
+
+/* live holo mirror preview (real camera + MediaPipe, procedural fallback) */
+const video=document.getElementById('mirrorVideo'),canvas=document.getElementById('mirrorCanvas'),ctx=canvas.getContext('2d'),hint=document.getElementById('mirrorHint');
+let MW=0,MH=0;function sizeCanvas(){const r=canvas.getBoundingClientRect();MW=canvas.width=r.width;MH=canvas.height=r.height}
+window.addEventListener('resize',sizeCanvas);
+const GREEN='rgba(93,255,155,',CYAN='rgba(120,250,210,';
+function dot(x,y,r,c){ctx.beginPath();ctx.arc(x,y,r,0,7);ctx.fillStyle=c+'0.95)';ctx.shadowColor=c+'1)';ctx.shadowBlur=11;ctx.fill();ctx.shadowBlur=0}
+function line(a,b,c,w){ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.strokeStyle=c+'0.6)';ctx.lineWidth=w||2;ctx.stroke()}
+/* h0p3 holo-hands: translucent palm membrane + glowing bones + bright fingertips */
+const HAND_CONN=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+const TIPS=[4,8,12,16,20], BRIGHT='rgba(176,255,236,';
+function holoHand(P){
+  if(!P||P.length<21)return; ctx.save(); ctx.lineCap='round'; ctx.lineJoin='round';
+  const palm=[0,1,5,9,13,17].map(i=>P[i]);
+  ctx.beginPath();ctx.moveTo(palm[0][0],palm[0][1]);for(let i=1;i<palm.length;i++)ctx.lineTo(palm[i][0],palm[i][1]);ctx.closePath();
+  ctx.shadowColor=CYAN+'0.6)';ctx.shadowBlur=18;ctx.fillStyle=CYAN+'0.09)';ctx.fill();ctx.shadowBlur=0;
+  ctx.strokeStyle=CYAN+'0.22)';ctx.lineWidth=1;ctx.stroke();
+  ctx.shadowColor=CYAN+'0.95)';ctx.shadowBlur=9;
+  HAND_CONN.forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(P[a][0],P[a][1]);ctx.lineTo(P[b][0],P[b][1]);ctx.strokeStyle=CYAN+'0.78)';ctx.lineWidth=2.4;ctx.stroke()});
+  ctx.shadowBlur=0;
+  P.forEach((p,i)=>{const t=TIPS.indexOf(i)>-1;dot(p[0],p[1],t?3.4:2.1,t?BRIGHT:CYAN)});
+  ctx.restore();
+}
+function fallbackLoop(){sizeCanvas();let t=0;hint.innerHTML='holo preview · enable camera for live tracking';(function fl(){t+=0.016;ctx.clearRect(0,0,MW,MH);const cx=MW*0.5,cy=MH*0.42,s=Math.min(MW,MH),br=Math.sin(t*1.4)*0.012;const u=(x,y)=>[cx+x*s,cy+y*s];const head=u(0,-0.30+br),neck=u(0,-0.20+br),pelvis=u(0,0.10),sway=Math.sin(t*0.9)*0.02;const shL=u(-0.12+sway,-0.18),shR=u(0.12+sway,-0.18),elL=u(-0.20+Math.sin(t*1.1)*0.03,-0.04),elR=u(0.20-Math.sin(t*1.1)*0.03,-0.04),haL=u(-0.22,0.10+Math.sin(t*1.3)*0.02),haR=u(0.22,0.10-Math.sin(t*1.3)*0.02),hipL=u(-0.07,0.10),hipR=u(0.07,0.10),knL=u(-0.08,0.28),knR=u(0.08,0.28),ftL=u(-0.08,0.46),ftR=u(0.08,0.46);[[neck,head],[neck,shL],[neck,shR],[shL,elL],[elL,haL],[shR,elR],[elR,haR],[neck,pelvis],[pelvis,hipL],[pelvis,hipR],[hipL,knL],[knL,ftL],[hipR,knR],[knR,ftR],[shL,shR],[hipL,hipR]].forEach(gg=>line(gg[0],gg[1],GREEN,2));ctx.beginPath();ctx.arc(head[0],head[1],s*0.045,0,7);ctx.strokeStyle=GREEN+'0.6)';ctx.lineWidth=2;ctx.stroke();[head,neck,shL,shR,elL,elR,haL,haR,pelvis,hipL,hipR,knL,knR,ftL,ftR].forEach(p=>dot(p[0],p[1],3,GREEN));[haL,haR].forEach((h,i)=>{ctx.save();ctx.lineCap='round';ctx.shadowColor=CYAN+'0.9)';ctx.shadowBlur=8;for(let f=0;f<5;f++){const a=(-0.5+f*0.25)+(i?0:Math.PI),ln=s*0.062,mid=[h[0]+Math.cos(a)*ln*0.55,h[1]-Math.sin(a)*ln*0.55*0.6-s*0.012],tip=[h[0]+Math.cos(a)*ln,h[1]-Math.sin(a)*ln*0.6-s*0.022];ctx.beginPath();ctx.moveTo(h[0],h[1]);ctx.lineTo(mid[0],mid[1]);ctx.lineTo(tip[0],tip[1]);ctx.strokeStyle=CYAN+'0.72)';ctx.lineWidth=2.2;ctx.stroke();dot(tip[0],tip[1],2.6,BRIGHT)}ctx.shadowBlur=0;dot(h[0],h[1],3,CYAN);ctx.restore()});requestAnimationFrame(fl)})()}
+async function startMirror(){sizeCanvas();let stream;try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:640,height:800},audio:false})}catch(e){fallbackLoop();return}video.srcObject=stream;await video.play().catch(()=>{});hint.style.display='none';let pose=null,hands=null;try{const vision=await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs');const {PoseLandmarker,HandLandmarker,FilesetResolver}=vision;const files=await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');pose=await PoseLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',delegate:'GPU'},runningMode:'VIDEO',numPoses:1});hands=await HandLandmarker.createFromOptions(files,{baseOptions:{modelAssetPath:'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',delegate:'GPU'},runningMode:'VIDEO',numHands:2})}catch(e){pose=null}const PL=[[11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],[23,25],[25,27],[24,26],[26,28],[27,31],[28,32]];const HL=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];function draw2(){sizeCanvas();ctx.clearRect(0,0,MW,MH);const mx=p=>[(1-p.x)*MW,p.y*MH];if(pose&&video.videoWidth){let r;try{r=pose.detectForVideo(video,performance.now())}catch(e){}if(r&&r.landmarks&&r.landmarks[0]){const L=r.landmarks[0];PL.forEach(([a,b])=>{if(L[a]&&L[b])line(mx(L[a]),mx(L[b]),GREEN,2.4)});if(L[0]){const h=mx(L[0]);ctx.beginPath();ctx.arc(h[0],h[1],Math.min(MW,MH)*0.05,0,7);ctx.strokeStyle=GREEN+'0.6)';ctx.lineWidth=2;ctx.stroke()}[11,12,13,14,15,16,23,24,25,26,27,28].forEach(i=>{if(L[i]){const p=mx(L[i]);dot(p[0],p[1],3,GREEN)}})}let hr;try{hr=hands.detectForVideo(video,performance.now()+0.1)}catch(e){}if(hr&&hr.landmarks){hr.landmarks.forEach(Hh=>holoHand(Hh.map(mx)))}}requestAnimationFrame(draw2)}if(pose)draw2();else fallbackLoop()}
+window.addEventListener('load',()=>{setTimeout(()=>{startMirror().catch(fallbackLoop)},250)});
+</script>
+</body>
+</html>

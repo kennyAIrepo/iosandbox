@@ -358,6 +358,8 @@ async function openWorlds(){
 if(exploreBtn) exploreBtn.addEventListener('click',e=>{ e.stopPropagation(); openWorlds(); });
 document.getElementById('worldsClose').addEventListener('click',()=>{ worldsModal.style.display='none'; });
 worldsModal.addEventListener('click',e=>{ if(e.target===worldsModal) worldsModal.style.display='none'; });
+/* Arriving from the landing's "Other Worlds" → open the community list straight away. */
+if(location.hash==='#worlds') openWorlds();
 
 /* keyboard: ← / → focus, Enter to go */
 let focusIdx=-1;
