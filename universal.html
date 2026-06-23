@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>hopeOS — Threshold</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07090d; --bg2:#0b0f16; --ink:#c8d2dc; --mute:#6b7886; --faint:#3a434f;
+  --blue:#4a7fb5; --blue-hi:#6fa8e6; --gold:#d4a843; --gold-hi:#f0c25a;
+  --line:rgba(140,160,185,.10); --line2:rgba(140,160,185,.18);
+  --display:'Bricolage Grotesque',sans-serif; --mono:'JetBrains Mono',monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--mono);
+  overflow:hidden; height:100dvh; cursor:default;
+  -webkit-font-smoothing:antialiased; user-select:none;
+}
+/* film grain over everything */
+body::after{
+  content:""; position:fixed; inset:0; z-index:60; pointer-events:none; opacity:.05;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  animation:grain 5s steps(5) infinite;
+}
+@keyframes grain{0%{transform:translate(0,0)}25%{transform:translate(-3%,2%)}50%{transform:translate(2%,-2%)}75%{transform:translate(-2%,-1%)}100%{transform:translate(1%,2%)}}
+
+/* ── top chrome ───────────────────────────────────────────────── */
+#chrome{position:fixed;top:0;left:0;right:0;z-index:40;display:flex;justify-content:space-between;
+  align-items:center;padding:20px 26px;pointer-events:none}
+#chrome>*{pointer-events:auto}
+.wordmark{font-family:var(--mono);font-weight:600;font-size:15px;letter-spacing:.5px;color:var(--ink);
+  display:flex;align-items:center;gap:10px}
+.wordmark .logo b{font-weight:600}
+.wordmark .logo .z{color:var(--blue)} .wordmark .logo .e{color:var(--gold)}
+.wordmark .div{width:1px;height:14px;background:var(--line2)}
+.wordmark .sys{font-size:10px;color:var(--mute);letter-spacing:2.5px;text-transform:uppercase}
+
+/* mode pill (the play / create axis) */
+.pill{display:flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--line2);
+  border-radius:2px;background:rgba(10,14,20,.55);backdrop-filter:blur(10px)}
+.pill button{font-family:var(--mono);font-size:10.5px;letter-spacing:2px;text-transform:uppercase;
+  color:var(--mute);background:none;border:0;padding:7px 16px;cursor:pointer;position:relative;
+  transition:color .25s; display:flex;align-items:center;gap:6px}
+.pill button .tag{font-size:7.5px;letter-spacing:1px;padding:1px 4px;border:1px solid currentColor;
+  border-radius:1px;opacity:.6}
+.pill button[data-mode="play"].on{color:var(--blue-hi)}
+.pill button[data-mode="create"].on{color:var(--gold-hi)}
+.pill button.on{background:rgba(255,255,255,.04)}
+.pill button.on::after{content:"";position:absolute;left:14px;right:14px;bottom:3px;height:1px;
+  background:currentColor;box-shadow:0 0 8px currentColor}
+
+/* ── stage: two realities + seam ──────────────────────────────── */
+#stage{position:fixed;inset:0;display:flex;perspective:1600px;perspective-origin:center 42%}
+.reality{position:relative;flex:1 1 50%;overflow:hidden;cursor:pointer;
+  transition:flex-grow .7s cubic-bezier(.16,1,.3,1), filter .6s ease;
+  transform-style:preserve-3d}
+.reality .layer{position:absolute;inset:-2px;will-change:transform}
+
+/* atmosphere base */
+.reality.your{background:radial-gradient(120% 90% at 30% 80%,#15110a 0%,#0a0a0c 55%,#07080b 100%)}
+.reality.other{background:radial-gradient(120% 90% at 70% 70%,#0a1018 0%,#080b11 55%,#06080c 100%)}
+
+/* YOUR WORLD — camera scan + reticle + tracking motes */
+.scan{background:repeating-linear-gradient(180deg,rgba(212,168,67,.05) 0 1px,transparent 1px 4px);
+  mix-blend-mode:screen;opacity:.5}
+.reticle{inset:0;display:flex;align-items:center;justify-content:center;opacity:.5}
+.reticle svg{width:min(46vh,420px);height:min(46vh,420px);overflow:visible}
+.reticle circle,.reticle line,.reticle path{stroke:var(--gold);fill:none;vector-effect:non-scaling-stroke}
+.reticle .spin{transform-origin:center;animation:spin 26s linear infinite}
+.reticle .spin.rev{animation-direction:reverse;animation-duration:38s}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mote{position:absolute;width:5px;height:5px;border-radius:50%;background:var(--gold-hi);
+  box-shadow:0 0 10px var(--gold);opacity:0;animation:moteP 4s ease-in-out infinite}
+@keyframes moteP{0%,100%{opacity:0;transform:scale(.6)}50%{opacity:.9;transform:scale(1)}}
+
+/* OTHER WORLDS — receding perspective grid into fog */
+.gridwrap{inset:0;overflow:hidden;perspective:380px;perspective-origin:50% 38%}
+.grid{position:absolute;left:-60%;right:-60%;top:48%;height:240%;
+  background-image:linear-gradient(rgba(111,168,230,.32) 1px,transparent 1px),
+                   linear-gradient(90deg,rgba(111,168,230,.18) 1px,transparent 1px);
+  background-size:64px 64px;transform:rotateX(74deg);transform-origin:50% 0;
+  animation:flow 7s linear infinite;mask-image:linear-gradient(transparent,#000 22%,#000 70%,transparent)}
+@keyframes flow{to{background-position:0 64px}}
+.horizon{position:absolute;left:0;right:0;top:46%;height:30%;
+  background:linear-gradient(180deg,transparent,rgba(74,127,181,.22) 60%,transparent);filter:blur(8px)}
+.starfield{inset:0;opacity:.5}
+.star{position:absolute;width:2px;height:2px;border-radius:50%;background:var(--blue-hi);
+  opacity:.0;animation:tw 5s ease-in-out infinite}
+@keyframes tw{0%,100%{opacity:.1}50%{opacity:.85}}
+
+.vig{inset:0;box-shadow:inset 0 0 200px 40px rgba(0,0,0,.7)}
+
+/* content */
+.content{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;
+  padding:0 clamp(28px,5vw,72px) clamp(48px,9vh,96px);z-index:5;
+  transform-style:preserve-3d}
+.idx{font-family:var(--mono);font-size:12px;letter-spacing:5px;color:var(--mute);margin-bottom:auto;
+  padding-top:clamp(96px,14vh,150px)}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:5px;text-transform:uppercase;
+  color:var(--mute);margin-bottom:16px;display:flex;align-items:center;gap:10px}
+.kicker .dot{width:6px;height:6px;border-radius:50%}
+.your .kicker .dot{background:var(--gold);box-shadow:0 0 10px var(--gold)}
+.other .kicker .dot{background:var(--blue);box-shadow:0 0 10px var(--blue)}
+.title{font-family:var(--display);font-weight:800;line-height:.9;letter-spacing:-.02em;
+  font-size:clamp(40px,7.2vw,104px);color:#eef3f8;text-wrap:balance}
+.your .title em{font-style:normal;color:var(--gold-hi)}
+.other .title em{font-style:normal;color:var(--blue-hi)}
+.desc{font-family:var(--mono);font-size:13.5px;line-height:1.6;color:var(--mute);max-width:36ch;
+  margin-top:20px}
+.enter{margin-top:30px;display:inline-flex;align-items:center;gap:12px;font-family:var(--mono);
+  font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--ink);
+  opacity:0;transform:translateY(8px);transition:opacity .4s,transform .4s}
+.enter .arr{display:inline-flex;width:38px;height:38px;align-items:center;justify-content:center;
+  border:1px solid var(--line2);border-radius:50%;font-size:15px;transition:all .3s}
+.your .enter .arr{color:var(--gold-hi)} .other .enter .arr{color:var(--blue-hi)}
+.reality:hover .enter{opacity:1;transform:translateY(0)}
+.reality:hover .enter .arr{transform:translateX(3px)}
+.your:hover .enter .arr{border-color:var(--gold);box-shadow:0 0 18px rgba(212,168,67,.4)}
+.other:hover .enter .arr{border-color:var(--blue);box-shadow:0 0 18px rgba(74,127,181,.4)}
+
+/* "build your own world" — secondary action inside Other Worlds */
+.buildlink{margin-top:18px;align-self:flex-start;font-family:var(--mono);font-size:11px;letter-spacing:2px;
+  text-transform:uppercase;color:var(--blue-hi);background:rgba(74,127,181,.10);cursor:pointer;
+  border:1px solid var(--line2);border-radius:2px;padding:9px 16px;transition:all .25s}
+.buildlink:hover{background:rgba(74,127,181,.22);border-color:var(--blue);box-shadow:0 0 18px rgba(74,127,181,.3);color:#fff}
+
+/* hover focus: chosen reality grows + brightens, other recedes */
+#stage.hover-your .your,#stage.hover-other .other{flex-grow:1.28;filter:saturate(1.15) brightness(1.08)}
+#stage.hover-your .other,#stage.hover-other .your{flex-grow:.72;filter:saturate(.5) brightness(.6)}
+.reality.focus-key{outline:1px solid var(--line2);outline-offset:-12px}
+
+/* the seam / threshold */
+#seam{position:absolute;top:0;bottom:0;left:50%;width:1px;z-index:8;transform:translateX(-.5px);
+  background:linear-gradient(180deg,transparent,var(--line2) 18%,var(--line2) 82%,transparent);
+  transition:left .7s cubic-bezier(.16,1,.3,1)}
+#seam::before{content:"";position:absolute;top:50%;left:50%;width:46px;height:46px;
+  transform:translate(-50%,-50%) rotate(45deg);border:1px solid var(--line2);
+  background:rgba(7,9,13,.6);backdrop-filter:blur(4px)}
+#seam::after{content:"⇆";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-size:14px;color:var(--mute)}
+#stage.hover-your #seam{left:64%} #stage.hover-other #seam{left:36%}
+
+/* ── bottom telemetry ─────────────────────────────────────────── */
+#telem{position:fixed;left:0;right:0;bottom:0;z-index:40;display:flex;justify-content:space-between;
+  align-items:center;padding:13px 26px;font-family:var(--mono);font-size:10px;letter-spacing:1.5px;
+  color:var(--faint);border-top:1px solid var(--line);background:linear-gradient(transparent,rgba(7,9,13,.85))}
+#telem .log{color:var(--mute)} #telem .log b{color:var(--blue-hi);font-weight:500}
+#telem .blink{animation:blink 1.1s steps(2) infinite}
+@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* entry transition */
+#cross{position:fixed;inset:0;z-index:80;pointer-events:none;opacity:0;
+  background:radial-gradient(circle at var(--cx,50%) 50%,var(--flash,#4a7fb5) 0%,#07090d 12%,#07090d 100%);
+  transition:opacity .55s ease}
+#cross.go{opacity:1}
+
+/* load-in stagger */
+.reveal{opacity:0;transform:translateY(14px);animation:rise .9s cubic-bezier(.16,1,.3,1) forwards}
+@keyframes rise{to{opacity:1;transform:translateY(0)}}
+
+@media(max-width:760px){
+  #stage{flex-direction:column;perspective:none}
+  .reality{flex-basis:50%}
+  #stage.hover-your .your,#stage.hover-other .other,
+  #stage.hover-your .other,#stage.hover-other .your{flex-grow:1;filter:none}
+  #seam{top:50%;bottom:auto;left:0;right:0;width:auto;height:1px;
+    background:linear-gradient(90deg,transparent,var(--line2) 18%,var(--line2) 82%,transparent)}
+  #stage.hover-your #seam,#stage.hover-other #seam{left:0}
+  .content{justify-content:center;padding-bottom:24px}
+  .idx{margin-bottom:8px;padding-top:0}
+  .title{font-size:clamp(34px,11vw,64px)}
+  .enter{opacity:1;transform:none}
+}
+</style>
+</head>
+<body>
+
+<div id="chrome">
+  <div class="wordmark reveal" style="animation-delay:.05s">
+    <span class="logo"><b>h</b><b class="z">0</b><b>p</b><b class="e">3</b></span>
+    <span class="div"></span>
+    <span class="sys">spatial runtime</span>
+  </div>
+  <div class="pill reveal" style="animation-delay:.15s" id="pill">
+    <button data-mode="play" class="on">Play</button>
+    <button data-mode="create">Create <span class="tag">beta</span></button>
+  </div>
+</div>
+
+<div id="stage">
+  <!-- YOUR WORLD — DEI / AR -->
+  <section class="reality your" data-target="index.html" data-key="your" data-flash="#d4a843">
+    <div class="layer scan"></div>
+    <div class="layer reticle">
+      <svg viewBox="-100 -100 200 200">
+        <g class="spin"><circle r="92"/><line x1="-92" y1="0" x2="-78" y2="0"/><line x1="92" y1="0" x2="78" y2="0"/><line x1="0" y1="-92" x2="0" y2="-78"/><line x1="0" y1="92" x2="0" y2="78"/></g>
+        <g class="spin rev"><circle r="62" stroke-dasharray="3 14"/></g>
+        <circle r="30" stroke-dasharray="2 7"/>
+        <path d="M-12 0 H12 M0 -12 V12"/>
+      </svg>
+    </div>
+    <div class="layer motes" id="motes"></div>
+    <div class="layer vig"></div>
+    <div class="content">
+      <div class="idx reveal" style="animation-delay:.30s">01 / AR&nbsp;OVERLAY</div>
+      <div class="kicker reveal" style="animation-delay:.38s"><span class="dot"></span>on your camera · your space</div>
+      <h1 class="title reveal" style="animation-delay:.44s">YOUR<br><em>WORLD</em></h1>
+      <p class="desc reveal" style="animation-delay:.52s">The room you're already in, augmented. Full-body and hand tracking wraps effects, physics and presence around you — live, in the mirror.</p>
+      <span class="enter">Step in <span class="arr">→</span></span>
+    </div>
+  </section>
+
+  <!-- OTHER WORLDS — 3D scene hosting -->
+  <section class="reality other" data-target="world.html" data-key="other" data-flash="#4a7fb5">
+    <div class="layer gridwrap"><div class="grid"></div><div class="horizon"></div></div>
+    <div class="layer starfield" id="stars"></div>
+    <div class="layer vig"></div>
+    <div class="content">
+      <div class="idx reveal" style="animation-delay:.34s">02 / HOSTED&nbsp;3D</div>
+      <div class="kicker reveal" style="animation-delay:.42s"><span class="dot"></span>scenes you walk into</div>
+      <h1 class="title reveal" style="animation-delay:.48s">OTHER<br><em>WORLDS</em></h1>
+      <p class="desc reveal" style="animation-delay:.56s">Drop into hosted 3D space as an embodied avatar. Navigate by hand, voice or key — first-person, or watch yourself stand in the scene.</p>
+      <span class="enter">Cross over <span class="arr">→</span></span>
+      <button class="buildlink reveal" id="buildOwn" style="animation-delay:.62s">＋ Build your own world</button>
+    </div>
+  </section>
+
+  <div id="seam"></div>
+</div>
+
+<div id="telem">
+  <div class="log" id="bootlog">booting…<span class="blink">▋</span></div>
+  <div>hopeOS · v0.5 · <span id="modeReadout">mode: PLAY</span></div>
+</div>
+
+<div id="cross"></div>
+
+<script>
+const stage = document.getElementById('stage');
+const seam  = document.getElementById('seam');
+const cross = document.getElementById('cross');
+let mode = 'play';
+
+/* scatter tracking motes (your world) + stars (other worlds) */
+(function decorate(){
+  const motes = document.getElementById('motes');
+  const pts = [[18,30],[28,62],[40,44],[62,28],[70,58],[55,72],[34,80],[78,40]];
+  pts.forEach((p,i)=>{const d=document.createElement('div');d.className='mote';
+    d.style.left=p[0]+'%';d.style.top=p[1]+'%';d.style.animationDelay=(i*0.45)+'s';motes.appendChild(d);});
+  const stars=document.getElementById('stars');
+  for(let i=0;i<46;i++){const s=document.createElement('div');s.className='star';
+    s.style.left=Math.random()*100+'%';s.style.top=(Math.random()*52)+'%';
+    s.style.animationDelay=(Math.random()*5)+'s';stars.appendChild(s);}
+})();
+
+/* hover focus + parallax tilt (peering through windows into space) */
+const realities=[...document.querySelectorAll('.reality')];
+realities.forEach(r=>{
+  const key=r.dataset.key, content=r.querySelector('.content');
+  r.addEventListener('pointerenter',()=>{stage.className='hover-'+key;});
+  r.addEventListener('pointermove',e=>{
+    const b=r.getBoundingClientRect();
+    const px=(e.clientX-b.left)/b.width-0.5, py=(e.clientY-b.top)/b.height-0.5;
+    content.style.transform=`translateZ(40px) rotateY(${px*7}deg) rotateX(${-py*6}deg)`;
+    r.querySelectorAll('.layer').forEach((l,i)=>{
+      const k=(i+1)*6; l.style.transform=`translate(${px*k}px,${py*k}px)`;});
+  });
+  r.addEventListener('pointerleave',()=>{
+    stage.className=''; content.style.transform='';
+    r.querySelectorAll('.layer').forEach(l=>l.style.transform='');});
+  r.addEventListener('click',()=>enter(r));
+});
+
+/* mode toggle */
+document.querySelectorAll('#pill button').forEach(b=>{
+  b.addEventListener('click',e=>{e.stopPropagation();
+    mode=b.dataset.mode;
+    document.querySelectorAll('#pill button').forEach(x=>x.classList.toggle('on',x===b));
+    document.getElementById('modeReadout').textContent='mode: '+mode.toUpperCase();
+  });
+});
+
+/* cross the threshold → route */
+let leaving=false;
+function enter(r){
+  if(leaving) return; leaving=true;
+  const b=r.getBoundingClientRect();
+  cross.style.setProperty('--cx',(b.left+b.width/2)/innerWidth*100+'%');
+  cross.style.setProperty('--flash',r.dataset.flash);
+  cross.classList.add('go');
+  // Clean routes: the DEI camera experience lives at /play (served from index.html).
+  const ROUTE={'index.html':'/play','world.html':'world.html'};
+  const url=(ROUTE[r.dataset.target]||r.dataset.target)+'?mode='+mode;
+  setTimeout(()=>{ window.location.href=url; },560);
+}
+
+/* "build your own world" → the builder flow (don't trigger the panel's own enter) */
+const buildOwn=document.getElementById('buildOwn');
+if(buildOwn) buildOwn.addEventListener('click',e=>{
+  e.stopPropagation();
+  if(leaving) return; leaving=true;
+  cross.style.setProperty('--cx','50%');
+  cross.style.setProperty('--flash','#4a7fb5');
+  cross.classList.add('go');
+  setTimeout(()=>{ window.location.href='/build'; },560);
+});
+
+/* keyboard: ← / → focus, Enter to go */
+let focusIdx=-1;
+window.addEventListener('keydown',e=>{
+  if(e.key==='ArrowLeft'){focusIdx=0;} else if(e.key==='ArrowRight'){focusIdx=1;}
+  else if(e.key==='Enter'&&focusIdx>=0){enter(realities[focusIdx]);return;} else return;
+  realities.forEach((r,i)=>r.classList.toggle('focus-key',i===focusIdx));
+  stage.className='hover-'+realities[focusIdx].dataset.key;
+});
+
+/* terminal boot log */
+const log=document.getElementById('bootlog');
+const lines=[
+ 'mounting spatial runtime…',
+ 'tracking · hands + pose + face <b>ready</b>',
+ 'physics · rapier + cannon <b>ok</b>',
+ 'select a world to enter <span class="blink">▋</span>'
+];
+let li=0;
+function step(){ if(li>=lines.length)return; log.innerHTML=lines[li++];
+  setTimeout(step, li<lines.length?760:0); }
+setTimeout(step,400);
+</script>
+</body>
+</html>

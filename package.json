@@ -1,0 +1,10 @@
+{
+  "name": "hopeos-engine",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "hopeOS — browser-native 3D/AR spatial engine. Static site + Vercel serverless key-proxy.",
+  "dependencies": {
+    "@vercel/blob": "latest"
+  }
+}
