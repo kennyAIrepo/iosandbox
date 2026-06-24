@@ -76,20 +76,25 @@ export class ObjectEditor {
   /** True while a gizmo handle or marquee is in active use (host suppresses hand-grab). */
   get busy() { return !!(this._dragging || this._marquee); }
 
-  setEnabled(on) {
-    if (on === this.enabled) return;
-    this.enabled = on;
-    this.tc.enabled = on;
+  // on=true enables interaction. opts.selectOnly = click-to-select but no gizmo /
+  // box-select (used in PLAY mode so you can select any object anytime without it
+  // fighting navigation). Full editing (gizmo, marquee, drag) is create mode.
+  setEnabled(on, opts = {}) {
+    const selectOnly = !!(opts && opts.selectOnly);
+    // Always re-bind cleanly — the mode can flip between full-edit and select-only.
+    this.dom.removeEventListener('pointerdown', this._onDown);
+    window.removeEventListener('pointermove', this._onMove);
+    window.removeEventListener('pointerup', this._onUp);
+    window.removeEventListener('keydown', this._onKey);
+    this.enabled = on; this.selectOnly = selectOnly;
+    this.tc.enabled = on && !selectOnly;
+    this.tc.visible = on && !selectOnly && this.selected.length > 0;
     if (on) {
       this.dom.addEventListener('pointerdown', this._onDown);
       window.addEventListener('pointermove', this._onMove);
       window.addEventListener('pointerup', this._onUp);
       window.addEventListener('keydown', this._onKey);
     } else {
-      this.dom.removeEventListener('pointerdown', this._onDown);
-      window.removeEventListener('pointermove', this._onMove);
-      window.removeEventListener('pointerup', this._onUp);
-      window.removeEventListener('keydown', this._onKey);
       this._clear();
       this._hideMarquee();
       this._marquee = null;
@@ -109,12 +114,35 @@ export class ObjectEditor {
     this.world._ensureAssetLayer();
     if (assets.length === 1) { this.single = assets[0]; this.tc.attach(assets[0].mesh); }
     else { this._makePivot(); this.tc.attach(this.pivot); }
+    this.tc.visible = !this.selectOnly;             // play mode: highlight only, no gizmo
     this._setHelpers();
     this.onSay(assets.length === 1 ? 'selected ' + assets[0].label : `selected ${assets.length} objects`);
     this.onSelect(this.selected.length);
   }
 
   get selectionCount() { return this.selected.length; }
+  get selectedIds() { return this.selected.map(a => a.id); }
+
+  /** Select a specific object by id (from the object-list sidebar). Works in play + create. */
+  selectById(id) {
+    let asset = this.world.assets.find(a => a.id === id);
+    if (!asset && id === '__scene__' && this.world.model) asset = this._sceneAsset();
+    if (!asset) return false;
+    this._setSelection([asset]);
+    return true;
+  }
+  clearSelection() { this._clear(); }
+
+  /** Duplicate the current selection and select the copies. */
+  duplicateSelection() {
+    const ids = this.selected.filter(a => !a.isScene).map(a => a.id);
+    if (!ids.length) { this.onSay('nothing to duplicate'); return []; }
+    const nids = ids.map(id => this.world.duplicateObject(id)).filter(Boolean);
+    const assets = nids.map(id => this.world.assets.find(a => a.id === id)).filter(Boolean);
+    if (assets.length) this._setSelection(assets);
+    this.onSay('duplicated ' + nids.length + ' object' + (nids.length > 1 ? 's' : ''));
+    return nids;
+  }
 
   /** Delete the current selection (used by the Delete key and the Delete button). */
   deleteSelection() {
@@ -221,6 +249,10 @@ export class ObjectEditor {
     if (!this.enabled || e.button !== 0) return;     // left button only; right = look
     if (this.tc.axis || this._dragging) return;       // a gizmo handle is grabbed → let it work
     const asset = this._pick(e);
+    if (this.selectOnly) {                             // play mode: click selects, empty deselects
+      if (asset) this._setSelection([asset]); else this._clear();
+      return;
+    }
     if (asset) {
       // The environment is always a solo selection (never grouped/reparented).
       if (asset.isScene || !e.shiftKey) this._setSelection([asset]); else this._toggle(asset);

@@ -222,34 +222,53 @@ video.h{display:none}
   background:rgba(30,40,60,.6);border:1px solid rgba(80,140,220,.4);border-radius:8px;color:#9bf;
   font-size:11px;cursor:pointer;font-family:inherit;opacity:0;transition:opacity .4s">▶ PLAY</button>
 
-<!-- Create-mode toolbar -->
-<div id="createBar" style="position:fixed;top:52px;left:14px;z-index:25;display:none;gap:6px;
-  background:rgba(8,10,16,.7);padding:8px 10px;border-radius:10px;backdrop-filter:blur(8px);
-  border:1px solid rgba(212,168,67,.3);flex-direction:column;font-size:10px;color:#cb9;width:230px">
-  <div style="color:#d4a843;letter-spacing:1px">CREATE</div>
-  <div style="color:#89a">Edit gizmo — click an object, or box-select</div>
+<!-- Create-mode toolbar (right side; object list is on the left) -->
+<div id="createBar" style="position:fixed;top:52px;right:14px;z-index:25;display:none;gap:7px;
+  background:rgba(5,12,9,.82);padding:11px 13px;border-radius:10px;backdrop-filter:blur(8px);
+  border:1px solid rgba(73,231,134,.3);flex-direction:column;font-size:10px;color:#9fe6bd;width:240px">
+  <div style="color:#5dff9b;letter-spacing:2px;font-size:11px;text-shadow:0 0 12px rgba(93,255,155,.4)">✎ CREATE</div>
+
+  <div class="grp">Transform selected</div>
   <div id="gizmoTools" style="display:flex;gap:6px">
     <span class="prim sel" data-g="translate">✛ move</span><span class="prim" data-g="rotate">⟳ rotate</span><span class="prim" data-g="scale">⤢ scale</span>
   </div>
-  <div style="color:#89a">History &amp; delete</div>
+
+  <div class="grp">Edit</div>
   <div id="editTools" style="display:flex;gap:6px">
     <span class="prim dim" id="undoBtn" title="undo (Ctrl+Z)">↶ undo</span><span class="prim dim" id="redoBtn" title="redo (Ctrl+Shift+Z)">↷ redo</span><span class="prim dim" id="delBtn" title="delete selected (Del)">🗑 delete</span>
   </div>
-  <div style="color:#89a">Gizmo shape</div>
-  <div id="shapes" style="display:flex;gap:6px">
-    <span class="prim sel" data-s="surface">▭ surface</span><span class="prim" data-s="box">⬚ box region</span>
-  </div>
-  <div style="color:#89a">Primitive — pinch to stamp</div>
+
+  <div class="grp">Add primitive</div>
   <div id="prims" style="display:flex;gap:6px;flex-wrap:wrap">
-    <span class="prim sel" data-t="box">▢</span><span class="prim" data-t="sphere">◯</span>
-    <span class="prim" data-t="cylinder">▯</span><span class="prim" data-t="cone">△</span>
+    <span class="prim sel" data-t="box">▢ box</span><span class="prim" data-t="sphere">◯ ball</span>
+    <span class="prim" data-t="cylinder">▯ tube</span><span class="prim" data-t="cone">△ cone</span>
   </div>
-  <div style="color:#89a">Import asset</div>
+  <div id="shapes" style="display:flex;gap:6px">
+    <span class="prim sel" data-s="surface">▭ on surface</span><span class="prim" data-s="box">⬚ in air</span>
+  </div>
+  <div class="hint">mark a spot, then pinch / click to stamp</div>
+
+  <div class="grp">Import 3D model</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
-    <span class="prim" id="openSF">＋ Sketchfab</span><span class="prim" id="openURL">＋ GLB URL</span>
-    <label class="prim" id="openUpload">⬆ Upload .glb<input type="file" accept=".glb,.gltf,model/gltf-binary" hidden></label>
+    <span class="prim" id="openSF">🔍 Sketchfab</span><span class="prim" id="openURL">🔗 GLB URL</span>
+    <label class="prim" id="openUpload">⬆ Upload<input type="file" accept=".glb,.gltf,model/gltf-binary" hidden></label>
   </div>
-  <div style="color:#778;font-size:9px">click=select · shift-click=add · box-drag=group · right-drag=look · Del=remove<br>or walk up and grab objects with your hands</div>
+
+  <div class="hint">click an object (here or in the list) to select · duplicate / delete from the bar that appears · or grab with your hands</div>
+</div>
+
+<!-- Object list — every game object in the set; click to select & manipulate -->
+<div id="objList">
+  <div id="objHead">▦ OBJECTS <span class="c">▾</span></div>
+  <div id="objRows"><div id="objEmpty">no objects yet</div></div>
+</div>
+
+<!-- Selection action toolbar (appears when something is selected) -->
+<div id="selBar">
+  <span class="l" id="selLbl">selected</span>
+  <button data-a="dup">⧉ Duplicate</button>
+  <button class="danger" data-a="del">🗑 Delete</button>
+  <button data-a="clr">✕ Deselect</button>
 </div>
 
 <!-- Sketchfab browse panel (minimal: just thumbnails) -->
@@ -270,13 +289,50 @@ video.h{display:none}
   display:none;color:#d4a843;font-size:18px;pointer-events:none;opacity:.8">＋</div>
 
 <style>
-.prim{padding:4px 8px;background:rgba(40,40,30,.5);border:1px solid rgba(212,168,67,.25);
-  border-radius:6px;cursor:pointer;color:#cb9}
-.prim.sel{background:rgba(212,168,67,.3);color:#fff;border-color:#d4a843}
-.prim.dim{opacity:.32;cursor:default}
-#sfGrid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:6px;cursor:pointer;
-  border:1px solid transparent;transition:border .15s}
-#sfGrid img:hover{border-color:#d4a843}
+.prim{padding:5px 9px;background:rgba(7,16,12,.6);border:1px solid rgba(73,231,134,.22);
+  border-radius:7px;cursor:pointer;color:#9fe6bd;transition:.15s}
+.prim:hover{background:rgba(73,231,134,.12);color:#5dff9b;border-color:rgba(73,231,134,.5)}
+.prim.sel{background:rgba(93,255,155,.22);color:#eafff1;border-color:#5dff9b}
+.prim.dim{opacity:.3;cursor:default}
+#sfGrid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:pointer;
+  border:1px solid rgba(73,231,134,.18);transition:border .15s}
+#sfGrid img:hover{border-color:#5dff9b}
+
+/* CREATE menu groups */
+#createBar{font-family:'Space Grotesk',system-ui,sans-serif}
+#createBar .grp{color:#43e07a;letter-spacing:1.5px;text-transform:uppercase;font-size:9px;margin-top:3px}
+#createBar .hint{color:#5d7468;font-size:9px;line-height:1.5}
+
+/* Object-list sidebar (every game object: sky, world, props) */
+#objList{position:fixed;left:14px;top:52px;z-index:25;display:none;flex-direction:column;width:212px;max-height:62vh;
+  background:rgba(5,12,9,.84);border:1px solid rgba(73,231,134,.3);border-radius:10px;backdrop-filter:blur(8px);
+  font-family:'Space Grotesk',system-ui,sans-serif;overflow:hidden}
+#objList.show{display:flex}
+#objHead{display:flex;align-items:center;justify-content:space-between;padding:9px 11px;cursor:pointer;
+  color:#5dff9b;font-size:11px;letter-spacing:1.5px;border-bottom:1px solid rgba(73,231,134,.15)}
+#objHead .c{color:#5d7468;transition:transform .2s}
+#objList.collapsed #objHead .c{transform:rotate(-90deg)}
+#objList.collapsed #objRows{display:none}
+#objRows{overflow:auto;padding:5px}
+.orow{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;cursor:pointer;color:#d7ecdd;font-size:12px;transition:.12s}
+.orow:hover{background:rgba(73,231,134,.1)}
+.orow.sel{background:rgba(93,255,155,.18);color:#eafff1;box-shadow:inset 2px 0 0 #5dff9b}
+.orow .ic{width:16px;text-align:center;color:#5dff9b}
+.orow .t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.orow .k{font-size:9px;color:#5d7468}
+#objEmpty{color:#5d7468;font-size:11px;padding:14px;text-align:center}
+
+/* Selection action toolbar */
+#selBar{position:fixed;top:90px;left:50%;transform:translateX(-50%);z-index:27;display:none;gap:6px;align-items:center;
+  background:rgba(5,12,9,.85);border:1px solid rgba(93,255,155,.4);border-radius:9px;padding:6px 8px;
+  backdrop-filter:blur(8px);font-family:'Space Grotesk',system-ui,sans-serif;box-shadow:0 0 22px rgba(93,255,155,.2)}
+#selBar.show{display:flex}
+#selBar .l{color:#b7ffce;font-size:11px;padding:0 4px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#selBar button{background:rgba(73,231,134,.1);border:1px solid rgba(73,231,134,.3);color:#9fe6bd;border-radius:7px;
+  padding:6px 10px;cursor:pointer;font-family:inherit;font-size:11px;transition:.12s}
+#selBar button:hover{background:rgba(73,231,134,.2);color:#5dff9b;border-color:#5dff9b}
+#selBar button.danger{border-color:rgba(220,90,90,.4);color:#f99}
+#selBar button.danger:hover{background:rgba(220,90,90,.18);color:#fbb}
 </style>
 
 <!-- AI command bar (text + voice) -->
@@ -360,6 +416,55 @@ function refreshCamBtn() {
   b.textContent = camOn ? '📷 CAM ON' : '📷 CAM OFF';
 }
 
+// ── Selection: works in BOTH play (click-select only) and create (full editor) ──
+function refreshEditor() {
+  if (!editor) return;
+  if (jumpMode || gridMode !== 'off') { editor.setEnabled(false); return; }   // jump/grid tools own the click
+  if (buildMode) editor.setEnabled(true);                                       // full create editor (gizmo, box-select)
+  else editor.setEnabled(true, { selectOnly: true });                           // play: click any object to select it
+}
+
+// Selection action toolbar (Duplicate / Delete / Deselect) + object-list highlight.
+function onSelectionChanged(count) {
+  updateHistoryButtons();
+  const bar = document.getElementById('selBar');
+  if (count > 0) {
+    bar.classList.add('show');
+    const sel = editor && editor.selected;
+    document.getElementById('selLbl').textContent = (count === 1 && sel && sel[0]) ? sel[0].label : count + ' selected';
+  } else bar.classList.remove('show');
+  refreshObjList();
+}
+
+function _objIcon(a) {
+  if (a.source === 'import' || a.source === 'clone') return '🧩';
+  return ({ box: '▢', sphere: '◯', cylinder: '▯', cone: '△' })[a.ptype] || '◆';
+}
+function _objRow(id, ic, label, kind, selIds) {
+  const d = document.createElement('div');
+  d.className = 'orow' + (selIds.includes(id) ? ' sel' : '');
+  const i = document.createElement('span'); i.className = 'ic'; i.textContent = ic;
+  const t = document.createElement('span'); t.className = 't'; t.textContent = label;
+  const k = document.createElement('span'); k.className = 'k'; k.textContent = kind;
+  d.append(i, t, k);
+  d.addEventListener('click', () => {
+    if (id === '__sky__') { sayAI('sky shell — ask the AI to change it (e.g. "make the sky a night sky")'); return; }
+    if (editor.selectById(id)) sayAI('selected ' + label);
+  });
+  return d;
+}
+// Rebuild the OBJECTS list from the live set (sky + world + every prop).
+function refreshObjList() {
+  const rows = document.getElementById('objRows'); if (!rows || !world) return;
+  const assets = world.assets || [];
+  const selIds = editor ? editor.selectedIds : [];
+  rows.innerHTML = '';
+  if (world._skyboxUrl) rows.appendChild(_objRow('__sky__', '🌌', 'sky', 'shell', selIds));
+  if (world.sceneIsObject) rows.appendChild(_objRow('__scene__', '🏛', 'world', 'environment', selIds));
+  assets.forEach(a => rows.appendChild(_objRow(a.id, _objIcon(a), a.label, a.source === 'import' ? 'model' : (a.ptype || 'object'), selIds)));
+  if (!rows.children.length) { const e = document.createElement('div'); e.id = 'objEmpty'; e.textContent = 'no objects yet — add or import some'; rows.appendChild(e); }
+}
+
 async function boot() {
   // SDK: tracking + holo hands (no AR overlay camera bg in world mode)
   hope = await HopeOS.init({
@@ -415,7 +520,7 @@ async function boot() {
   manip = new AssetManipulator(world, { onSay: sayAI });
 
   // Pointer/gizmo editor — click-select, XYZ gizmo, box-select groups (CREATE mode).
-  editor = new ObjectEditor({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world, onSay: sayAI, onSelect: () => updateHistoryButtons() });
+  editor = new ObjectEditor({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world, onSay: sayAI, onSelect: (n) => onSelectionChanged(n) });
 
   // Persistent neon 3D coordinate canvas (always on; follows you as you walk).
   grid = new SpatialGrid(hope.scene, { ground: world.cfg.groundY || 0 });
@@ -493,7 +598,12 @@ function worldFrame(dt, frame) {
   }
 }
 
+let _objSig = '';
 function _worldFrame(dt, frame) {
+  // Keep the OBJECTS list in sync when props are added/removed/imported.
+  const sig = (world.assets ? world.assets.length : 0) + '|' + (world._skyboxUrl ? 1 : 0) + '|' + (world.sceneIsObject ? 1 : 0);
+  if (sig !== _objSig) { _objSig = sig; refreshObjList(); }
+
   // 1. Navigation intent (keyboard or gesture)
   const intent = nav.update(dt, frame);
 
@@ -585,7 +695,7 @@ function createModeFrame(frame) {
 
 function setBuildMode(on) {
   buildMode = on; nav.buildMode = on;
-  if (editor) editor.setEnabled(on && !jumpMode && gridMode === 'off');  // editor yields to jump/grid tools
+  refreshEditor();   // select-anytime: full editor in create, click-select in play
   document.getElementById('modeToggle').textContent = on ? '✎ CREATE' : '▶ PLAY';
   document.getElementById('createBar').style.display = on ? 'flex' : 'none';
   document.getElementById('cross').style.display = on ? 'block' : 'none';
@@ -603,12 +713,23 @@ function wireEditorTools() {
     b.classList.add('sel'); editor.setMode(b.dataset.g);
   });
 
+  // Selection action toolbar
+  document.getElementById('selBar').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.a === 'dup') editor.duplicateSelection();
+    else if (b.dataset.a === 'del') editor.deleteSelection();
+    else if (b.dataset.a === 'clr') editor.clearSelection();
+    refreshObjList();
+  });
+  // Object list collapse toggle
+  document.getElementById('objHead').addEventListener('click', () => document.getElementById('objList').classList.toggle('collapsed'));
+
   const jb = document.getElementById('jumpBtn');
   if (jb) jb.addEventListener('click', () => {
     jumpMode = !jumpMode;
     jb.classList.toggle('on', jumpMode);
     if (jumpMode && gridMode !== 'off') setGridMode('off');  // jump and grid tools are mutually exclusive
-    if (editor) editor.setEnabled(buildMode && !jumpMode && gridMode === 'off');
+    refreshEditor();
     sayAI(jumpMode ? 'jump mode — click a spot to leap there (no floor = you fall)' : 'jump mode off');
   });
 
@@ -731,7 +852,7 @@ function setGridMode(m) {
   document.querySelectorAll('#gridBar [data-gm]').forEach(x => x.classList.toggle('sel', x.dataset.gm === m));
   grid.setMode(m); world.gridSelection = grid.getSelection();
   if (m !== 'off' && jumpMode) { jumpMode = false; document.getElementById('jumpBtn').classList.remove('on'); }
-  if (editor) editor.setEnabled(buildMode && !jumpMode && m === 'off');
+  refreshEditor();
   document.getElementById('coordBox').style.display = m === 'off' ? 'none' : 'block';
   if (m !== 'off') updateCoordBox(null);
   const tip = m === 'dot' ? 'mark coordinates' : m === 'trajectory' ? 'connect a path' : m === 'surface' ? 'set two corners for a flat region' : m === 'volume' ? 'set two corners for a 3D space' : '';
@@ -890,9 +1011,13 @@ function enterWorld() {
   document.getElementById('camBtn').classList.add('show');
   refreshCamBtn();
   document.getElementById('gridBar').classList.add('show');
+  document.getElementById('objList').classList.add('show');   // object list available in play + create
   document.getElementById('ai').style.display = 'flex';
   document.getElementById('modeToggle').style.opacity = '1';
-  els.hud.textContent = 'You are in the world — hand, keyboard, or ask the AI to move you';
+  els.hud.textContent = 'You are in the world — click any object to select it · hand, keyboard, or ask the AI to move you';
+
+  refreshEditor();        // enable click-select for the current mode (play = select-only)
+  refreshObjList();
 
   if (ENTRY_MODE === 'create') setBuildMode(true);   // lobby "Create" enters build mode live
 
