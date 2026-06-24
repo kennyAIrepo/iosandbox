@@ -24,6 +24,11 @@ export default async function handler(req, res) {
       tokenValuePresent: Object.values(process.env).some(v => typeof v === 'string' && v.startsWith('vercel_blob_rw_')),
       blobEnvKeys: Object.keys(process.env).filter(k => /BLOB|READ_WRITE_TOKEN/i.test(k)),
       vercelEnv: process.env.VERCEL_ENV || null,
+      // Which build is actually live — compare this to the latest pushed commit to
+      // confirm the domain is serving the newest deployment (not a pinned old one).
+      commit: (process.env.VERCEL_GIT_COMMIT_SHA || '').slice(0, 7) || null,
+      branch: process.env.VERCEL_GIT_COMMIT_REF || null,
+      buildMarker: 'v8-published-world-load',
     });
     return;
   }
