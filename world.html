@@ -111,6 +111,8 @@ video.h{display:none}
 
   <button id="play" disabled>LOADING…</button>
 </div>
+<!-- TEMP diagnostics overlay — shows where boot/load stalls + any error -->
+<div id="dbg" style="position:fixed;left:8px;bottom:8px;z-index:99999;font:11px ui-monospace,monospace;color:#7dffb0;background:rgba(0,0,0,.72);padding:5px 9px;border-radius:5px;max-width:94vw;white-space:pre-wrap;pointer-events:none"></div>
 
 <!-- Build-your-own-world overlay (black screen + centered chat → pick/upload a scene) -->
 <div id="builder">
@@ -566,6 +568,11 @@ const els = {
   bgVid: document.getElementById('bgVid'),
 };
 
+// TEMP diagnostics — surface where load stalls + any uncaught error on-screen.
+function dbg(m) { try { const d = document.getElementById('dbg'); if (d) d.textContent = String(m); } catch {} console.log('[dbg]', m); }
+window.addEventListener('error', e => dbg('JS ERROR: ' + (e.message || '') + ' @ ' + String(e.filename || '').split('/').pop() + ':' + (e.lineno || '')));
+window.addEventListener('unhandledrejection', e => dbg('PROMISE REJECT: ' + (e.reason && (e.reason.message || e.reason) || 'unknown')));
+
 let chosenMode = 'firstPerson';
 let chosenNav = 'gesture';
 
@@ -646,6 +653,7 @@ function refreshObjList() {
 }
 
 async function boot() {
+  dbg('6 boot: HopeOS.init…');
   // SDK: tracking + holo hands (no AR overlay camera bg in world mode)
   hope = await HopeOS.init({
     canvas: document.getElementById('c'),
@@ -662,6 +670,7 @@ async function boot() {
   hope.scene.background = new hope.THREE.Color(0x2b313d);
   hope.scene.fog = new hope.THREE.Fog(0x2b313d, 70, 220);
 
+  dbg('7 boot: WorldTemplate.create (model=' + (activeWorldConfig && activeWorldConfig.modelUrl) + ')…');
   // Build the world template (Rapier physics + GLB + character controller).
   // activeWorldConfig is the default gallery, or whatever the builder produced.
   const wc = activeWorldConfig;
@@ -719,6 +728,7 @@ async function boot() {
   // Hook our per-frame world driver into the SDK loop
   hope.onFrame(worldFrame);
 
+  dbg('8 boot done → ENTER');
   els.play.disabled = false;
   els.play.textContent = '▶ ENTER';
 }
@@ -1381,9 +1391,11 @@ async function openSavedWorld(rec) {
       spawnXZ: rec.avatar ? { x: rec.avatar.spawn[0], z: rec.avatar.spawn[2] } : undefined,
     };
     currentWorld = { name: rec.name, base };
+    dbg('5 openSavedWorld: base=' + JSON.stringify(base.source) + ' url=' + String(base.url || base.uid || (base.blob ? 'blob' : '?')).slice(0, 60));
     await boot();
     if (rec.avatar) { nav.yaw = rec.avatar.yaw; nav.pitch = rec.avatar.pitch; }
     if (rec.environment) world.applyEnvironment(rec.environment);
+    dbg('8b entering world…');
     // ENTER as soon as the base scene is ready — never block the LOADING screen on
     // saved props (a dead/slow asset URL would otherwise hang entry). Props + scripts
     // stream in afterward in the background.
@@ -1793,14 +1805,20 @@ async function buildAndEnter(cfg) {
 // rebuild the base scene, restore objects + avatar, and drop the visitor in.
 async function loadPublishedWorld(slug) {
   els.play.textContent = 'LOADING “' + slug + '”…';
+  dbg('1 fetch /api/world/' + slug);
   try {
     const r = await fetch('/api/world/' + encodeURIComponent(slug));
+    dbg('2 fetch status ' + r.status);
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || ('not found (' + r.status + ')'));
-    const rec = await WorldStore.fromPortable(await r.json());
+    const json = await r.json();
+    dbg('3 parsed json · base=' + JSON.stringify((json.base || {}).source) + ' objs=' + ((json.objects || []).length));
+    const rec = await WorldStore.fromPortable(json);
+    dbg('4 fromPortable ok → openSavedWorld');
     await openSavedWorld(rec);
+    dbg('9 openSavedWorld returned');
   } catch (e) {
     console.error('[world] published load failed:', e);
-    // Couldn't load that world → fall back to the builder so the visitor can still create.
+    dbg('X load failed: ' + e.message);
     els.play.textContent = 'ERROR: ' + e.message;
     startBuilder();
   }
@@ -1816,10 +1834,11 @@ async function openDraftByName(name) {
   } catch (e) { console.error(e); els.play.textContent = 'ERROR: ' + e.message; startBuilder(); }
 }
 
+dbg('route: slug=' + JSON.stringify(WORLD_SLUG) + ' draft=' + JSON.stringify(DRAFT_NAME) + ' build=' + BUILD_MODE + ' path=' + PATH);
 if (WORLD_SLUG) loadPublishedWorld(WORLD_SLUG);
 else if (DRAFT_NAME) openDraftByName(DRAFT_NAME);
 else if (BUILD_MODE) startBuilder();
-else boot().catch(e => { console.error(e); els.play.textContent = 'ERROR: ' + e.message; });
+else boot().catch(e => { console.error(e); dbg('X boot failed: ' + e.message); els.play.textContent = 'ERROR: ' + e.message; });
 </script>
 </body>
 </html>
