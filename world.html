@@ -339,19 +339,29 @@ video.h{display:none}
 #selBar button.danger{border-color:rgba(220,90,90,.4);color:#f99}
 #selBar button.danger:hover{background:rgba(220,90,90,.18);color:#fbb}
 
-/* Runtime chat log (persistent + scrollable conversation with the agent) */
-#aiLog{position:fixed;bottom:62px;left:50%;transform:translateX(-50%);z-index:29;display:none;flex-direction:column;gap:5px;
-  width:min(560px,92vw);max-height:34vh;overflow-y:auto;padding:10px 8px 4px;pointer-events:auto;
+/* Runtime chat "subtitle" log — a slim 2-3 line strip at the very bottom that never
+   blocks the scene. The last AI line stays pinned; scroll up inside it for history. */
+#aiLog{position:fixed;bottom:62px;left:50%;transform:translateX(-50%);z-index:29;display:none;flex-direction:column;gap:4px;
+  width:min(540px,92vw);max-height:96px;overflow-y:auto;padding:6px 8px 2px;pointer-events:auto;
   scrollbar-width:thin;scrollbar-color:rgba(120,160,210,.4) transparent;font-family:'Space Grotesk',system-ui,sans-serif;
-  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 20px);mask-image:linear-gradient(to bottom,transparent 0,#000 20px)}
+  -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 16px);mask-image:linear-gradient(to bottom,transparent 0,#000 16px)}
 #aiLog.show{display:flex}
-#aiLog::-webkit-scrollbar{width:7px}
+#aiLog::-webkit-scrollbar{width:6px}
 #aiLog::-webkit-scrollbar-thumb{background:rgba(120,160,210,.35);border-radius:6px}
-.cmsg{font-size:12px;line-height:1.45;padding:6px 11px;border-radius:10px;max-width:88%;white-space:pre-wrap;word-break:break-word;animation:cmIn .18s ease}
-.cmsg.agent{align-self:flex-start;background:rgba(8,10,16,.82);color:#cfe0f2;border:1px solid rgba(80,140,220,.22)}
+.cmsg{font-size:12px;line-height:1.4;padding:5px 10px;border-radius:9px;max-width:90%;white-space:pre-wrap;word-break:break-word;animation:cmIn .16s ease}
+.cmsg.agent{align-self:flex-start;background:rgba(8,10,16,.85);color:#cfe0f2;border:1px solid rgba(80,140,220,.22)}
 .cmsg.you{align-self:flex-end;background:rgba(40,72,110,.62);color:#dfeeff;border:1px solid rgba(120,170,230,.3)}
-.cmsg.sys{align-self:center;background:transparent;color:#7d93a8;font-size:11px;padding:2px 8px;border:none;text-align:center}
 @keyframes cmIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+
+/* Transient action signals (selected / deselected / locked …) — appear beside the
+   OBJECTS panel and fade after a couple seconds; they never touch the chat log. */
+#flash{position:fixed;left:234px;top:56px;z-index:26;display:flex;flex-direction:column;gap:6px;max-width:250px;
+  pointer-events:none;font-family:'Space Grotesk',system-ui,sans-serif}
+.ftoast{background:rgba(8,16,12,.92);border:1px solid rgba(73,231,134,.3);color:#bff0d0;font-size:11px;padding:6px 11px;
+  border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.45);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;animation:ftIn .16s ease}
+.ftoast.out{animation:ftOut .3s ease forwards}
+@keyframes ftIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
+@keyframes ftOut{to{opacity:0;transform:translateX(-8px)}}
 </style>
 
 <!-- AI command bar (text + voice) -->
@@ -368,6 +378,9 @@ video.h{display:none}
   <button id="aiSend" style="background:linear-gradient(135deg,#4a7fb5,#3a6fa5);border:none;color:#fff;
     border-radius:8px;padding:9px 14px;cursor:pointer;font-family:inherit;font-size:13px">↵</button>
 </div>
+<!-- Transient action signals (selected / locked / …) beside the OBJECTS panel. -->
+<div id="flash"></div>
+
 <!-- Runtime chat log — every line of the conversation persists here; the last
      message never fades and you can scroll up/down to review the whole exchange. -->
 <div id="aiLog" aria-live="polite"></div>
@@ -541,7 +554,7 @@ function _objRow(id, ic, label, kind, selIds) {
     refreshObjList();
   });
   d.append(i, t, k, lk);
-  d.addEventListener('click', () => { if (editor.selectById(id)) sayAI('selected ' + label); });
+  d.addEventListener('click', () => { if (editor.selectById(id)) flash('selected ' + label); });
   return d;
 }
 // Rebuild the OBJECTS list from the live set (sky + world + every prop).
@@ -586,6 +599,7 @@ async function boot() {
     autoScale: !!wc.autoScale,            // user-supplied scenes get normalized to a walkable size
     targetSpan: wc.targetSpan || 24,
     autoCenter: !!wc.autoCenter,          // …and centered at origin so spawn is always reachable
+    worldName: wc.label || (currentWorld && currentWorld.name) || null,   // show the base model under its real uploaded/downloaded name
   });
 
   nav = new AvatarNavigator();              // all inputs (keys+mouse+gesture) live at once
@@ -609,10 +623,12 @@ async function boot() {
   });
 
   // Bare-hand manipulation of imported models — grab/move/scale like the basketball.
-  manip = new AssetManipulator(world, { onSay: sayAI });
+  // Its notices (holding / sizing …) are transient → flash beside the OBJECTS panel.
+  manip = new AssetManipulator(world, { onSay: flash });
 
   // Pointer/gizmo editor — click-select, XYZ gizmo, box-select groups (CREATE mode).
-  editor = new ObjectEditor({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world, onSay: sayAI, onSelect: (n) => onSelectionChanged(n) });
+  // Selection signals (selected / deselected / locked / gizmo) go to flash, not chat.
+  editor = new ObjectEditor({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world, onSay: flash, onSelect: (n) => onSelectionChanged(n) });
 
   // Persistent neon 3D coordinate canvas (always on; follows you as you walk).
   grid = new SpatialGrid(hope.scene, { ground: world.cfg.groundY || 0 });
@@ -634,19 +650,31 @@ async function boot() {
 
 // ── AI command bar (text + voice toggle) ──
 let voiceOn = false;
-// Persistent, scrollable chat log. who: 'agent' (default) | 'you' | 'sys'.
+// Persistent chat log (CONVERSATION only). who: 'agent' (default) | 'you'.
 // The newest line stays pinned at the bottom and never fades; scroll up to review.
 function sayAI(msg, who) {
   if (msg == null || msg === '') return;
+  if (who === 'sys') { flash(msg); return; }                                  // system notices → transient toast, not the log
   const log = document.getElementById('aiLog'); if (!log) return;
   log.classList.add('show');
   const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 60;  // don't yank if the user scrolled up
   const m = document.createElement('div');
-  m.className = 'cmsg ' + (who === 'you' ? 'you' : who === 'sys' ? 'sys' : 'agent');
+  m.className = 'cmsg ' + (who === 'you' ? 'you' : 'agent');
   m.textContent = msg;
   log.appendChild(m);
   while (log.children.length > 200) log.removeChild(log.firstChild);          // cap history
   if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+// Transient action signal beside the OBJECTS panel — selected / deselected / locked /
+// gizmo / grabbed … — auto-fades after a couple seconds, never enters the chat log.
+function flash(msg) {
+  if (!msg) return;
+  const host = document.getElementById('flash'); if (!host) return;
+  const d = document.createElement('div'); d.className = 'ftoast'; d.textContent = msg; d.title = msg;
+  host.appendChild(d);
+  while (host.children.length > 5) host.removeChild(host.firstChild);
+  setTimeout(() => { d.classList.add('out'); setTimeout(() => d.remove(), 300); }, 2600);
 }
 
 // Agent tiers — shown ONLY as "build agent" vs "conversation / design pal" (never model names).
@@ -683,9 +711,9 @@ function wireAIBar() {
     if (!voiceOn) {
       const ok = await voice.start();                 // browser prompts for mic here (Whisper key is server-side)
       voiceOn = !!ok; btn.style.background = voiceOn ? 'rgba(74,127,181,.6)' : 'rgba(40,60,100,.4)';
-      sayAI(voiceOn ? 'voice on — speak a command' : 'could not start mic');
+      flash(voiceOn ? 'voice on — speak a command' : 'could not start mic');
     } else {
-      voice.stop?.(); voiceOn = false; btn.style.background = 'rgba(40,60,100,.4)'; sayAI('voice off');
+      voice.stop?.(); voiceOn = false; btn.style.background = 'rgba(40,60,100,.4)'; flash('voice off');
     }
   });
 }
@@ -769,7 +797,7 @@ function keyboardManipulate(dt) {
   if (down) world.scaleObject(id, Math.max(0.2, 1 - 1.2 * dt));
   if (rotL) world.rotateObject(id, -90 * dt);
   if (rotR) world.rotateObject(id,  90 * dt);
-  if (del && !_delLatch) { const a = world._find(id); sayAI('removed ' + ((a && a.label) || id)); world.deleteObject(id); }
+  if (del && !_delLatch) { const a = world._find(id); flash('removed ' + ((a && a.label) || id)); world.deleteObject(id); }
   _delLatch = del;                                   // one delete per keypress, not per frame
 }
 
@@ -789,7 +817,7 @@ function createModeFrame(frame) {
   const pinching = hand ? isPinch(hand) : false;
   if (pinching && !pinchLatch && world.getSelection()) {
     const id = world.placeInSelection(activePrim, { scale: 1 });
-    if (id) { lastAssetId = id; sayAI('placed ' + activePrim); }
+    if (id) { lastAssetId = id; flash('placed ' + activePrim); }
   }
   pinchLatch = pinching;
 }
@@ -801,7 +829,7 @@ function setBuildMode(on) {
   document.getElementById('createBar').style.display = on ? 'flex' : 'none';
   document.getElementById('cross').style.display = on ? 'block' : 'none';
   if (!on) { world.clearSelection(); document.getElementById('sfPanel').style.display = 'none'; }
-  sayAI(on ? 'create mode — click to select, gizmo/box-select to edit, right-drag to look' : 'play mode');
+  flash(on ? 'create mode — click to select, gizmo/box-select to edit, right-drag to look' : 'play mode');
   if (on) setAgentMode('build', true);   // turning on construction → switch to the build agent
 }
 
@@ -831,7 +859,7 @@ function wireEditorTools() {
     jb.classList.toggle('on', jumpMode);
     if (jumpMode && gridMode !== 'off') setGridMode('off');  // jump and grid tools are mutually exclusive
     refreshEditor();
-    sayAI(jumpMode ? 'jump mode — click a spot to leap there (no floor = you fall)' : 'jump mode off');
+    flash(jumpMode ? 'jump mode — click a spot to leap there (no floor = you fall)' : 'jump mode off');
   });
 
   // Camera / body-gesture tracking toggle (corner button) — privacy + performance.
@@ -839,7 +867,7 @@ function wireEditorTools() {
   if (cb2) cb2.addEventListener('click', () => {
     camOn = hope.toggleTracking();
     refreshCamBtn();
-    sayAI(camOn ? 'camera on — body / hand gesture tracking active' : 'camera off — webcam released');
+    flash(camOn ? 'camera on — body / hand gesture tracking active' : 'camera off — webcam released');
   });
 
   // Undo / redo / delete buttons
@@ -903,20 +931,20 @@ async function applyState(target) {
 }
 
 async function histUndo() {
-  if (!History.undo.length) { sayAI('nothing to undo'); return; }
+  if (!History.undo.length) { flash('nothing to undo'); return; }
   if (editor) editor._clear && editor._clear();
   History.redo.push(History.last);
   await applyState(History.undo.pop());
   History.last = histCapture(); _pendingSig = null; _histStable = 0;
-  updateHistoryButtons(); sayAI('reverted');
+  updateHistoryButtons(); flash('reverted');
 }
 async function histRedo() {
-  if (!History.redo.length) { sayAI('nothing to redo'); return; }
+  if (!History.redo.length) { flash('nothing to redo'); return; }
   if (editor) editor._clear && editor._clear();
   History.undo.push(History.last);
   await applyState(History.redo.pop());
   History.last = histCapture(); _pendingSig = null; _histStable = 0;
-  updateHistoryButtons(); sayAI('redone');
+  updateHistoryButtons(); flash('redone');
 }
 
 function updateHistoryButtons() {
@@ -935,7 +963,7 @@ function wireGridCanvas() {
   });
   bar.addEventListener('click', e => { const b = e.target.closest('[data-gm]'); if (b) setGridMode(b.dataset.gm); });
   document.getElementById('gbClear').addEventListener('click', () => {
-    grid.clearSelection(); world.gridSelection = grid.getSelection(); updateCoordBox(null); showCoordTag(null); sayAI('grid selection cleared');
+    grid.clearSelection(); world.gridSelection = grid.getSelection(); updateCoordBox(null); showCoordTag(null); flash('grid selection cleared');
   });
 
   // Click (not drag) a grid dot → feed it into the active mode.
@@ -957,7 +985,7 @@ function setGridMode(m) {
   document.getElementById('coordBox').style.display = m === 'off' ? 'none' : 'block';
   if (m !== 'off') updateCoordBox(null);
   const tip = m === 'dot' ? 'mark coordinates' : m === 'trajectory' ? 'connect a path' : m === 'surface' ? 'set two corners for a flat region' : m === 'volume' ? 'set two corners for a 3D space' : '';
-  sayAI(m === 'off' ? 'navigate mode' : (m + ' mode — click grid dots to ' + tip));
+  flash(m === 'off' ? 'navigate mode' : (m + ' mode — click grid dots to ' + tip));
 }
 
 function gridClick(e) {
@@ -1023,22 +1051,22 @@ function doJump(e) {
   const ray = new T.Raycaster(); ray.setFromCamera(ndc, hope.camera);
   const targets = []; if (world.model) targets.push(world.model); if (world.assetLayer) targets.push(world.assetLayer);
   const hits = ray.intersectObjects(targets, true);
-  if (hits.length) { const p = hits[0].point; world.standOn(p.x, p.y, p.z); sayAI('jumped there'); return; }
+  if (hits.length) { const p = hits[0].point; world.standOn(p.x, p.y, p.z); flash('jumped there'); return; }
   // No surface hit → real physics: drop the avatar in along the look ray and let gravity act.
   const o = ray.ray.origin, d = ray.ray.direction;
   const drop = world.cfg.capsuleHalfH + world.cfg.capsuleRadius;
-  if (d.y < -1e-3) { const t = -o.y / d.y; const p = o.clone().add(d.clone().multiplyScalar(t)); world.teleportTo(p.x, Math.max(p.y, 0) + drop + 3, p.z); sayAI('into the open — mind the drop'); }
-  else { const p = o.clone().add(d.clone().multiplyScalar(20)); world.teleportTo(p.x, p.y, p.z); sayAI('leap of faith'); }
+  if (d.y < -1e-3) { const t = -o.y / d.y; const p = o.clone().add(d.clone().multiplyScalar(t)); world.teleportTo(p.x, Math.max(p.y, 0) + drop + 3, p.z); flash('into the open — mind the drop'); }
+  else { const p = o.clone().add(d.clone().multiplyScalar(20)); world.teleportTo(p.x, p.y, p.z); flash('leap of faith'); }
 }
 
 // Import a GLB into the marked gizmo (drops at the selection, collidable + lit).
 // `label` becomes the object's recall name (voice/AI: "make the dragon bigger").
 async function importGLB(url, label, blob) {
   if (!world.getSelection()) world.markSurfaceInView(2.0);
-  sayAI('importing…');
+  flash('importing…');
   // blob (for local uploads) is persisted with the world so it reloads after save.
-  try { lastAssetId = await world.importGLBFromURL(url, { label, blob }); sayAI('imported ' + (label || 'asset') + ' — grab it with your hands, two hands to size, or ask the AI'); }
-  catch (e) { sayAI('import failed: ' + e.message + (String(e.message).match(/CORS|Failed/) ? ' (asset host blocked the browser)' : '')); }
+  try { lastAssetId = await world.importGLBFromURL(url, { label, blob }); flash('imported ' + (label || 'asset') + ' — grab it with your hands, two hands to size, or ask the AI'); }
+  catch (e) { flash('import failed: ' + e.message + (String(e.message).match(/CORS|Failed/) ? ' (asset host blocked the browser)' : '')); }
 }
 
 // Sketchfab browse panel — full gallery (names + load-more pagination)
@@ -1250,7 +1278,7 @@ async function restoreObjects(objs) {
       // Prefer stored bytes (uploaded local GLB) — its old blob: URL is dead after reload.
       const src = o.blob instanceof Blob ? URL.createObjectURL(o.blob) : o.url;
       try { id = await world.importGLBFromURL(src, { label: o.label, blob: o.blob instanceof Blob ? o.blob : null }); }
-      catch (e) { sayAI('skipped ' + (o.label || 'an asset') + ': ' + e.message); continue; }
+      catch (e) { flash('skipped ' + (o.label || 'an asset') + ': ' + e.message); continue; }
     } else {
       const color = o.color ? parseInt(o.color.replace('#', ''), 16) : undefined;
       id = world.addObject(o.ptype || 'box', { color, label: o.label });
@@ -1286,7 +1314,7 @@ async function openSavedWorld(rec) {
     await restoreObjects(rec.objects);
     replayScripts(rec.scripts);
     enterWorld();
-    sayAI('opened “' + rec.name + '” — keep building');
+    flash('opened “' + rec.name + '” — keep building');
   } catch (e) {
     _building = false;
     document.getElementById('bHint').textContent = 'could not open “' + rec.name + '”: ' + e.message;
@@ -1306,17 +1334,32 @@ function replayScripts(scripts) {
 }
 
 // Build the snapshot record for the live world under a given name + cover image.
-function _worldRecord(name, thumb) {
+// baseOverride lets publish swap an embedded uploaded GLB for a hosted Blob URL.
+function _worldRecord(name, thumb, baseOverride) {
   const p = world.getAvatarPosition();
   return {
     name,
-    base: (currentWorld && currentWorld.base) || { source: 'default', url: WORLD_CONFIG.modelUrl, autoScale: false },
+    base: baseOverride || (currentWorld && currentWorld.base) || { source: 'default', url: WORLD_CONFIG.modelUrl, autoScale: false },
     avatar: { spawn: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], yaw: nav.yaw, pitch: nav.pitch },
     environment: world.getEnvironment(),
     objects: world.snapshot(),
     scripts: world.scripts,
     thumb: thumb || captureThumb(),
   };
+}
+
+// Upload a big uploaded base GLB DIRECTLY to Vercel Blob from the browser (bypasses
+// the 4.5MB serverless body limit that caused HTTP 413), returning its public URL.
+async function uploadBaseToBlob(blob, slug, onProgress) {
+  const { upload } = await import('https://esm.sh/@vercel/blob/client');
+  const path = 'world-assets/' + (slug || 'scene') + '-' + Date.now() + '.glb';
+  const res = await upload(path, blob, {
+    access: 'public',
+    handleUploadUrl: '/api/blob-upload',
+    contentType: blob.type || 'model/gltf-binary',
+    onUploadProgress: onProgress ? (p => onProgress(p.percentage)) : undefined,
+  });
+  return res.url;
 }
 
 // CORE SAVE — snapshot the live world into the private library (IndexedDB), keyed by
@@ -1362,12 +1405,29 @@ async function doPublish(name, thumb) {
   } catch { /* offline → just try the chosen slug */ }
 
   try {
-    const rec = _worldRecord(finalName, thumb);
+    // If the base scene is an uploaded local GLB, it's too big to embed in the POST
+    // (Vercel's 4.5MB body limit → HTTP 413). Upload the GLB straight to Blob and
+    // publish only its URL, so the world JSON stays tiny. Sketchfab/URL bases already
+    // carry just a URL, so they skip this.
+    let baseOverride = null;
+    const base = (currentWorld && currentWorld.base) || {};
+    if (base.blob instanceof Blob) {
+      try {
+        spStatus && spStatus('uploading the base model to the cloud…');
+        const url = await uploadBaseToBlob(base.blob, slug, pct => spStatus && spStatus('uploading base model… ' + Math.round(pct) + '%'));
+        baseOverride = { source: 'url', url, autoScale: base.autoScale, targetSpan: base.targetSpan, autoCenter: base.autoCenter };
+      } catch (e) { return { ok: false, error: 'base-model upload failed: ' + e.message }; }
+    }
+    spStatus && spStatus('publishing world data…');
+    const rec = _worldRecord(finalName, thumb, baseOverride);
     const portable = await WorldStore.toPortable(rec);
     const r = await fetch('/api/world/' + encodeURIComponent(slug), {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(portable),
     });
-    if (!r.ok) { const err = (await r.json().catch(() => ({}))).error || ('HTTP ' + r.status); return { ok: false, error: err }; }
+    if (!r.ok) {
+      const err = (await r.json().catch(() => ({}))).error || ('HTTP ' + r.status + (r.status === 413 ? ' — world data too large' : ''));
+      return { ok: false, error: err };
+    }
     await r.json().catch(() => ({}));
     const link = location.origin + '/world/' + slug;
     // Mark the local draft as published (so re-publishing updates in place, not "name 2").
@@ -1469,7 +1529,7 @@ async function buildAndEnter(cfg) {
   try {
     await boot();
     enterWorld();
-    if (cfg.label) sayAI('welcome to your world: ' + cfg.label + ' — build, then 💾 Save before you leave');
+    if (cfg.label) flash('welcome to your world: ' + cfg.label + ' — build, then 💾 Save before you leave');
   } catch (e) {
     _building = false;
     document.getElementById('bHint').textContent = 'could not build that scene: ' + e.message + (String(e.message).match(/CORS|Failed|fetch/i) ? ' (the asset host blocked the browser — try uploading the .glb instead)' : '');

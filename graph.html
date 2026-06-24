@@ -60,7 +60,8 @@ button{font-family:inherit;cursor:pointer}
 </header>
 
 <div id="status"><div class="box"><div class="h">loading<span class="cur">▋</span></div></div></div>
-<div id="hint">drag a node to move it · drag space to pan · click a world to enter</div>
+<div id="hint">drag a node to move it · drag space to pan · scroll to zoom · click a world to enter</div>
+<button id="resetView" class="btn" style="position:fixed;bottom:14px;right:16px;z-index:6;display:none">⊙ reset view</button>
 
 <script type="module">
 import { mountWorldGraph } from './sdk/world/world-graph.js';
@@ -85,6 +86,7 @@ async function loadCommunity(){
   hideStatus();
   const items = worlds.map(w => ({ id:w.name, title:prettyName(w.name), sub:'h0p3.io/world/'+w.name }));
   const graph = mountWorldGraph(canvas, items, { onOpen: it => location.href = '/world/' + encodeURIComponent(it.id) });
+  wireReset(graph);
   // Lazy-load each world's stored thumbnail (rec.thumb) without blocking the graph.
   let n = 0;
   for (const w of worlds) {
@@ -101,7 +103,14 @@ async function loadMine(){
   hideStatus();
   const items = worlds.map(w => ({ id:w.name, title:w.name, thumb:w.thumb || null,
     sub:((w.objects||[]).length)+' objects'+(w.publishedAs?' · public':' · draft') }));
-  mountWorldGraph(canvas, items, { onOpen: it => location.href = '/build?draft=' + encodeURIComponent(it.id) });
+  const graph = mountWorldGraph(canvas, items, { onOpen: it => location.href = '/build?draft=' + encodeURIComponent(it.id) });
+  wireReset(graph);
+}
+
+function wireReset(graph){
+  const b = document.getElementById('resetView');
+  b.style.display = 'block';
+  b.onclick = () => graph.resetView();
 }
 
 (MINE ? loadMine() : loadCommunity());

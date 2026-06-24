@@ -41,20 +41,38 @@ export function mountWorldGraph(canvas, items, opts = {}) {
     near.forEach(({ j }) => { const key = i < j ? i + '-' + j : j + '-' + i; if (!seen.has(key)) { seen.add(key); edges.push([i, j]); } });
   });
 
-  // ── View transform (pan) + interaction state ──
-  let panX = 0, panY = 0;
-  let drag = null;          // { node?, startX, startY, moved }
+  // ── View transform (pan + zoom) + interaction state ──
+  let panX = 0, panY = 0, scale = 1;
+  let userMoved = false;    // once the user pans/zooms, stop auto-fitting on resize
+  let drag = null;          // { idx, startX, startY, moved }
   let hover = -1;
-  const toWorld = (cx, cy) => ({ x: (cx - W / 2 - panX), y: (cy - H / 2 - panY) });
+  const toWorld = (cx, cy) => ({ x: (cx - W / 2 - panX) / scale, y: (cy - H / 2 - panY) / scale });
   const hit = (wx, wy) => { for (let i = nodes.length - 1; i >= 0; i--) { const n = nodes[i]; if ((wx - n.x) ** 2 + (wy - n.y) ** 2 <= (n.r + 6) ** 2) return i; } return -1; };
+
+  // Frame ALL nodes within the viewport (with margin for titles) so nothing is ever
+  // clipped at a corner — works for 1 node or 100. Re-runs on resize until the user
+  // takes over with a pan/zoom.
+  function fit() {
+    if (!nodes.length || !W || !H) { panX = panY = 0; scale = 1; return; }
+    let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+    for (const n of nodes) {
+      minx = Math.min(minx, n.x - n.r); maxx = Math.max(maxx, n.x + n.r);
+      miny = Math.min(miny, n.y - n.r); maxy = Math.max(maxy, n.y + n.r + 44);   // headroom for the title under each node
+    }
+    const bw = Math.max(maxx - minx, 1), bh = Math.max(maxy - miny, 1), m = 150;
+    scale = Math.max(0.25, Math.min((W - m) / bw, (H - m) / bh, 1.5));
+    const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
+    panX = -cx * scale; panY = -cy * scale;
+  }
 
   function resize() {
     const r = canvas.getBoundingClientRect();
     W = r.width; H = r.height; dpr = Math.min(devicePixelRatio || 1, 2);
     canvas.width = W * dpr; canvas.height = H * dpr;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!userMoved) fit();
   }
-  addEventListener('resize', resize); resize();
+  addEventListener('resize', resize); resize(); fit();
 
   // ── Pointer handling: drag node / pan / click ──
   canvas.addEventListener('pointerdown', e => {
@@ -71,9 +89,17 @@ export function mountWorldGraph(canvas, items, opts = {}) {
     const dx = e.offsetX - drag.lx, dy = e.offsetY - drag.ly;
     drag.lx = e.offsetX; drag.ly = e.offsetY;
     if (Math.abs(e.offsetX - drag.startX) + Math.abs(e.offsetY - drag.startY) > 4) drag.moved = true;
-    if (drag.idx >= 0) { nodes[drag.idx].x += dx; nodes[drag.idx].y += dy; }
-    else { panX += dx; panY += dy; }
+    if (drag.idx >= 0) { nodes[drag.idx].x += dx / scale; nodes[drag.idx].y += dy / scale; }
+    else { panX += dx; panY += dy; userMoved = true; }   // pan the whole graph freely across the screen
   });
+  // Wheel / trackpad zoom, anchored on the cursor.
+  canvas.addEventListener('wheel', e => {
+    e.preventDefault();
+    const ns = Math.max(0.2, Math.min(3, scale * Math.exp(-e.deltaY * 0.0012)));
+    const wx = (e.offsetX - W / 2 - panX) / scale, wy = (e.offsetY - H / 2 - panY) / scale;
+    panX = e.offsetX - W / 2 - wx * ns; panY = e.offsetY - H / 2 - wy * ns;
+    scale = ns; userMoved = true;
+  }, { passive: false });
   function endDrag(e) {
     if (drag && drag.idx >= 0 && !drag.moved) onOpen(nodes[drag.idx].it);
     drag = null;
@@ -88,6 +114,7 @@ export function mountWorldGraph(canvas, items, opts = {}) {
     ctx.clearRect(0, 0, W, H);
     ctx.save();
     ctx.translate(W / 2 + panX, H / 2 + panY);
+    ctx.scale(scale, scale);
 
     // edges
     ctx.lineWidth = 1;
@@ -143,6 +170,7 @@ export function mountWorldGraph(canvas, items, opts = {}) {
   // Allow late-arriving thumbnails (lazy fetch) to attach by id.
   return {
     setThumb(id, src) { const n = nodes.find(n => n.it.id === id); if (n && src) loadOne(n, src); },
+    resetView() { userMoved = false; fit(); },
   };
 }
 
