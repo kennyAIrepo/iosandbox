@@ -238,15 +238,12 @@ video.h{display:none}
     <span class="prim dim" id="undoBtn" title="undo (Ctrl+Z)">↶ undo</span><span class="prim dim" id="redoBtn" title="redo (Ctrl+Shift+Z)">↷ redo</span><span class="prim dim" id="delBtn" title="delete selected (Del)">🗑 delete</span>
   </div>
 
-  <div class="grp">Add primitive</div>
-  <div id="prims" style="display:flex;gap:6px;flex-wrap:wrap">
-    <span class="prim sel" data-t="box">▢ box</span><span class="prim" data-t="sphere">◯ ball</span>
-    <span class="prim" data-t="cylinder">▯ tube</span><span class="prim" data-t="cone">△ cone</span>
+  <div class="grp">Mark a spot</div>
+  <div id="shapes" style="display:flex;gap:6px;flex-wrap:wrap">
+    <span class="prim" data-s="surface">▭ select surface</span><span class="prim" data-s="box">⬚ region in air</span>
+    <span class="prim" id="deselectSurf">✕ deselect</span>
   </div>
-  <div id="shapes" style="display:flex;gap:6px">
-    <span class="prim sel" data-s="surface">▭ on surface</span><span class="prim" data-s="box">⬚ in air</span>
-  </div>
-  <div class="hint">mark a spot, then pinch / click to stamp</div>
+  <div class="hint">aim at a wall/floor and click “select surface” to mark it · imports drop onto the mark · “deselect” clears it</div>
 
   <div class="grp">Import 3D model</div>
   <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -880,25 +877,12 @@ function keyboardManipulate(dt) {
 }
 
 // ── Create mode (live, no reload) ──
-let buildMode = false, activePrim = 'box', gizmoShape = 'surface';
-let pinchLatch = false, markTick = 0, lastAssetId = null;
+let buildMode = false, gizmoShape = 'surface';
+let lastAssetId = null;
 
-function createModeFrame(frame) {
-  // Marked gizmo tracks your gaze (surface mode). Box mode stays where placed.
-  if (gizmoShape === 'surface' && (markTick++ % 6) === 0) world.markSurfaceInView(2.0);
-
-  const hands = (frame && frame.hands) || [];
-  // (Two-hand sizing is now handled by direct hand-grab — walk up and hold the
-  //  object with both hands. Create mode keeps pinch-to-stamp for fresh primitives.)
-  // ONE hand pinch → stamp the active primitive onto the marked gizmo.
-  const hand = hands[0];
-  const pinching = hand ? isPinch(hand) : false;
-  if (pinching && !pinchLatch && world.getSelection()) {
-    const id = world.placeInSelection(activePrim, { scale: 1 });
-    if (id) { lastAssetId = id; flash('placed ' + activePrim); }
-  }
-  pinchLatch = pinching;
-}
+// Surface marking is now MENU-DRIVEN only (click "select surface"); it no longer
+// auto-tracks your gaze, and there is no per-frame work in create mode.
+function createModeFrame(frame) { /* intentionally empty — marking happens on menu click */ }
 
 function setBuildMode(on) {
   buildMode = on; nav.buildMode = on;
@@ -1236,18 +1220,22 @@ function enterWorld() {
 }
 els.play.addEventListener('click', enterWorld);
 
-// Live create⇄play toggle (no reload) + primitive / shape pickers
+// Live create⇄play toggle (no reload) + surface marking (menu-driven only)
 document.getElementById('modeToggle').addEventListener('click', () => setBuildMode(!buildMode));
-document.getElementById('prims').addEventListener('click', e => {
-  const p = e.target.closest('.prim'); if (!p) return;
-  document.querySelectorAll('#prims .prim').forEach(x => x.classList.remove('sel'));
-  p.classList.add('sel'); activePrim = p.dataset.t;
-});
 document.getElementById('shapes').addEventListener('click', e => {
   const p = e.target.closest('.prim'); if (!p) return;
+  // Deselect — clear any marked surface/region.
+  if (p.id === 'deselectSurf') {
+    document.querySelectorAll('#shapes .prim').forEach(x => x.classList.remove('sel'));
+    world.clearSelection(); world.gridSelection = null;
+    flash('surface deselected');
+    return;
+  }
+  // Select surface (aim at a wall/floor) or mark a free region in air — ONCE, on click.
   document.querySelectorAll('#shapes .prim').forEach(x => x.classList.remove('sel'));
   p.classList.add('sel'); gizmoShape = p.dataset.s;
-  world.setSelectionShape(gizmoShape, 2.0);          // re-mark with the chosen shape
+  const s = world.setSelectionShape(gizmoShape, 2.0);
+  flash(s ? (gizmoShape === 'surface' ? 'surface marked — aim & re-click to move it' : 'region marked in air') : 'aim at a wall or floor, then click again');
 });
 wireSketchfab();
 
