@@ -1348,18 +1348,42 @@ function _worldRecord(name, thumb, baseOverride) {
   };
 }
 
-// Upload a big uploaded base GLB DIRECTLY to Vercel Blob from the browser (bypasses
-// the 4.5MB serverless body limit that caused HTTP 413), returning its public URL.
+// Host an uploaded base GLB on Vercel Blob → returns its public URL. The published
+// world JSON then carries only this URL (+ the placement JSON), so any device re-opens
+// it by importing from the URL and replaying the saved coordinates/scale.
+//
+// Primary path: POST the RAW bytes to /api/asset, which `put()`s them with the same
+// token the JSON publish already uses (no fragile client-token handshake). Raw bytes
+// dodge the ~33% base64 inflation, so most scenes fit under the 4.5MB function limit.
+// Fallback for big files: a direct browser→Blob client upload (no size limit).
 async function uploadBaseToBlob(blob, slug, onProgress) {
-  const { upload } = await import('https://esm.sh/@vercel/blob/client');
-  const path = 'world-assets/' + (slug || 'scene') + '-' + Date.now() + '.glb';
-  const res = await upload(path, blob, {
-    access: 'public',
-    handleUploadUrl: '/api/blob-upload',
-    contentType: blob.type || 'model/gltf-binary',
-    onUploadProgress: onProgress ? (p => onProgress(p.percentage)) : undefined,
-  });
-  return res.url;
+  // 1) Reliable raw-bytes server upload (works under ~4.3MB; reuses the proven token).
+  //    Any failure simply falls through to the direct client upload below.
+  if (blob.size < 4_300_000) {
+    try {
+      const r = await fetch('/api/asset?name=' + encodeURIComponent(slug || 'scene'), {
+        method: 'POST', headers: { 'content-type': blob.type || 'model/gltf-binary' }, body: blob,
+      });
+      if (r.ok) { const j = await r.json(); if (j && j.url) return j.url; }
+    } catch { /* fall through */ }
+  }
+  // 2) Big file → direct browser→Blob upload (bypasses the 4.5MB function-body limit).
+  try {
+    const { upload } = await import('https://esm.sh/@vercel/blob/client');
+    const path = 'world-assets/' + (slug || 'scene') + '-' + Date.now() + '.glb';
+    const res = await upload(path, blob, {
+      access: 'public',
+      handleUploadUrl: '/api/blob-upload',
+      contentType: blob.type || 'model/gltf-binary',
+      onUploadProgress: onProgress ? (p => onProgress(p.percentage)) : undefined,
+    });
+    return res.url;
+  } catch (e) {
+    // Surface the REAL reason instead of the SDK's generic "Failed to retrieve the client token".
+    let hint = '';
+    try { const h = await (await fetch('/api/blob-upload')).json(); if (h && h.hasToken === false) hint = ' — the server has no Vercel Blob token; connect a Blob store to the project and redeploy'; } catch {}
+    throw new Error((e.message || 'upload failed') + hint);
+  }
 }
 
 // CORE SAVE — snapshot the live world into the private library (IndexedDB), keyed by
@@ -1418,8 +1442,19 @@ async function doPublish(name, thumb) {
         baseOverride = { source: 'url', url, autoScale: base.autoScale, targetSpan: base.targetSpan, autoCenter: base.autoCenter };
       } catch (e) { return { ok: false, error: 'base-model upload failed: ' + e.message }; }
     }
-    spStatus && spStatus('publishing world data…');
     const rec = _worldRecord(finalName, thumb, baseOverride);
+    // Host any uploaded PROP models too (Sketchfab/URL props already carry a URL), so
+    // EVERY model — not just the base — reloads from its URL on another device, with
+    // the saved coordinates/scale/rotation replayed from the placement JSON.
+    let hosted = 0;
+    for (const o of rec.objects) {
+      if (o.blob instanceof Blob && !o.url) {
+        spStatus && spStatus('uploading model “' + (o.label || 'prop') + '”…');
+        try { o.url = await uploadBaseToBlob(o.blob, slug + '-' + (o.label || 'prop')); o.kind = 'import'; hosted++; } catch { /* skip; it just won't reload elsewhere */ }
+        o.blob = null;
+      }
+    }
+    spStatus && spStatus('publishing world data…');
     const portable = await WorldStore.toPortable(rec);
     const r = await fetch('/api/world/' + encodeURIComponent(slug), {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(portable),
