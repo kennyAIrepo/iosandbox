@@ -13,9 +13,18 @@ import { handleUpload } from '@vercel/blob/client';
 import { blobToken, ensureBlobEnv } from './_blob.js';
 
 export default async function handler(req, res) {
-  // Health check so the client can report the REAL reason if uploads fail.
+  // Health / diagnostics so we can see EXACTLY what the deployment has. Safe — it
+  // exposes env var NAMES that look blob-related (never their secret values) plus
+  // which Vercel environment this function is running in.
   if (req.method === 'GET') {
-    res.status(200).json({ ok: true, hasToken: !!blobToken() });
+    res.setHeader('cache-control', 'no-store');
+    res.status(200).json({
+      ok: true,
+      hasToken: !!blobToken(),
+      tokenValuePresent: Object.values(process.env).some(v => typeof v === 'string' && v.startsWith('vercel_blob_rw_')),
+      blobEnvKeys: Object.keys(process.env).filter(k => /BLOB|READ_WRITE_TOKEN/i.test(k)),
+      vercelEnv: process.env.VERCEL_ENV || null,
+    });
     return;
   }
   if (req.method !== 'POST') { res.status(405).json({ error: 'GET or POST' }); return; }
