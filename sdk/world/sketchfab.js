@@ -15,15 +15,33 @@
 // (The `token` params below are ignored — kept only for call-site compatibility.)
 const PROXY = '/api/sketchfab';
 
-/** Search → minimal [{ uid, thumb }] (downloadable models only). */
-export async function searchModels(query, token = '', limit = 24) {
-  const res = await fetch(`${PROXY}?op=search&limit=${limit}&q=${encodeURIComponent(query)}`);
+/**
+ * Search → { results:[{ uid, name, thumb, downloadable, faces, author }], next }.
+ * `opts`: { count=24, cursor, sort, downloadable=true }. Pass the returned `next`
+ * cursor back in to page through more results ("load more" / browse like Sketchfab).
+ *
+ * Back-compat: also accepts the old (query, token, limit) positional form and, in
+ * that case, returns the bare results array.
+ */
+export async function searchModels(query, opts = {}, legacyLimit) {
+  const legacy = typeof opts !== 'object' || opts === null;       // old (query, token, limit) call
+  const o = legacy ? { count: legacyLimit || 24 } : opts;
+  const p = new URLSearchParams({ op: 'search', q: query, count: String(o.count || 24) });
+  if (o.cursor) p.set('cursor', o.cursor);
+  if (o.sort) p.set('sort', o.sort);
+  if (o.downloadable === false) p.set('downloadable', '0');
+  const res = await fetch(`${PROXY}?${p.toString()}`);
   if (!res.ok) throw new Error(`search ${res.status}`);
   const data = await res.json();
-  return (data.results || []).map(m => ({
+  const results = (data.results || []).map(m => ({
     uid: m.uid,
+    name: m.name || 'untitled',
     thumb: pickThumb(m.thumbnails),
+    downloadable: m.isDownloadable !== false,
+    faces: m.faceCount || 0,
+    author: (m.user && (m.user.displayName || m.user.username)) || '',
   })).filter(x => x.thumb);
+  return legacy ? results : { results, next: data.nextCursor || null };
 }
 
 function pickThumb(thumbs) {

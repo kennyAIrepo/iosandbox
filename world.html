@@ -147,7 +147,7 @@ video.h{display:none}
 .bub{max-width:82%;padding:10px 14px;border-radius:13px;font-size:13.5px;line-height:1.55}
 .bub.agent{align-self:flex-start;background:rgba(73,231,134,.08);border:1px solid rgba(73,231,134,.22);color:#d7ecdd}
 .bub.user{align-self:flex-end;background:rgba(93,255,155,.14);border:1px solid rgba(93,255,155,.32);color:#eafff1}
-#bGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;overflow:auto;max-height:34vh}
+#bGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;overflow:auto;max-height:46vh}
 #bGrid:empty{display:none}
 #bGrid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;cursor:pointer;border:1px solid rgba(73,231,134,.18);transition:border .15s,transform .15s,box-shadow .15s}
 #bGrid img:hover{border-color:#5dff9b;transform:scale(1.03);box-shadow:0 0 18px rgba(93,255,155,.4)}
@@ -254,15 +254,16 @@ video.h{display:none}
 
 <!-- Sketchfab browse panel (minimal: just thumbnails) -->
 <div id="sfPanel" style="position:fixed;top:14px;right:14px;z-index:35;display:none;flex-direction:column;
-  gap:8px;width:min(340px,80vw);max-height:80vh;background:rgba(8,10,16,.86);padding:10px;border-radius:12px;
-  backdrop-filter:blur(10px);border:1px solid rgba(74,127,181,.35)">
+  gap:8px;width:min(440px,88vw);max-height:82vh;background:rgba(5,12,9,.9);padding:12px;border-radius:12px;
+  backdrop-filter:blur(10px);border:1px solid rgba(73,231,134,.35);font-family:'Space Grotesk',system-ui,sans-serif">
   <div style="display:flex;gap:6px">
-    <input id="sfQuery" placeholder="search 3d assets…" style="flex:1;background:rgba(20,24,34,.8);
-      border:1px solid rgba(80,140,220,.25);color:#cce;border-radius:8px;padding:8px 10px;font-family:inherit;font-size:12px;outline:none">
+    <input id="sfQuery" placeholder="search 3D assets…  e.g. marble statue" style="flex:1;background:rgba(7,16,12,.85);
+      border:1px solid rgba(73,231,134,.28);color:#d7ecdd;border-radius:8px;padding:9px 11px;font-family:inherit;font-size:12px;outline:none">
+    <button id="sfGo" style="background:#5dff9b;border:none;color:#02110a;border-radius:8px;padding:0 12px;cursor:pointer;font-family:inherit;font-weight:600">🔍</button>
     <button id="sfClose" style="background:rgba(60,30,30,.5);border:1px solid rgba(200,80,80,.3);color:#f99;border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit">✕</button>
   </div>
-  <div id="sfGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;overflow:auto"></div>
-  <div id="sfHint" style="color:#778;font-size:10px">click a thumbnail to drop it onto the marked gizmo</div>
+  <div id="sfGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;overflow:auto"></div>
+  <div id="sfHint" style="color:#5d7468;font-size:10px">search to browse models · click one to drop it onto the marked gizmo</div>
 </div>
 <!-- Create-mode crosshair -->
 <div id="cross" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:24;
@@ -308,6 +309,7 @@ import { SpatialGrid } from './sdk/world/grid3d.js';
 import { VoiceCommander } from './sdk/interaction/voice.js';
 import { isPinch } from './sdk/interaction/grab.js';
 import { searchModels, resolveGLB } from './sdk/world/sketchfab.js';
+import { createBrowser } from './sdk/world/asset-browser.js';
 import { BuilderAgent } from './sdk/world/world-builder.js';
 import { WorldStore } from './sdk/world/world-store.js';
 import CFG from './config.js';
@@ -817,28 +819,21 @@ async function importGLB(url, label, blob) {
   catch (e) { sayAI('import failed: ' + e.message + (String(e.message).match(/CORS|Failed/) ? ' (asset host blocked the browser)' : '')); }
 }
 
-// Sketchfab browse panel (minimal — thumbnails only)
+// Sketchfab browse panel — full gallery (names + load-more pagination)
 function wireSketchfab() {
   const panel = document.getElementById('sfPanel'), grid = document.getElementById('sfGrid'), q = document.getElementById('sfQuery'), hint = document.getElementById('sfHint');
+  const browser = createBrowser(grid, {
+    onStatus: t => hint.textContent = t,
+    onPick: async (h) => {
+      hint.textContent = 'fetching “' + (h.name || 'model') + '”…';
+      try { const url = await resolveGLB(h.uid); await importGLB(url, h.name || q.value.trim() || 'model'); panel.style.display = 'none'; }
+      catch (e) { hint.textContent = 'couldn’t fetch that one: ' + e.message + ' — try another, or ＋ GLB URL / upload'; }
+    },
+  });
   document.getElementById('openSF').addEventListener('click', () => { panel.style.display = 'flex'; q.focus(); });
   document.getElementById('sfClose').addEventListener('click', () => { panel.style.display = 'none'; });
-  const run = async () => {
-    if (!q.value.trim()) return;
-    grid.innerHTML = ''; hint.textContent = 'searching…';
-    try {
-      const hits = await searchModels(q.value, CFG.SKETCHFAB_TOKEN, 18);
-      hint.textContent = hits.length ? 'click a thumbnail to drop it onto the gizmo' : 'no results';
-      hits.forEach(h => {
-        const img = document.createElement('img'); img.src = h.thumb; img.loading = 'lazy';
-        img.addEventListener('click', async () => {
-          panel.style.display = 'none';
-          try { const url = await resolveGLB(h.uid, CFG.SKETCHFAB_TOKEN); await importGLB(url, q.value.trim() || 'model'); }
-          catch (e) { sayAI('could not fetch that model: ' + e.message + ' — or use ＋ GLB URL / upload a .glb'); }
-        });
-        grid.appendChild(img);
-      });
-    } catch (e) { hint.textContent = 'search failed: ' + e.message; }
-  };
+  const run = () => { if (q.value.trim()) browser.search(q.value); };
+  document.getElementById('sfGo').addEventListener('click', run);
   q.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
   document.getElementById('openURL').addEventListener('click', () => {
     const url = prompt('Paste a direct .glb URL (Meshy export, self-hosted, etc.)');
@@ -959,24 +954,16 @@ function startBuilder() {
     chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
   };
 
-  // Render Sketchfab scene results; clicking one builds + enters that world.
-  const showScenes = async (query) => {
-    grid.innerHTML = ''; hint.textContent = 'searching scenes…';
-    try {
-      const hits = await searchModels(query, CFG.SKETCHFAB_TOKEN, 16);
-      hint.textContent = hits.length ? 'click a scene to drop in · or bring your own model' : 'no scenes found — try other words, or upload a .glb';
-      hits.forEach(h => {
-        const img = document.createElement('img'); img.src = h.thumb; img.loading = 'lazy';
-        img.addEventListener('click', async () => {
-          hint.textContent = 'fetching scene…';
-          try { const url = await resolveGLB(h.uid, CFG.SKETCHFAB_TOKEN); buildAndEnter({ modelUrl: url, label: query, base: { source: 'sketchfab', uid: h.uid } }); }
-          catch (e) { hint.textContent = 'couldn’t fetch that scene: ' + e.message + ' — try another, or upload a .glb'; }
-        });
-        grid.appendChild(img);
-      });
-      return hits.length;
-    } catch (e) { hint.textContent = 'search failed: ' + e.message; return 0; }
-  };
+  // Full scene gallery (names + load-more). Clicking a scene builds + enters it.
+  const sceneBrowser = createBrowser(grid, {
+    onStatus: t => hint.textContent = t,
+    onPick: async (h) => {
+      hint.textContent = 'fetching “' + (h.name || 'scene') + '”…';
+      try { const url = await resolveGLB(h.uid); buildAndEnter({ modelUrl: url, label: h.name || 'scene', base: { source: 'sketchfab', uid: h.uid } }); }
+      catch (e) { hint.textContent = 'couldn’t fetch that scene: ' + e.message + ' — try another, or upload a .glb'; }
+    },
+  });
+  const showScenes = (query) => sceneBrowser.search(query);   // returns Promise<count> for the builder agent
 
   const builder = new BuilderAgent({
     apiKey: CFG.CLAUDE_API_KEY, model: CFG.CLAUDE_MODEL_BUILD,   // scene bring-up is part of building → build agent

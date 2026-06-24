@@ -17,10 +17,16 @@ export default async function handler(req, res) {
   try {
     if (op === 'search') {
       const q = req.query.q || '';
-      const limit = req.query.limit || 24;
-      const url = `${API}/search?type=models&downloadable=true&archives_flavours=false&count=${limit}&q=${encodeURIComponent(q)}`;
+      const count = Math.min(parseInt(req.query.count, 10) || 24, 24);   // Sketchfab caps at 24/page
+      const wantDL = req.query.downloadable !== '0';                      // default: only importable models
+      let url = `${API}/search?type=models&archives_flavours=false&count=${count}&q=${encodeURIComponent(q)}`;
+      if (wantDL) url += '&downloadable=true';
+      if (req.query.sort) url += '&sort_by=' + encodeURIComponent(req.query.sort);
+      if (req.query.cursor) url += '&cursor=' + encodeURIComponent(req.query.cursor);
       const r = await fetch(url, { headers: token ? { Authorization: 'Token ' + token } : {} });
-      res.status(r.status).json(await r.json());
+      const data = await r.json();
+      // Pass through results + a pagination cursor for "load more".
+      res.status(r.status).json({ results: data.results || [], nextCursor: (data.cursors && data.cursors.next) || null });
     } else if (op === 'resolve') {
       if (!token) { res.status(500).json({ error: 'SKETCHFAB_TOKEN is not set on the server' }); return; }
       const uid = String(req.query.uid || '');

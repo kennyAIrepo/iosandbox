@@ -16,6 +16,20 @@
 
 import { searchModels, resolveGLB } from './sketchfab.js';
 
+// Choose the result whose name best matches the query (token overlap), preferring
+// models with real geometry — beats blindly taking result #0.
+function bestMatch(results, q) {
+  const qs = String(q).toLowerCase().split(/\W+/).filter(Boolean);
+  let best = results[0], bs = -Infinity;
+  for (const r of results) {
+    const n = (r.name || '').toLowerCase();
+    let s = qs.reduce((a, t) => a + (n.includes(t) ? 1 : 0), 0);
+    if (r.faces > 0) s += 0.1;
+    if (s > bs) { bs = s; best = r; }
+  }
+  return best;
+}
+
 const TOOLS = [
   // ── Understanding ──
   { name: 'get_scene', description: 'Read the full world state: avatar transform, what the user is looking at, landmarks, and every object with its id/type/position/rotation/scale/color. Call this first when you need to know what exists or which object the user means.',
@@ -39,8 +53,12 @@ const TOOLS = [
     input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['surface', 'box'] }, size: { type: 'number' } }, required: ['kind'] } },
 
   // ── Import real 3D assets (Sketchfab / direct GLB / Meshy) ──
-  { name: 'import_sketchfab', description: 'Search Sketchfab for a downloadable model matching the query and import the best match into the active selection (collidable, lit, shadowed).',
+  { name: 'import_sketchfab', description: 'Search Sketchfab for a downloadable model matching the query and import the best NAME match into the active selection (collidable, lit, shadowed). Convenience: searches + picks + imports in one step. If the query is ambiguous or the first guess might be wrong, prefer search_assets → import_model instead.',
     input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'search_assets', description: 'Browse Sketchfab: search downloadable models and SEE the candidates (name, uid, poly count, author) WITHOUT importing. Use this to choose deliberately — when the query is ambiguous, the obvious pick might be wrong, or you want a specific style/era. Returns a list; then call import_model with the chosen uid.',
+    input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'import_model', description: 'Import a SPECIFIC Sketchfab model by its uid (taken from search_assets results) into the active selection. Give it a recall label.',
+    input_schema: { type: 'object', properties: { uid: { type: 'string' }, label: { type: 'string' } }, required: ['uid'] } },
   { name: 'import_glb_url', description: 'Import any direct .glb URL (Meshy export, self-hosted, etc.) into the active selection.',
     input_schema: { type: 'object', properties: { url: { type: 'string' }, label: { type: 'string', description: 'recall name for the object, e.g. "lamp"' } }, required: ['url'] } },
   { name: 'fill_selection_with_import', description: 'Clone the most recently imported model across the marked region as miniatures.',
@@ -214,11 +232,23 @@ export class WorldAgent {
         }
         case 'import_glb_url': { const id = await w.importGLBFromURL(input.url, { label: input.label }); return `imported → ${id}`; }
         case 'import_sketchfab': {
-          const hits = await searchModels(input.query, this.sketchfabToken, 12);
-          if (!hits.length) return 'no downloadable models found';
-          const url = await resolveGLB(hits[0].uid, this.sketchfabToken);
+          const { results } = await searchModels(input.query, { count: 24 });
+          if (!results.length) return `no downloadable models for "${input.query}" — try more specific words (material+object+style), or import_glb_url with a direct .glb link`;
+          const pick = bestMatch(results, input.query);
+          const url = await resolveGLB(pick.uid);
           const id = await w.importGLBFromURL(url, { label: input.query });
-          return `imported "${input.query}" → ${id} (call it "${input.query}")`;
+          const alts = results.filter(r => r.uid !== pick.uid).slice(0, 6).map(r => r.name).join('; ');
+          return `imported "${pick.name}" → ${id} (call it "${input.query}"). ${results.length} matches found${alts ? `; other options: ${alts}` : ''}`;
+        }
+        case 'search_assets': {
+          const { results } = await searchModels(input.query, { count: 24 });
+          if (!results.length) return `no downloadable models for "${input.query}" — try other words (material+object+style)`;
+          return JSON.stringify(results.slice(0, 16).map(r => ({ uid: r.uid, name: r.name, faces: r.faces, author: r.author })));
+        }
+        case 'import_model': {
+          const url = await resolveGLB(input.uid);
+          const id = await w.importGLBFromURL(url, { label: input.label || 'model' });
+          return `imported ${input.label || input.uid} → ${id}`;
         }
         case 'fill_selection_with_import': {
           const ids = w.fillSelectionWithImport(input.rows, input.cols, { scale: input.scale });
