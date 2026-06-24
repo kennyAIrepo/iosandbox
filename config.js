@@ -13,7 +13,11 @@
  */
 const CONFIG = {
   CLAUDE_API_KEY: '',                 // server-side now → /api/claude
-  CLAUDE_MODEL:   'claude-sonnet-4-6',
+  // Two tiers, surfaced to users ONLY as "design pal" (chat) and "build agent" (construct).
+  // Never show these ids in the UI.
+  CLAUDE_MODEL_CONVERSE: 'claude-sonnet-4-6',   // "conversation / design pal" — regular chat
+  CLAUDE_MODEL_BUILD:    'claude-opus-4-8',      // "build agent" — constructing scenes/games, no hold back
+  CLAUDE_MODEL:   'claude-sonnet-4-6',           // back-compat default (= converse)
   OPENAI_API_KEY: '',                 // server-side now → /api/openai
   WHISPER_MODEL:  'gpt-4o-transcribe',
   SKETCHFAB_TOKEN: '',                // server-side now → /api/sketchfab

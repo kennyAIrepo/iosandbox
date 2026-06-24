@@ -116,11 +116,29 @@ const FALLBACK_GUIDE =
   'focal point, leading lines, negative space, human-readable scale, warm/cool light, a small palette, and ' +
   'walkable flow. Match imported assets to the scene\'s style and the space they fill.';
 
+// Loaded into the BUILD agent's system prompt — deep, ready-to-use scene/game construction know-how.
+const BUILD_KNOWLEDGE = [
+  "GAME-SCENE CONSTRUCTION PLAYBOOK — you are the BUILD AGENT, running at maximum capability. Be ambitious, decisive and thorough; build complete, polished, playable scenes, not fragments.",
+  "• Plan then mass: state the concept in a phrase, block out the big forms (ground plane, walls/horizon, major landmarks) before details. Keep the base model's floor centered near origin so the spawn is reachable; keep human eye level (~1.7m) and real-world scale in mind (doorway ~2m, chair ~0.5m).",
+  "• Composition: one clear focal point, leading lines toward it, walkable lanes, deliberate negative space, foreground/mid/background depth. Compose situationally from scene.bounds/center/size and the existing objects[].",
+  "• Light & atmosphere: a tight palette; warm key + cool fill; set_time_of_day / set_sun to rake light and set mood; set_atmosphere (sky/fog/exposure) for depth; set_shadows for grounding; set_weather to unify. Golden hour and gentle fog flatter most scenes.",
+  "• Sourcing real assets (your supply chain): import_sketchfab(query) pulls downloadable models — use concrete VISUAL queries combining material + object + style (e.g. 'weathered bronze statue', 'lowpoly pine tree', 'sci-fi crate scuffed'). import_glb_url for a direct .glb / Meshy export. Always name what you add so it's recallable; duplicate/scatter to build sets and crowds.",
+  "• Materials & believability: vary surface finish (matte vs glossy), avoid uniform scale/spacing, sit objects ON surfaces (use groundY / mark_surface_in_view → place_in_selection / fill_selection), never leave props floating or clipping.",
+  "• Spatial selection & the grid: when the user has marked the neon grid (gridSelection) or you mark a wall/region, treat it as 'here / along this / in this region' and place, line up, or fill accordingly.",
+  "• Custom behaviour: run_script is your escape hatch (scope: world, scene, camera, THREE, hope, nav; await ok; hope.onFrame(cb) for animation) — wire interactions, animate, batch-edit materials/lights, author simple game logic. Keep snippets small and reversible.",
+  "• Environment vs props: the base scene GLB is a FIXED backdrop unless the user explicitly asks to make the world a game object (make_scene_editable / transform_scene). Use per-object tools for props; don't grab the whole world by accident.",
+  "• Finish pass: check scale, grounding, lighting, and that there's a focal moment and somewhere to walk. Narrate briefly what you built and offer one concrete next step.",
+].join('\n');
+
 export class WorldAgent {
-  constructor({ apiKey, model, world, nav, onSay, sketchfabToken, env, allowScripting, guideUrl, endpoint }) {
+  constructor({ apiKey, model, models, mode, world, nav, onSay, sketchfabToken, env, allowScripting, guideUrl, endpoint }) {
     this.apiKey = apiKey || '';                          // unused — key lives server-side
     this.endpoint = endpoint || '/api/claude';           // proxy that holds the Claude key
-    this.model = model || 'claude-sonnet-4-6';           // in-world conversation/creation defaults to Claude
+    // Two tiers (never named to the user): 'build' = max-capability construct agent,
+    // 'converse' = lighter design/chat pal. The host swaps modes by context + a toggle.
+    this.models = models || { build: model || 'claude-opus-4-8', converse: model || 'claude-sonnet-4-6' };
+    this.mode = (mode === 'build' || mode === 'converse') ? mode : 'converse';
+    this.model = this.models[this.mode] || model || 'claude-sonnet-4-6';
     this.world = world;
     this.nav = nav;
     this.onSay = onSay || (() => {});
@@ -130,6 +148,13 @@ export class WorldAgent {
     this.guideUrl = guideUrl || new URL('./agent-guide.md', import.meta.url).href;
     this._guide = undefined;                             // cached design-knowledge doc
     this.busy = false;
+  }
+
+  /** Switch capability tier: 'build' (max) or 'converse' (design pal). Returns the active mode. */
+  setMode(mode) {
+    if (mode !== 'build' && mode !== 'converse') return this.mode;
+    this.mode = mode; this.model = this.models[mode];
+    return this.mode;
   }
 
   /** Fetch the design-knowledge doc once (falls back to an embedded summary). */
@@ -144,6 +169,9 @@ export class WorldAgent {
   _system(guide) {
     const s = this.world.getSceneState();
     return [
+      this.mode === 'build'
+        ? "You are operating as the BUILD AGENT for hopeOS — the user is in the construction/template environment and you run at MAXIMUM capability to construct worlds, scenes and games. Be ambitious, decisive and thorough; take initiative and build complete, polished, playable results — no hold back. You converse too, but your default is to MAKE."
+        : "You are operating as the conversation & design companion for hopeOS — warm, concise and helpful. Brainstorm, advise and make light edits; for heavy construction, suggest the user switch to the build agent.",
       "You are the in-world AI co-creator for hopeOS, a browser-native 3D world. You are a designer and builder partner: you CONVERSE (brainstorm, pitch options, explain choices) AND you ACT on the live scene through tools. When the user is just talking, talk back and propose ideas; when they ask for something concrete, do it and narrate briefly.",
       "You can move/aim the user (navigate, look, turn, walk) and fully edit the creator layer: create primitives, set absolute transforms, translate/rotate/scale/recolor/duplicate/delete, mark a wall/floor/region, and IMPORT real 3D models (import_sketchfab by query, or import_glb_url for a direct .glb/Meshy link) straight onto the marked selection — already collidable and lit. You can also run_script for custom live changes no other tool covers (animation, custom interactions, materials/lights).",
       "Everything you add is live and physics-ready immediately; there is no build/compile step. Objects are real touchable surfaces (hands and the avatar collide with their meshes).",
@@ -155,7 +183,7 @@ export class WorldAgent {
       "Every object has a short recall NAME (label) — imports are named after what was searched (e.g. 'dragon'). Act on an object by passing its label instead of its id (e.g. scale_object {label:'dragon', factor:2}); use select_in_view for 'this/that', or get_scene to read all labels. rename_object gives something a friendlier name.",
       "Chain multiple tool calls for multi-step requests (create → position → colour). Keep spoken text short and natural — the user hears it.",
       "When asked for an object that fits a vibe, turn it into a specific Sketchfab query (material+object+style), import the best match, name it, and place it well. Offer an alternative if it feels off.",
-      "── DESIGN GUIDE ──\n" + (guide || FALLBACK_GUIDE),
+      (this.mode === 'build' ? "── BUILD PLAYBOOK ──\n" + BUILD_KNOWLEDGE + "\n\n" : "") + "── DESIGN GUIDE ──\n" + (guide || FALLBACK_GUIDE),
       "── LIVE SCENE STATE ──\n" + JSON.stringify(s),
     ].join('\n\n');
   }

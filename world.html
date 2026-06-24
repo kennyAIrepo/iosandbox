@@ -272,6 +272,8 @@ video.h{display:none}
 <div id="ai" style="position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:30;
   display:none;gap:8px;align-items:center;background:rgba(8,10,16,.72);padding:8px 10px;border-radius:12px;
   backdrop-filter:blur(8px);border:1px solid rgba(74,127,181,.3);width:min(560px,92vw)">
+  <button id="modeBtn" title="switch agent" style="background:rgba(60,48,20,.55);border:1px solid rgba(212,168,67,.45);
+    color:#f0c25a;border-radius:8px;padding:8px 10px;cursor:pointer;font-family:inherit;font-size:11px;white-space:nowrap">🛠 BUILD</button>
   <button id="micBtn" title="toggle voice" style="background:rgba(40,60,100,.4);border:1px solid rgba(80,140,220,.3);
     color:#9bf;border-radius:8px;padding:8px 11px;cursor:pointer;font-family:inherit;font-size:13px">🎤</button>
   <input id="aiInput" placeholder="ask the world…  e.g. take me to the stairs"
@@ -385,7 +387,9 @@ async function boot() {
   // In-world AI co-creator (Claude) — conversation + navigation + creation + live
   // scripting. Voice via Whisper (OpenAI) only does speech→text upstream.
   agent = new WorldAgent({
-    apiKey: CFG.CLAUDE_API_KEY, model: CFG.CLAUDE_MODEL,
+    apiKey: CFG.CLAUDE_API_KEY,
+    models: { build: CFG.CLAUDE_MODEL_BUILD, converse: CFG.CLAUDE_MODEL_CONVERSE },
+    mode: BUILD_MODE ? 'build' : 'converse',          // /build → max-capability build agent
     world, nav, onSay: sayAI, sketchfabToken: CFG.SKETCHFAB_TOKEN,
     env: { scene: hope.scene, camera: hope.camera, THREE: hope.THREE, hope },  // for run_script live edits
     allowScripting: true,
@@ -426,10 +430,35 @@ function sayAI(msg) {
   el.textContent = msg; el.style.opacity = '1';
   clearTimeout(sayAI._t); sayAI._t = setTimeout(() => { el.style.opacity = '0'; }, 4200);
 }
+
+// Agent tiers — shown ONLY as "build agent" vs "conversation / design pal" (never model names).
+let agentMode = 'converse';
+function setAgentMode(mode, announce) {
+  if (!agent) return;
+  const prev = agentMode;
+  agentMode = agent.setMode(mode);
+  const b = document.getElementById('modeBtn');
+  if (b) {
+    const build = agentMode === 'build';
+    b.textContent = build ? '🛠 BUILD AGENT' : '💬 DESIGN PAL';
+    b.title = build ? 'Build agent — max capability for constructing scenes & games. Tap to switch to your conversation / design pal.'
+                    : 'Conversation / design pal. Tap to switch to the build agent for constructing.';
+    b.style.background = build ? 'rgba(60,48,20,.6)' : 'rgba(40,60,100,.45)';
+    b.style.borderColor = build ? 'rgba(212,168,67,.5)' : 'rgba(80,140,220,.35)';
+    b.style.color = build ? '#f0c25a' : '#9bf';
+  }
+  if (announce && agentMode !== prev) {
+    sayAI(agentMode === 'build'
+      ? 'system switched to the build agent — suited for your needs here. tap the agent button to switch back to your conversation / design pal anytime.'
+      : 'switched to your conversation / design pal. tap to switch back to the build agent for constructing.');
+  }
+}
+
 function wireAIBar() {
   const input = document.getElementById('aiInput');
   const send = () => { const v = input.value; input.value = ''; if (v.trim()) { sayAI('· ' + v); agent.command(v); } };
   document.getElementById('aiSend').addEventListener('click', send);
+  document.getElementById('modeBtn').addEventListener('click', () => setAgentMode(agentMode === 'build' ? 'converse' : 'build', true));
   input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
   document.getElementById('micBtn').addEventListener('click', async () => {
     const btn = document.getElementById('micBtn');
@@ -550,6 +579,7 @@ function setBuildMode(on) {
   document.getElementById('cross').style.display = on ? 'block' : 'none';
   if (!on) { world.clearSelection(); document.getElementById('sfPanel').style.display = 'none'; }
   sayAI(on ? 'create mode — click to select, gizmo/box-select to edit, right-drag to look' : 'play mode');
+  if (on) setAgentMode('build', true);   // turning on construction → switch to the build agent
 }
 
 // Gizmo tool buttons (translate / rotate / scale) + 3D grid show/hide + jump toggle.
@@ -862,6 +892,7 @@ function enterWorld() {
   if (ENTRY_MODE === 'create') setBuildMode(true);   // lobby "Create" enters build mode live
 
   histInit();                                        // baseline snapshot for undo/redo
+  setAgentMode(BUILD_MODE ? 'build' : 'converse', BUILD_MODE);  // /build → build agent (announced on entry)
 
   running = true;
   hope.start();
@@ -938,7 +969,7 @@ function startBuilder() {
   };
 
   const builder = new BuilderAgent({
-    apiKey: CFG.CLAUDE_API_KEY, model: CFG.CLAUDE_MODEL,
+    apiKey: CFG.CLAUDE_API_KEY, model: CFG.CLAUDE_MODEL_BUILD,   // scene bring-up is part of building → build agent
     onSay: bubble, onBrowse: showScenes,
   });
   builder.greet();
