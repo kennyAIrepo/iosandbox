@@ -389,7 +389,16 @@ export class WorldTemplate {
     loader.setDRACOLoader(draco);
 
     return new Promise((resolve) => {
+      // A hanging request (cross-origin stall, dead CDN, slow host) fires NEITHER
+      // callback, which would hang boot() forever on the LOADING screen. Time it out
+      // and proceed with an empty floor so the world always enters.
+      let settled = false;
+      const finish = () => { if (!settled) { settled = true; resolve(); } };
+      const timer = setTimeout(() => { if (!settled) { console.warn('[world] model load timed out (' + url + ') — entering with empty floor'); finish(); } }, 30000);
       loader.load(url, (gltf) => {
+        clearTimeout(timer);
+        if (settled) return;                 // already timed out — don't double-process
+        settled = true;
         const model = gltf.scene;
         model.scale.setScalar(this.cfg.scale);
         model.position.set(this.cfg.offset.x, this.cfg.offset.y, this.cfg.offset.z);
@@ -460,10 +469,11 @@ export class WorldTemplate {
           this.bounds.min.toArray().map(n => n.toFixed(1)), '→',
           this.bounds.max.toArray().map(n => n.toFixed(1)),
           '| spawn', Object.values(this.cfg.spawn).map(n => n.toFixed(1)));
-        resolve();
+        finish();
       }, undefined, (err) => {
+        clearTimeout(timer);
         console.warn('[world] model load failed, using empty floor:', err);
-        resolve();
+        finish();
       });
     });
   }
