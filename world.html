@@ -892,7 +892,7 @@ els.exit.addEventListener('click', async () => {
     const ok = confirm('Save this world before leaving? (snapshots all models, positions & scale)');
     if (ok) await saveCurrentWorld();
   }
-  window.location.href = 'universal.html';
+  window.location.href = '/';
 });
 
 // Entry mode passed from the lobby (?mode=play|create, ?build=1, or clean route /build).
@@ -1068,6 +1068,7 @@ async function saveCurrentWorld() {
     environment: world.getEnvironment(),
     objects: world.snapshot(),
     scripts: world.scripts,
+    thumb: captureThumb(),
   };
   try {
     await WorldStore.saveWorld(rec);
@@ -1082,6 +1083,46 @@ async function saveCurrentWorld() {
 
 // Slugify a world name into its public URL segment.
 function worldSlug(name) { return (name || 'world').trim().replace(/[^\w-]+/g, '_').slice(0, 80); }
+
+// Grab a small JPEG thumbnail of the live view (for the world-graph node cards).
+function captureThumb() {
+  try {
+    hope.renderer.render(hope.scene, hope.camera);          // fresh frame so the buffer is valid
+    const src = hope.renderer.domElement;
+    const w = 220, h = Math.max(140, Math.round(220 * src.height / src.width));
+    const c = document.createElement('canvas'); c.width = w; c.height = h;
+    c.getContext('2d').drawImage(src, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch (e) { return null; }
+}
+
+// Let the user pick an image file (their screenshot / print-screen) → small dataURL.
+function pickImageDataURL() {
+  return new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => {
+      const f = inp.files && inp.files[0];
+      if (!f) { resolve(null); return; }
+      const fr = new FileReader();
+      fr.onload = async () => resolve(await downscaleImage(fr.result).catch(() => fr.result));
+      fr.onerror = () => resolve(null);
+      fr.readAsDataURL(f);
+    };
+    // If the file dialog is cancelled there's no change event — resolve null on refocus.
+    const onFocus = () => setTimeout(() => { if (!inp.files || !inp.files.length) { resolve(null); window.removeEventListener('focus', onFocus); } }, 600);
+    window.addEventListener('focus', onFocus);
+    inp.click();
+  });
+}
+function downscaleImage(dataURL, max = 360) {
+  return new Promise((res) => {
+    const im = new Image();
+    im.onload = () => { const sc = Math.min(1, max / im.width); const w = Math.round(im.width * sc), h = Math.round(im.height * sc); const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(im, 0, 0, w, h); res(c.toDataURL('image/jpeg', 0.7)); };
+    im.onerror = () => res(dataURL);
+    im.src = dataURL;
+  });
+}
 
 // Push the current world to the COMMUNAL public cloud. Explicit, one-time choice:
 // the world leaves the private Build area and joins the public "other worlds" set,
@@ -1104,6 +1145,13 @@ async function publishCurrentWorld() {
     }
   } catch { /* offline check — proceed to publish attempt */ }
 
+  // Cover image for the world-graph node card. The creator can upload their own
+  // (a screenshot / print-screen they took), else we auto-snapshot the live view.
+  let customThumb = null;
+  if (confirm('Add a cover image for this world?\n\nOK — upload your own picture (e.g. a screenshot / print-screen you took)\nCancel — auto-use a snapshot of the current view')) {
+    customThumb = await pickImageDataURL().catch(() => null);
+  }
+
   sayAI('publishing “' + name + '” to the public cloud…');
   try {
     // Snapshot the live world under the chosen public name.
@@ -1115,6 +1163,7 @@ async function publishCurrentWorld() {
       environment: world.getEnvironment(),
       objects: world.snapshot(),
       scripts: world.scripts,
+      thumb: customThumb || captureThumb(),
     };
     const portable = await WorldStore.toPortable(rec);
     const r = await fetch('/api/world/' + encodeURIComponent(slug), {
@@ -1172,7 +1221,18 @@ async function loadPublishedWorld(slug) {
   }
 }
 
+const DRAFT_NAME = PARAMS.get('draft');                 // /build?draft=<name> → open a saved local draft
+async function openDraftByName(name) {
+  els.play.textContent = 'LOADING “' + name + '”…';
+  try {
+    const rec = await WorldStore.loadWorld(name);
+    if (!rec) throw new Error('draft “' + name + '” not found on this device');
+    await openSavedWorld(rec);
+  } catch (e) { console.error(e); els.play.textContent = 'ERROR: ' + e.message; startBuilder(); }
+}
+
 if (WORLD_SLUG) loadPublishedWorld(WORLD_SLUG);
+else if (DRAFT_NAME) openDraftByName(DRAFT_NAME);
 else if (BUILD_MODE) startBuilder();
 else boot().catch(e => { console.error(e); els.play.textContent = 'ERROR: ' + e.message; });
 </script>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>h0p3 — worlds</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#04070a;--green:#5dff9b;--green-mid:#43e07a;--green-hi:#b7ffce;--green-dim:#2fa262;
+  --ink:#d7ecdd;--mute:#5d7468;--line:rgba(73,231,134,.18);
+  --font:'Space Grotesk',system-ui,sans-serif;--glow:0 0 14px rgba(93,255,155,.55);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--void);color:var(--ink);font-family:var(--font);overflow:hidden;height:100dvh;
+  font-variant-numeric:tabular-nums lining-nums;font-feature-settings:"zero" 0,"tnum" 1;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer}
+::selection{background:var(--green);color:#02110a}
+:focus-visible{outline:2px solid var(--green);outline-offset:3px;border-radius:4px}
+
+.topbar{position:fixed;top:0;left:0;right:0;z-index:10;display:flex;align-items:center;gap:18px;padding:14px clamp(16px,4vw,40px);
+  background:linear-gradient(180deg,rgba(4,7,10,.92),transparent);pointer-events:none}
+.topbar a,.topbar button{pointer-events:auto}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.12em;font-size:15px}
+.brand .mark{width:22px;height:22px;display:grid;grid-template-columns:1fr 1fr;gap:3px}
+.brand .mark i{border-radius:4px;display:block}
+.brand .mark i:nth-child(1){background:#4f9d60}.brand .mark i:nth-child(2){background:#3f5f8f}
+.brand .mark i:nth-child(3){background:#8f7a3c}.brand .mark i:nth-child(4){background:#4f9d60}
+.brand b{color:var(--green);text-shadow:var(--glow)}
+.spacer{flex:1}
+.ttl{display:flex;flex-direction:column;line-height:1.1}
+.ttl .k{font-size:10px;letter-spacing:.26em;text-transform:uppercase;color:var(--green-mid)}
+.ttl .h{font-family:var(--font);font-size:17px;font-weight:600}
+.btn{font-size:12px;letter-spacing:.03em;padding:8px 14px;border-radius:9px;border:1px solid var(--line);color:var(--ink);transition:.18s;background:rgba(7,13,12,.6)}
+.btn:hover{border-color:var(--green);color:var(--green);box-shadow:var(--glow)}
+.btn-solid{background:var(--green);color:#02110a;border-color:var(--green);font-weight:600}
+.btn-solid:hover{background:var(--green-hi)}
+#graph{position:fixed;inset:0;z-index:1;display:block;touch-action:none}
+#hint{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);z-index:5;font-size:11px;letter-spacing:.06em;color:var(--mute);pointer-events:none}
+#status{position:fixed;inset:0;z-index:4;display:grid;place-items:center;text-align:center;padding:30px;pointer-events:none}
+#status .box{pointer-events:auto;max-width:420px}
+#status .h{font-family:var(--font);font-size:22px;font-weight:600;color:var(--green);text-shadow:var(--glow);margin-bottom:8px}
+#status .p{font-size:13px;color:var(--mute);line-height:1.6;margin-bottom:18px}
+.cur{color:var(--green);animation:blink 1s step-end infinite}
+@keyframes blink{50%{opacity:.2}}
+</style>
+</head>
+<body>
+<canvas id="graph"></canvas>
+
+<header class="topbar">
+  <a class="brand" href="/"><span class="mark"><i></i><i></i><i></i><i></i></span>h<b>0</b>p<b>3</b></a>
+  <div class="ttl"><span class="k" id="kick">community</span><span class="h" id="head">Other Worlds</span></div>
+  <div class="spacer"></div>
+  <a class="btn" href="/">⌂ home</a>
+  <a class="btn btn-solid" href="/build">＋ Build a world</a>
+</header>
+
+<div id="status"><div class="box"><div class="h">loading<span class="cur">▋</span></div></div></div>
+<div id="hint">drag a node to move it · drag space to pan · click a world to enter</div>
+
+<script type="module">
+import { mountWorldGraph } from './sdk/world/world-graph.js';
+
+const MINE = location.pathname.replace(/\/+$/,'').startsWith('/you');
+const canvas = document.getElementById('graph');
+const status = document.getElementById('status');
+const prettyName = s => String(s).replace(/_/g,' ');
+function showStatus(html){ status.style.display='grid'; status.querySelector('.box').innerHTML = html; }
+function hideStatus(){ status.style.display='none'; }
+
+// Header copy per mode
+document.getElementById('kick').textContent = MINE ? 'your drafts · this device' : 'community';
+document.getElementById('head').textContent = MINE ? 'Your Worlds' : 'Other Worlds';
+document.title = MINE ? 'h0p3 — your worlds' : 'h0p3 — other worlds';
+
+async function loadCommunity(){
+  let worlds = [];
+  try { const r = await fetch('/api/world'); if(!r.ok) throw new Error('HTTP '+r.status); worlds = (await r.json()).worlds || []; }
+  catch(e){ showStatus('<div class="h">couldn’t reach the cloud</div><div class="p">'+e.message+'</div><a class="btn btn-solid" href="/build">Build a world</a>'); return; }
+  if(!worlds.length){ showStatus('<div class="h">no public worlds yet</div><div class="p">Be the first — build a world, then hit 🌐 Publish to drop it onto the graph for everyone.</div><a class="btn btn-solid" href="/build">＋ Build a world</a>'); return; }
+  hideStatus();
+  const items = worlds.map(w => ({ id:w.name, title:prettyName(w.name), sub:'h0p3.io/world/'+w.name }));
+  const graph = mountWorldGraph(canvas, items, { onOpen: it => location.href = '/world/' + encodeURIComponent(it.id) });
+  // Lazy-load each world's stored thumbnail (rec.thumb) without blocking the graph.
+  let n = 0;
+  for (const w of worlds) {
+    if (n++ % 4 === 0) await new Promise(r => setTimeout(r, 0));
+    fetch('/api/world/' + encodeURIComponent(w.name)).then(r => r.ok ? r.json() : null).then(rec => { if (rec && rec.thumb) graph.setThumb(w.name, rec.thumb); }).catch(()=>{});
+  }
+}
+
+async function loadMine(){
+  let worlds = [];
+  try { const { WorldStore } = await import('./sdk/world/world-store.js'); worlds = await WorldStore.listWorlds().catch(()=>[]); }
+  catch(e){ /* indexeddb blocked */ }
+  if(!worlds.length){ showStatus('<div class="h">no drafts on this device</div><div class="p">Worlds you build are saved here privately until you publish them.</div><a class="btn btn-solid" href="/build">＋ Build a world</a>'); return; }
+  hideStatus();
+  const items = worlds.map(w => ({ id:w.name, title:w.name, thumb:w.thumb || null,
+    sub:((w.objects||[]).length)+' objects'+(w.publishedAs?' · public':' · draft') }));
+  mountWorldGraph(canvas, items, { onOpen: it => location.href = '/build?draft=' + encodeURIComponent(it.id) });
+}
+
+(MINE ? loadMine() : loadCommunity());
+</script>
+</body>
+</html>
