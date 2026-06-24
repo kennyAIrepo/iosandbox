@@ -64,7 +64,7 @@ button{font-family:inherit;cursor:pointer}
 <button id="resetView" class="btn" style="position:fixed;bottom:14px;right:16px;z-index:6;display:none">⊙ reset view</button>
 
 <script type="module">
-import { mountWorldGraph } from './sdk/world/world-graph.js';
+import { mountWorldGraph } from './sdk/world/world-graph.js?v=3';   // ?v bump = force browsers to fetch the latest module, not a cached copy
 
 const MINE = location.pathname.replace(/\/+$/,'').startsWith('/you');
 const canvas = document.getElementById('graph');
