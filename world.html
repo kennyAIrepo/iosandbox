@@ -1349,14 +1349,20 @@ async function renderLibrary(chat) {
   chat.parentNode.insertBefore(lib, chat);
 }
 
+// Race a promise against a timeout so one dead/slow asset URL can't hang world entry.
+function _withTimeout(p, ms, label) {
+  return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timed out loading ' + label)), ms))]);
+}
+
 // Re-import each saved object onto the freshly-booted base scene, with its transform.
+// A failed/expired asset URL is SKIPPED (with a timeout) so the world still opens.
 async function restoreObjects(objs) {
   for (const o of (objs || [])) {
     let id;
     if (o.kind === 'import' && (o.url || o.blob instanceof Blob)) {
       // Prefer stored bytes (uploaded local GLB) — its old blob: URL is dead after reload.
       const src = o.blob instanceof Blob ? URL.createObjectURL(o.blob) : o.url;
-      try { id = await world.importGLBFromURL(src, { label: o.label, blob: o.blob instanceof Blob ? o.blob : null }); }
+      try { id = await _withTimeout(world.importGLBFromURL(src, { label: o.label, blob: o.blob instanceof Blob ? o.blob : null }), 20000, o.label || 'asset'); }
       catch (e) { flash('skipped ' + (o.label || 'an asset') + ': ' + e.message); continue; }
     } else {
       const color = o.color ? parseInt(o.color.replace('#', ''), 16) : undefined;
@@ -1535,6 +1541,11 @@ async function doPublish(name, thumb) {
     }
     spStatus && spStatus('publishing world data…');
     const portable = await WorldStore.toPortable(rec);
+    // Make every model URL ABSOLUTE so a published world loads from /world/<slug> and
+    // on other devices (a relative './worlds/x.glb' would resolve wrong off that path).
+    const absU = u => { try { return new URL(u, location.href).href; } catch { return u; } };
+    if (portable.base && portable.base.url) portable.base.url = absU(portable.base.url);
+    (portable.objects || []).forEach(o => { if (o.url) o.url = absU(o.url); });
     const r = await fetch('/api/world/' + encodeURIComponent(slug), {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(portable),
     });
