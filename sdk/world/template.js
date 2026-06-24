@@ -224,7 +224,7 @@ export class WorldTemplate {
   recordScript(code, explanation) { if (code) this.scripts.push({ code, explanation: explanation || '' }); }
 
   /** Current environment settings (for saving in a world snapshot). */
-  getEnvironment() { return { ...this.environment, skyboxUrl: this._skyboxUrl || null }; }
+  getEnvironment() { return { ...this.environment, skyboxUrl: this._skyboxUrl || null, skyboxScale: this._skyboxUserScale || 1 }; }
 
   /** Re-apply a saved environment after a world loads. */
   applyEnvironment(env) {
@@ -234,37 +234,120 @@ export class WorldTemplate {
     if (env.hour != null) this.setTimeOfDay(env.hour);
     else if (env.sunAz != null) this.setSunAzEl(env.sunAz, env.sunEl);
     if (env.sky || env.fog) this.setAtmosphere({ sky: env.sky, fog: env.fog && env.fog.color, fogNear: env.fog && env.fog.near, fogFar: env.fog && env.fog.far });
-    if (env.skyboxUrl) this.addSkybox(env.skyboxUrl).catch(() => {});
+    if (env.skyboxUrl) this.addSkybox(env.skyboxUrl, { scale: env.skyboxScale || 1 }).catch(() => {});
+  }
+
+  /** Longest horizontal/vertical extent of the base environment (metres). */
+  _sceneSpan() {
+    if (this.bounds && !this.bounds.isEmpty()) {
+      const s = this.bounds.getSize(new THREE.Vector3());
+      return Math.max(s.x, s.y, s.z) || 30;
+    }
+    return 30;
+  }
+
+  /** Centre of the environment the sky must wrap around (its origin anchor). */
+  _sceneCenter() {
+    return (this.bounds && !this.bounds.isEmpty())
+      ? this.bounds.getCenter(new THREE.Vector3())
+      : new THREE.Vector3(0, this.cfg.groundY || 0, 0);
+  }
+
+  /**
+   * Diameter the sky shell must have to fully ENCLOSE the world at userScale=1.
+   * Generous (×3.2) so the sky reads as a distant horizon, never a tight box, and
+   * clamped to stay inside the camera far plane (6000) so it's never clipped away.
+   */
+  _skyEnclosingDiameter() {
+    return THREE.MathUtils.clamp(Math.max(this._sceneSpan(), 20) * 3.2, 80, 5200);
+  }
+
+  /**
+   * Re-fit the sky shell so it is centred on the environment and large enough to
+   * enclose it. Called on creation AND whenever the world is moved/scaled, so the
+   * sky ALWAYS tracks the environment — it can never be left tiny or off-centre.
+   * _skyboxUserScale (≥1) is the user/AI multiplier on top of the auto-enclose;
+   * the final size is clamped to [enclosing, far-plane] so it always wraps the
+   * world yet never gets clipped.
+   */
+  _anchorSkybox() {
+    if (!this._skybox || !this._skyboxBaseSize) return;
+    const enclose = this._skyEnclosingDiameter();
+    const diameter = THREE.MathUtils.clamp(enclose * (this._skyboxUserScale || 1), enclose, 5800);
+    this._skybox.scale.setScalar(diameter / this._skyboxBaseSize);
+    this._skybox.position.copy(this._sceneCenter());
+    this._skybox.updateMatrixWorld(true);
   }
 
   /**
    * Wrap the scene in a SKY/environment shell — a GLB dome/sphere viewed from the
-   * INSIDE. Scaled to enclose the whole scene, centred on it, rendered first, with
-   * back-face materials + fog off so it always shows (fixes the "skybox never
-   * appears after enlarging" problem: huge shells were clipped by the far plane and
-   * back-face-culled). Not collidable; persists with the world via skyboxUrl.
+   * INSIDE. Auto-centred on the world and auto-scaled to ENCLOSE it (and re-fit
+   * whenever the world changes — see _anchorSkybox / onSceneEdited), rendered first,
+   * with back-face materials + fog off so it always shows. The GLB is wrapped in a
+   * group whose pivot is the geometric centre, so off-centre sky exports still sit
+   * dead-centre on the world. Not collidable; recallable as the object "sky"
+   * (id __sky__); persists with the world via skyboxUrl + skyboxScale.
    */
   async addSkybox(url, opts = {}) {
     if (this._skybox) { this.scene.remove(this._skybox); this._skybox = null; }
     const gltf = await this._gltf().loadAsync(url);
-    const obj = gltf.scene;
-    const box = new THREE.Box3().setFromObject(obj);
+    const inner = gltf.scene;
+
+    // Re-centre the geometry on its own origin so the shell wraps symmetrically
+    // (many sky GLBs have an off-centre pivot that would shove the dome off-world).
+    const box = new THREE.Box3().setFromObject(inner);
+    const c0 = box.getCenter(new THREE.Vector3());
+    inner.position.sub(c0);
     const dim = box.getSize(new THREE.Vector3());
-    const longest = Math.max(dim.x, dim.y, dim.z) || 1;
-    const sceneSpan = this.bounds ? Math.max(...this.bounds.getSize(new THREE.Vector3()).toArray()) : 30;
-    const diameter = Math.max(sceneSpan, 24) * (opts.enclose || 1.6);
-    obj.scale.setScalar(opts.scale ? opts.scale : (diameter / longest));
-    const center = this.bounds ? this.bounds.getCenter(new THREE.Vector3()) : new THREE.Vector3(0, this.cfg.groundY || 0, 0);
-    obj.position.copy(center);
-    obj.renderOrder = -1;
-    obj.traverse(c => {
+    this._skyboxBaseSize = Math.max(dim.x, dim.y, dim.z) || 1;
+
+    const shell = new THREE.Group();
+    shell.name = 'L5_skybox';
+    shell.add(inner);
+    shell.renderOrder = -1;
+    shell.traverse(c => {
       if (!c.isMesh) return;
       c.castShadow = c.receiveShadow = false; c.frustumCulled = false;
       (Array.isArray(c.material) ? c.material : [c.material]).forEach(m => { if (m) { m.side = THREE.BackSide; m.fog = false; m.depthWrite = false; } });
     });
-    this.scene.add(obj);
-    this._skybox = obj; this._skyboxUrl = url;
-    return 'sky shell set (enclosing the scene)';
+
+    this.scene.add(shell);
+    this._skybox = shell; this._skyboxUrl = url;
+    this._skyboxUserScale = Math.max(1, opts.scale || 1);
+    this._anchorSkybox();                       // size + centre it to fully enclose the scene
+    return 'sky shell set — enclosing & centred on the world (recall it as "sky")';
+  }
+
+  /** Scale the sky shell by a factor (relative). Stays centred + always encloses (min ×1). */
+  scaleSkybox(factor) {
+    if (!this._skybox || !(factor > 0)) return false;
+    this._skyboxUserScale = Math.max(1, (this._skyboxUserScale || 1) * factor);
+    this._anchorSkybox();
+    return true;
+  }
+
+  /** Set the sky shell's absolute enclose-multiplier (1 = snug fit; clamped ≥1). */
+  setSkyboxScale(s) {
+    if (!this._skybox || !(s > 0)) return false;
+    this._skyboxUserScale = Math.max(1, s);
+    this._anchorSkybox();
+    return true;
+  }
+
+  /** Back out the user multiplier from a gizmo-scaled sky mesh, then re-anchor. */
+  syncSkyboxScaleFromMesh() {
+    if (!this._skybox || !this._skyboxBaseSize) return;
+    const auto = this._skyEnclosingDiameter() / this._skyboxBaseSize;   // mesh scale at userScale=1
+    this._skyboxUserScale = Math.max(1, (this._skybox.scale.x || auto) / auto);
+    this._anchorSkybox();
+  }
+
+  /** Remove the sky shell entirely. */
+  removeSkybox() {
+    if (!this._skybox) return false;
+    this.scene.remove(this._skybox);
+    this._skybox = null; this._skyboxUrl = null; this._skyboxBaseSize = 0;
+    return true;
   }
 
   _fitShadowToBounds(box) {
@@ -648,6 +731,7 @@ export class WorldTemplate {
     this.bounds.setFromObject(this.model);
     this._rebuildSceneColliders();
     this._fitShadowToBounds(this.bounds);
+    this._anchorSkybox();    // sky re-centres + re-encloses with the new world size (never left tiny/off-centre)
   }
 
   /** Transform the whole environment. scaleFactor multiplies; scale sets absolute; position/rotationDeg set absolute. */
@@ -752,7 +836,12 @@ export class WorldTemplate {
     this.world.createCollider(cd.setFriction(0.8), a.body);
   }
 
-  _find(id) { return this._assets.find(a => a.id === id) || this._assets[this._assets.length - 1]; }
+  // Synthetic ids (__sky__, __scene__) are handled by the routing in the transform
+  // methods below — never resolve them to a random asset via the most-recent fallback.
+  _find(id) {
+    if (id === '__sky__' || id === '__scene__') return null;
+    return this._assets.find(a => a.id === id) || this._assets[this._assets.length - 1];
+  }
 
   // ── ASSET REGISTRY (lightweight label + log so objects are recallable) ──
   // Every spawned/imported object flows through here: it gets a stable id, a
@@ -807,10 +896,14 @@ export class WorldTemplate {
   /** Rename an object so it can be recalled by a friendlier word. */
   nameObject(id, label) { const a = this._find(id); if (a) { a.label = this._uniqueLabel(label); a.mesh.userData.label = a.label; } return a ? a.label : null; }
 
-  /** Resolve an object id from a spoken/typed label (fuzzy contains, most-recent wins). */
+  /** Resolve an object id from a spoken/typed label (fuzzy contains, most-recent wins).
+   *  The sky shell and the base environment are recallable too (so "make the sky
+   *  bigger" / "scale the world" reach the right thing instead of a random prop). */
   findByLabel(query) {
     if (!query) return null;
     const q = String(query).trim().toLowerCase();
+    if (this._skybox && /\b(sky\s*box|sky\s*shell|sky\s*dome|skybox|sky|heavens?|horizon|firmament)\b/.test(q)) return '__sky__';
+    if (this.model && /\b(world|environment|scene|whole\s+place|the\s+map|terrain|landscape)\b/.test(q)) return '__scene__';
     const hit = [...this._assets].reverse().find(a =>
       a.label === q || a.id === q || a.label.includes(q) || q.includes(a.label));
     return hit ? hit.id : null;
@@ -823,11 +916,30 @@ export class WorldTemplate {
   /** The grabbable L5 assets (scene fixtures/walls are NOT in here). */
   get assets() { return this._assets; }
 
-  moveObject(id, dx, dy, dz)  { const a = this._find(id); if (a) { a.mesh.position.add(new THREE.Vector3(dx, dy, dz)); this._syncCollider(a); } return !!a; }
-  scaleObject(id, factor)     { const a = this._find(id); if (a) { a.mesh.scale.multiplyScalar(factor); this._syncCollider(a); } return !!a; }
-  rotateObject(id, degY)      { const a = this._find(id); if (a) { a.mesh.rotation.y += THREE.MathUtils.degToRad(degY); this._syncCollider(a); } return !!a; }
-  setObjectColor(id, hex)     { const a = this._find(id); if (a) { a.mesh.traverse(o => { if (o.material && o.material.color) { o.material = o.material.clone(); o.material.color.set(hex); } }); } return !!a; }
-  deleteObject(id)            { const a = this._find(id); if (a) { this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body); this._assets = this._assets.filter(x => x !== a); } return !!a; }
+  // The sky shell (__sky__) and the base environment (__scene__) are addressable by
+  // the same per-object tools as props, but route to their dedicated handlers: the
+  // sky always re-encloses + re-centres; the environment rebuilds its colliders.
+  moveObject(id, dx, dy, dz)  {
+    if (id === '__sky__') return false;   // the sky is locked to the world centre — it can't be shoved off
+    if (id === '__scene__') { if (!this.model) return false; this.model.position.add(new THREE.Vector3(dx, dy, dz)); this.sceneIsObject = true; this.onSceneEdited(); return true; }
+    const a = this._find(id); if (a) { a.mesh.position.add(new THREE.Vector3(dx, dy, dz)); this._syncCollider(a); } return !!a;
+  }
+  scaleObject(id, factor)     {
+    if (id === '__sky__') return this.scaleSkybox(factor);
+    if (id === '__scene__') { this.sceneIsObject = true; return this.setSceneTransform({ scaleFactor: factor }); }
+    const a = this._find(id); if (a) { a.mesh.scale.multiplyScalar(factor); this._syncCollider(a); } return !!a;
+  }
+  rotateObject(id, degY)      {
+    if (id === '__sky__') { if (!this._skybox) return false; this._skybox.rotation.y += THREE.MathUtils.degToRad(degY); return true; }
+    if (id === '__scene__') { if (!this.model) return false; this.model.rotation.y += THREE.MathUtils.degToRad(degY); this.sceneIsObject = true; this.onSceneEdited(); return true; }
+    const a = this._find(id); if (a) { a.mesh.rotation.y += THREE.MathUtils.degToRad(degY); this._syncCollider(a); } return !!a;
+  }
+  setObjectColor(id, hex)     { if (id === '__sky__' || id === '__scene__') return false; const a = this._find(id); if (a) { a.mesh.traverse(o => { if (o.material && o.material.color) { o.material = o.material.clone(); o.material.color.set(hex); } }); } return !!a; }
+  deleteObject(id)            {
+    if (id === '__sky__') return this.removeSkybox();
+    if (id === '__scene__') return false;   // can't delete the world itself
+    const a = this._find(id); if (a) { this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body); this._assets = this._assets.filter(x => x !== a); } return !!a;
+  }
 
   /** Shared GLTF loader (DRACO-enabled). */
   _gltf() {
@@ -915,6 +1027,12 @@ export class WorldTemplate {
 
   /** Absolute transform set (any subset). position {x,y,z}, rotationDeg {x,y,z}, scale number|{x,y,z} */
   setObjectTransform(id, t = {}) {
+    if (id === '__sky__') {
+      if (typeof t.scale === 'number') this.setSkyboxScale(t.scale);
+      if (t.rotationDeg && this._skybox) this._skybox.rotation.y = THREE.MathUtils.degToRad(t.rotationDeg.y ?? 0);
+      return !!this._skybox;
+    }
+    if (id === '__scene__') { this.sceneIsObject = true; return this.setSceneTransform({ scale: typeof t.scale === 'number' ? t.scale : undefined, position: t.position, rotationDeg: t.rotationDeg }); }
     const a = this._find(id); if (!a) return false;
     if (t.position) a.mesh.position.set(t.position.x ?? a.mesh.position.x, t.position.y ?? a.mesh.position.y, t.position.z ?? a.mesh.position.z);
     if (t.rotationDeg) a.mesh.rotation.set(
@@ -969,15 +1087,32 @@ export class WorldTemplate {
     return hits.length ? (hits[0].object.userData.id || null) : null;
   }
 
+  // Every game object the user can mean — the sky shell and the base environment
+  // are first-class entries (id __sky__ / __scene__) alongside placed props, so the
+  // AI and the object menu can list, select and transform ALL of them.
   listObjects() {
-    return this._assets.map(a => ({
+    const c = this._sceneCenter();
+    const list = [];
+    if (this._skyboxUrl) list.push({
+      id: '__sky__', label: 'sky', type: 'skybox', special: 'sky',
+      position: [+c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2)],
+      scale: +(this._skyboxUserScale || 1).toFixed(2), color: null,
+      note: 'environment shell — always encloses & stays centred on the world; scale_object {label:"sky"} to grow it',
+    });
+    if (this.model) list.push({
+      id: '__scene__', label: 'world (environment)', type: 'environment', special: 'scene',
+      position: this.model.position.toArray().map(n => +n.toFixed(2)),
+      scale: +this.model.scale.x.toFixed(2), color: null, editable: !!this.sceneIsObject,
+    });
+    for (const a of this._assets) list.push({
       id: a.id,
       label: a.label,
       type: a.ptype === 'import' ? 'import' : (a.mesh.geometry ? a.mesh.geometry.type.replace('Geometry', '').toLowerCase() : 'group'),
       position: a.mesh.position.toArray().map(n => +n.toFixed(2)),
       scale: +a.mesh.scale.x.toFixed(2),
       color: a.mesh.material && a.mesh.material.color ? '#' + a.mesh.material.color.getHexString() : null,
-    }));
+    });
+    return list;
   }
 
   // ── SPATIAL SELECTION (L5 marking) ──────────────────────────────

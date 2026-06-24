@@ -448,7 +448,6 @@ function _objRow(id, ic, label, kind, selIds) {
   const k = document.createElement('span'); k.className = 'k'; k.textContent = kind;
   d.append(i, t, k);
   d.addEventListener('click', () => {
-    if (id === '__sky__') { sayAI('sky shell — ask the AI to change it (e.g. "make the sky a night sky")'); return; }
     if (editor.selectById(id)) sayAI('selected ' + label);
   });
   return d;
@@ -460,7 +459,7 @@ function refreshObjList() {
   const selIds = editor ? editor.selectedIds : [];
   rows.innerHTML = '';
   if (world._skyboxUrl) rows.appendChild(_objRow('__sky__', '🌌', 'sky', 'shell', selIds));
-  if (world.sceneIsObject) rows.appendChild(_objRow('__scene__', '🏛', 'world', 'environment', selIds));
+  if (world.model) rows.appendChild(_objRow('__scene__', '🏛', 'world', 'environment', selIds));
   assets.forEach(a => rows.appendChild(_objRow(a.id, _objIcon(a), a.label, a.source === 'import' ? 'model' : (a.ptype || 'object'), selIds)));
   if (!rows.children.length) { const e = document.createElement('div'); e.id = 'objEmpty'; e.textContent = 'no objects yet — add or import some'; rows.appendChild(e); }
 }
@@ -601,7 +600,7 @@ function worldFrame(dt, frame) {
 let _objSig = '';
 function _worldFrame(dt, frame) {
   // Keep the OBJECTS list in sync when props are added/removed/imported.
-  const sig = (world.assets ? world.assets.length : 0) + '|' + (world._skyboxUrl ? 1 : 0) + '|' + (world.sceneIsObject ? 1 : 0);
+  const sig = (world.assets ? world.assets.length : 0) + '|' + (world._skyboxUrl ? 1 : 0) + '|' + (world.model ? 1 : 0);
   if (sig !== _objSig) { _objSig = sig; refreshObjList(); }
 
   // 1. Navigation intent (keyboard or gesture)

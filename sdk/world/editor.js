@@ -50,9 +50,14 @@ export class ObjectEditor {
     this.tc.setSize(0.9);
     this.tc.enabled = false;
     scene.add(this.tc);
-    this.tc.addEventListener('objectChange', () => { if (this.single && !this.single.isScene) this.world._syncCollider(this.single); this._updateHelpers(); });
+    this.tc.addEventListener('objectChange', () => {
+      if (this.single && this.single.isSky) this.world._skybox.position.copy(this.world._sceneCenter());  // sky stays centred, scale only
+      else if (this.single && !this.single.isScene) this.world._syncCollider(this.single);
+      this._updateHelpers();
+    });
     this.tc.addEventListener('dragging-changed', (e) => {
       this._dragging = e.value;
+      if (!e.value && this.single && this.single.isSky) this.world.syncSkyboxScaleFromMesh();   // persist + clamp sky scale after a gizmo drag
       if (!e.value && this.single && this.single.isScene) this.world.onSceneEdited();   // rebuild env colliders after moving/scaling the world
       if (!e.value && this.pivot) {           // a group drag just ended → bake + rebuild pivot
         this._bakeGroup();
@@ -112,7 +117,7 @@ export class ObjectEditor {
     this.selected = assets.slice();
     if (!assets.length) return;
     this.world._ensureAssetLayer();
-    if (assets.length === 1) { this.single = assets[0]; this.tc.attach(assets[0].mesh); }
+    if (assets.length === 1) { this.single = assets[0]; this.tc.attach(assets[0].mesh); if (assets[0].isSky) this.tc.setMode('scale'); }
     else { this._makePivot(); this.tc.attach(this.pivot); }
     this.tc.visible = !this.selectOnly;             // play mode: highlight only, no gizmo
     this._setHelpers();
@@ -126,7 +131,8 @@ export class ObjectEditor {
   /** Select a specific object by id (from the object-list sidebar). Works in play + create. */
   selectById(id) {
     let asset = this.world.assets.find(a => a.id === id);
-    if (!asset && id === '__scene__' && this.world.model) asset = this._sceneAsset();
+    if (!asset && id === '__scene__' && this.world.model) { this.world.sceneIsObject = true; asset = this._sceneAsset(); }
+    if (!asset && id === '__sky__' && this.world._skybox) asset = this._skyAsset();
     if (!asset) return false;
     this._setSelection([asset]);
     return true;
@@ -243,6 +249,13 @@ export class ObjectEditor {
     if (!this._scene) this._scene = { id: '__scene__', label: 'world (environment)', mesh: this.world.model, isScene: true };
     this._scene.mesh = this.world.model;
     return this._scene;
+  }
+
+  // Synthetic selectable wrapping the sky shell — scale-only, locked to world centre.
+  _skyAsset() {
+    if (!this._sky) this._sky = { id: '__sky__', label: 'sky', mesh: this.world._skybox, isSky: true };
+    this._sky.mesh = this.world._skybox;
+    return this._sky;
   }
 
   _onDown(e) {

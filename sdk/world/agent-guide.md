@@ -100,14 +100,22 @@ scene auto-centres so its footprint sits around (0,0,0) and the **floor is y = 0
 (groundY). Build relative to that — props on the ground (y ≈ half their height),
 lights overhead (positive y), nothing floating or clipping.
 
-**The environment / "skybox" = the base scene GLB.** The big surrounding GLB you
-spawn inside (a hall, a landscape, a sky dome/shell) is the *environment* — a FIXED
-backdrop by default. To resize/move the WHOLE environment use
-`transform_scene({ scaleFactor, rotationDegY, position })` — e.g. scaleFactor 8–10
-to blow a small dome up into a world-sized host shell. Colliders rebuild
-automatically. Keep it centred on the origin with its floor at y = 0 so spawn stays
-reachable. (Sky *colour/fog* with no GLB is `set_atmosphere`; a GLB sky shell is the
-environment itself.)
+**Two distinct things — keep them straight:**
+
+- **The environment = the base scene GLB** (the hall/landscape/room you spawn
+  inside). A FIXED backdrop by default; it's a listed object too (label
+  `world (environment)`, id `__scene__`). To resize/move the WHOLE environment use
+  `transform_scene({ scaleFactor, rotationDegY, position })` (or `scale_object`/
+  `set_transform` with `label:'world'`). Colliders rebuild automatically. Keep it
+  centred on the origin with its floor at y = 0 so spawn stays reachable.
+- **The sky = a separate enclosing shell** added with `set_skybox({ query | url })`.
+  It is AUTOMATICALLY centred on the world and auto-sized to fully enclose it — you
+  do NOT scale it to fit, and it re-fits itself whenever the environment is resized,
+  so it always wraps everything as the surrounding sky. It's a listed object named
+  `sky` (id `__sky__`). To grow/shrink the SKY, target the sky:
+  `scale_object({ label:'sky', factor:2 })` — **never** `transform_scene` (that
+  resizes the building, not the sky). The sky is locked to the world centre and can't
+  be moved off it. (Pure sky *colour/fog* with no GLB is `set_atmosphere`.)
 
 **Placing a featured model "in the middle".** Import it (`import_sketchfab` /
 `import_glb_url`), then `set_transform({ label, position:{x:0, y:<rest-on-floor>, z:0} })`
