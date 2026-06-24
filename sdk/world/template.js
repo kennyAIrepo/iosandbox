@@ -394,7 +394,7 @@ export class WorldTemplate {
       // and proceed with an empty floor so the world always enters.
       let settled = false;
       const finish = () => { if (!settled) { settled = true; resolve(); } };
-      const timer = setTimeout(() => { if (!settled) { console.warn('[world] model load timed out (' + url + ') — entering with empty floor'); finish(); } }, 30000);
+      const timer = setTimeout(() => { if (!settled) { console.warn('[world] model load timed out (' + url + ') — entering with empty floor'); finish(); } }, 15000);
       loader.load(url, (gltf) => {
         clearTimeout(timer);
         if (settled) return;                 // already timed out — don't double-process

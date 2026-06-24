@@ -1384,10 +1384,12 @@ async function openSavedWorld(rec) {
     await boot();
     if (rec.avatar) { nav.yaw = rec.avatar.yaw; nav.pitch = rec.avatar.pitch; }
     if (rec.environment) world.applyEnvironment(rec.environment);
-    await restoreObjects(rec.objects);
-    replayScripts(rec.scripts);
+    // ENTER as soon as the base scene is ready — never block the LOADING screen on
+    // saved props (a dead/slow asset URL would otherwise hang entry). Props + scripts
+    // stream in afterward in the background.
     enterWorld();
-    flash('opened “' + rec.name + '” — keep building');
+    flash('opened “' + rec.name + '”');
+    restoreObjects(rec.objects).then(() => replayScripts(rec.scripts)).catch(() => {});
   } catch (e) {
     _building = false;
     document.getElementById('bHint').textContent = 'could not open “' + rec.name + '”: ' + e.message;
