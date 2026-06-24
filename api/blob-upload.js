@@ -10,16 +10,17 @@
  *   POST /api/blob-upload   → client-token handshake
  */
 import { handleUpload } from '@vercel/blob/client';
+import { blobToken, ensureBlobEnv } from './_blob.js';
 
 export default async function handler(req, res) {
   // Health check so the client can report the REAL reason if uploads fail.
   if (req.method === 'GET') {
-    res.status(200).json({ ok: true, hasToken: !!process.env.BLOB_READ_WRITE_TOKEN });
+    res.status(200).json({ ok: true, hasToken: !!blobToken() });
     return;
   }
   if (req.method !== 'POST') { res.status(405).json({ error: 'GET or POST' }); return; }
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    res.status(500).json({ error: 'BLOB_READ_WRITE_TOKEN not set — connect a Vercel Blob store to this project and redeploy' });
+  if (!ensureBlobEnv()) {     // make the SDK see BLOB_READ_WRITE_TOKEN even if the var is named differently
+    res.status(500).json({ error: 'no Vercel Blob token on the server — connect a Blob store to THIS project and REDEPLOY' });
     return;
   }
   try {

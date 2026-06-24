@@ -6,11 +6,12 @@
  * until they explicitly Publish.)
  */
 import { list } from '@vercel/blob';
+import { blobToken } from '../_blob.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') { res.status(405).json({ error: 'GET only' }); return; }
   try {
-    const { blobs } = await list({ prefix: 'worlds/', limit: 1000 });
+    const { blobs } = await list({ prefix: 'worlds/', limit: 1000, token: blobToken() });
     const worlds = blobs
       .filter(b => b.pathname.endsWith('.json'))
       .map(b => ({

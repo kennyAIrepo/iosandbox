@@ -9,6 +9,7 @@
  * Blob, connect it to this project). Vercel auto-injects BLOB_READ_WRITE_TOKEN.
  */
 import { put, list } from '@vercel/blob';
+import { blobToken } from '../_blob.js';
 
 function slugify(name) {
   return String(name || '').trim().replace(/[^\w-]+/g, '_').slice(0, 80);
@@ -30,18 +31,21 @@ export default async function handler(req, res) {
   if (!name) { res.status(400).json({ error: 'bad world name' }); return; }
   const path = `worlds/${name}.json`;
 
+  const token = blobToken();
   try {
     if (req.method === 'POST') {
+      if (!token) { res.status(500).json({ error: 'no Vercel Blob token on the server — connect a Blob store to THIS project and REDEPLOY' }); return; }
       const json = await rawBody(req);
       const blob = await put(path, json, {
         access: 'public',
         addRandomSuffix: false,
         allowOverwrite: true,
         contentType: 'application/json',
+        token,
       });
       res.status(200).json({ ok: true, name, url: blob.url });
     } else if (req.method === 'GET') {
-      const { blobs } = await list({ prefix: path, limit: 1 });
+      const { blobs } = await list({ prefix: path, limit: 1, token });
       const hit = blobs.find(b => b.pathname === path) || blobs[0];
       if (!hit) { res.status(404).json({ error: `world "${name}" not found` }); return; }
       const r = await fetch(hit.url);

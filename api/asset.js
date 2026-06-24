@@ -14,6 +14,7 @@
  *   POST /api/asset?name=<slug>   body = raw .glb  → { url }
  */
 import { put } from '@vercel/blob';
+import { blobToken } from './_blob.js';
 
 export const config = { api: { bodyParser: false } };   // we need the raw binary stream
 
@@ -25,8 +26,9 @@ async function rawBuffer(req) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') { res.status(405).json({ error: 'POST only' }); return; }
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    res.status(500).json({ error: 'BLOB_READ_WRITE_TOKEN not set — connect a Vercel Blob store to this project and redeploy' });
+  const token = blobToken();
+  if (!token) {
+    res.status(500).json({ error: 'no Vercel Blob token on the server — connect a Blob store to THIS project and REDEPLOY' });
     return;
   }
   try {
@@ -37,6 +39,7 @@ export default async function handler(req, res) {
       access: 'public',
       addRandomSuffix: true,
       contentType: req.headers['content-type'] || 'model/gltf-binary',
+      token,
     });
     res.status(200).json({ url: blob.url });
   } catch (e) {
