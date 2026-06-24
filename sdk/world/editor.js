@@ -117,11 +117,17 @@ export class ObjectEditor {
     this.selected = assets.slice();
     if (!assets.length) return;
     this.world._ensureAssetLayer();
-    if (assets.length === 1) { this.single = assets[0]; this.tc.attach(assets[0].mesh); if (assets[0].isSky) this.tc.setMode('scale'); }
+    const lockedSingle = assets.length === 1 && this.world.isLocked(assets[0].id);
+    if (assets.length === 1) {
+      this.single = assets[0];
+      if (!lockedSingle && !this.selectOnly) { this.tc.attach(assets[0].mesh); if (assets[0].isSky) this.tc.setMode('scale'); }
+      else this.tc.detach();                        // locked → highlight only, no gizmo handles
+    }
     else { this._makePivot(); this.tc.attach(this.pivot); }
-    this.tc.visible = !this.selectOnly;             // play mode: highlight only, no gizmo
+    this.tc.visible = !this.selectOnly && !lockedSingle;   // play mode / locked: highlight only, no gizmo
     this._setHelpers();
-    this.onSay(assets.length === 1 ? 'selected ' + assets[0].label : `selected ${assets.length} objects`);
+    this.onSay(lockedSingle ? '🔒 ' + assets[0].label + ' is locked — unlock it to edit'
+             : assets.length === 1 ? 'selected ' + assets[0].label : `selected ${assets.length} objects`);
     this.onSelect(this.selected.length);
   }
 
@@ -152,8 +158,12 @@ export class ObjectEditor {
 
   /** Delete the current selection (used by the Delete key and the Delete button). */
   deleteSelection() {
-    const targets = this.selected.filter(a => !a.isScene);   // never delete the world itself
-    if (!targets.length) { if (this.selected.some(a => a.isScene)) this.onSay("can't delete the world itself"); return 0; }
+    const targets = this.selected.filter(a => !a.isScene && !this.world.isLocked(a.id));   // never the world; never a locked object
+    if (!targets.length) {
+      if (this.selected.some(a => a.isScene)) this.onSay("can't delete the world itself");
+      else if (this.selected.some(a => this.world.isLocked(a.id))) this.onSay('🔒 locked — unlock it first to delete');
+      return 0;
+    }
     const n = targets.length, ids = targets.map(a => a.id);
     this._clear();
     ids.forEach(id => this.world.deleteObject(id));

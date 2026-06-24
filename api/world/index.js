@@ -20,7 +20,7 @@ export default async function handler(req, res) {
         uploadedAt: b.uploadedAt,
       }))
       .sort((a, b) => new Date(b.uploadedAt) - new Date(a.uploadedAt));
-    res.setHeader('cache-control', 'public, max-age=30');
+    res.setHeader('cache-control', 'public, max-age=5');   // newly published worlds appear in the graph quickly
     res.status(200).json({ worlds });
   } catch (e) {
     res.status(502).json({ error: 'blob list error: ' + e.message });

@@ -77,9 +77,12 @@ export class WorldTemplate {
     this._assetId = 0;
     this._sceneColliders = [];    // Rapier colliders for the base environment (rebuilt if it's transformed)
     this.sceneIsObject = false;   // the base scene GLB is a fixed backdrop until promoted to a game object
+    this.modelLabel = 'world';    // original name of the base GLB (uploaded/downloaded source), shown in the object menu
     this.scripts = [];            // agent run_script snippets, saved + replayed with the world
     this.gridSelection = null;    // current 3D-grid pick (dots/path/surface/volume) for the AI
     this.sel = null;              // SelectionManager (spatial/surface marking)
+    this._skyLocked = false;      // lock toggles — a locked object can't be moved/scaled/edited until unlocked
+    this._sceneLocked = false;
   }
 
   static async create(opts = {}) {
@@ -237,29 +240,40 @@ export class WorldTemplate {
     if (env.skyboxUrl) this.addSkybox(env.skyboxUrl, { scale: env.skyboxScale || 1 }).catch(() => {});
   }
 
-  /** Longest horizontal/vertical extent of the base environment (metres). */
-  _sceneSpan() {
-    if (this.bounds && !this.bounds.isEmpty()) {
-      const s = this.bounds.getSize(new THREE.Vector3());
-      return Math.max(s.x, s.y, s.z) || 30;
+  /**
+   * Union AABB of EVERYTHING the sky must wrap — the base environment GLB AND every
+   * placed asset (imported church, props, …). This is why the sky reliably surrounds
+   * the whole set: it tracks all content, not just the base model.
+   */
+  _contentBounds() {
+    const box = new THREE.Box3();
+    if (this.model && this.bounds && !this.bounds.isEmpty()) box.union(this.bounds);
+    for (const a of this._assets) {
+      if (!a.mesh || a.mesh === this._skybox) continue;
+      const b = new THREE.Box3().setFromObject(a.mesh);
+      if (!b.isEmpty() && isFinite(b.min.x) && isFinite(b.max.x)) box.union(b);
     }
-    return 30;
+    return box.isEmpty() ? null : box;
   }
 
-  /** Centre of the environment the sky must wrap around (its origin anchor). */
-  _sceneCenter() {
-    return (this.bounds && !this.bounds.isEmpty())
-      ? this.bounds.getCenter(new THREE.Vector3())
-      : new THREE.Vector3(0, this.cfg.groundY || 0, 0);
+  /** Bounding sphere of all content — the sky's natural CENTRE + radius. A sphere
+   *  (half the box diagonal) guarantees every corner of every model is inside. */
+  _contentSphere() {
+    const box = this._contentBounds();
+    if (!box) return { center: new THREE.Vector3(0, this.cfg.groundY || 0, 0), radius: 15 };
+    return { center: box.getCenter(new THREE.Vector3()), radius: Math.max(box.getSize(new THREE.Vector3()).length() / 2, 5) };
   }
+
+  /** Centre the sky wraps around (the centre of all content). */
+  _sceneCenter() { return this._contentSphere().center; }
 
   /**
-   * Diameter the sky shell must have to fully ENCLOSE the world at userScale=1.
-   * Generous (×3.2) so the sky reads as a distant horizon, never a tight box, and
-   * clamped to stay inside the camera far plane (6000) so it's never clipped away.
+   * Diameter the sky shell needs to fully ENCLOSE all content at userScale=1, with a
+   * ×1.5 margin so nothing ever touches the shell, clamped under the camera far plane
+   * (6000) so it's never clipped. Grows automatically when a big model is added.
    */
   _skyEnclosingDiameter() {
-    return THREE.MathUtils.clamp(Math.max(this._sceneSpan(), 20) * 3.2, 80, 5200);
+    return THREE.MathUtils.clamp(this._contentSphere().radius * 2 * 1.5, 80, 5600);
   }
 
   /**
@@ -399,6 +413,9 @@ export class WorldTemplate {
         });
         this.scene.add(model);
         this.model = model;
+        // Original name from the uploaded/downloaded source, for the object menu.
+        this.modelLabel = String(this.cfg.worldName || this._labelFromURL(url) || 'world')
+          .replace(/\.(glb|gltf)$/i, '').replace(/[_-]+/g, ' ').trim() || 'world';
 
         // ── AUTO-SCALE: normalize any scene (cm/inch/giant exports) to a walkable
         //    size so a user-supplied GLB is instantly playable, platform-style. ──
@@ -852,10 +869,11 @@ export class WorldTemplate {
     mesh.userData.id = id;
     const label = this._uniqueLabel(meta.label || ptype);
     mesh.userData.label = label;
-    const asset = { id, mesh, body: null, handColliders: [], label, ptype, url: meta.url || null, blob: meta.blob || null, source: meta.source || ptype, createdAt: Date.now() };
+    const asset = { id, mesh, body: null, handColliders: [], label, ptype, url: meta.url || null, blob: meta.blob || null, source: meta.source || ptype, locked: false, createdAt: Date.now() };
     this._assets.push(asset);
     this._syncCollider(asset);                 // Rapier body → avatar can't walk through it
     this._registerHandColliders(asset);        // BVH mesh colliders → holo HANDS can't pass through it
+    this._anchorSkybox();                      // new model added → sky grows/re-centres to keep surrounding everything
     console.log(`[world] +asset ${id} "${label}" (${asset.source}) — ${this._assets.length} live`);
     return asset;
   }
@@ -910,35 +928,72 @@ export class WorldTemplate {
   }
 
   /** Set an asset's world position (used by hand-grab) and re-sync its collider. */
-  setAssetPosition(id, x, y, z) { const a = this._find(id); if (a) { a.mesh.position.set(x, y, z); this._syncCollider(a); } return !!a; }
+  setAssetPosition(id, x, y, z) { if (this.isLocked(id)) return false; const a = this._find(id); if (a) { a.mesh.position.set(x, y, z); this._syncCollider(a); } return !!a; }
   /** Set an asset's absolute uniform scale and re-sync its collider. */
-  setAssetScale(id, s)          { const a = this._find(id); if (a) { a.mesh.scale.setScalar(s); this._syncCollider(a); } return !!a; }
+  setAssetScale(id, s)          { if (this.isLocked(id)) return false; const a = this._find(id); if (a) { a.mesh.scale.setScalar(s); this._syncCollider(a); } return !!a; }
   /** The grabbable L5 assets (scene fixtures/walls are NOT in here). */
   get assets() { return this._assets; }
+
+  // ── LOCK: freeze a game object so it can't be moved/scaled/edited until unlocked.
+  // Works on props, the base environment (__scene__) and the sky shell (__sky__).
+  isLocked(id) {
+    if (id === '__sky__') return !!this._skyLocked;
+    if (id === '__scene__') return !!this._sceneLocked;
+    const a = this._assets.find(x => x.id === id);
+    return a ? !!a.locked : false;
+  }
+  setLocked(id, on) {
+    const v = !!on;
+    if (id === '__sky__') this._skyLocked = v;
+    else if (id === '__scene__') this._sceneLocked = v;
+    else { const a = this._assets.find(x => x.id === id); if (!a) return null; a.locked = v; }
+    return v;
+  }
+  toggleLock(id) { return this.setLocked(id, !this.isLocked(id)); }
 
   // The sky shell (__sky__) and the base environment (__scene__) are addressable by
   // the same per-object tools as props, but route to their dedicated handlers: the
   // sky always re-encloses + re-centres; the environment rebuilds its colliders.
+  // A locked object refuses every transform until it is unlocked.
   moveObject(id, dx, dy, dz)  {
+    if (this.isLocked(id)) return false;
     if (id === '__sky__') return false;   // the sky is locked to the world centre — it can't be shoved off
     if (id === '__scene__') { if (!this.model) return false; this.model.position.add(new THREE.Vector3(dx, dy, dz)); this.sceneIsObject = true; this.onSceneEdited(); return true; }
-    const a = this._find(id); if (a) { a.mesh.position.add(new THREE.Vector3(dx, dy, dz)); this._syncCollider(a); } return !!a;
+    const a = this._find(id); if (a) { a.mesh.position.add(new THREE.Vector3(dx, dy, dz)); this._syncCollider(a); this._anchorSkybox(); } return !!a;
   }
   scaleObject(id, factor)     {
+    if (this.isLocked(id)) return false;
     if (id === '__sky__') return this.scaleSkybox(factor);
     if (id === '__scene__') { this.sceneIsObject = true; return this.setSceneTransform({ scaleFactor: factor }); }
-    const a = this._find(id); if (a) { a.mesh.scale.multiplyScalar(factor); this._syncCollider(a); } return !!a;
+    const a = this._find(id); if (a) { a.mesh.scale.multiplyScalar(factor); this._syncCollider(a); this._anchorSkybox(); } return !!a;
   }
   rotateObject(id, degY)      {
+    if (this.isLocked(id)) return false;
     if (id === '__sky__') { if (!this._skybox) return false; this._skybox.rotation.y += THREE.MathUtils.degToRad(degY); return true; }
     if (id === '__scene__') { if (!this.model) return false; this.model.rotation.y += THREE.MathUtils.degToRad(degY); this.sceneIsObject = true; this.onSceneEdited(); return true; }
     const a = this._find(id); if (a) { a.mesh.rotation.y += THREE.MathUtils.degToRad(degY); this._syncCollider(a); } return !!a;
   }
-  setObjectColor(id, hex)     { if (id === '__sky__' || id === '__scene__') return false; const a = this._find(id); if (a) { a.mesh.traverse(o => { if (o.material && o.material.color) { o.material = o.material.clone(); o.material.color.set(hex); } }); } return !!a; }
+  setObjectColor(id, hex)     { if (this.isLocked(id) || id === '__sky__' || id === '__scene__') return false; const a = this._find(id); if (a) { a.mesh.traverse(o => { if (o.material && o.material.color) { o.material = o.material.clone(); o.material.color.set(hex); } }); } return !!a; }
   deleteObject(id)            {
+    if (this.isLocked(id)) return false;
     if (id === '__sky__') return this.removeSkybox();
     if (id === '__scene__') return false;   // can't delete the world itself
-    const a = this._find(id); if (a) { this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body); this._assets = this._assets.filter(x => x !== a); } return !!a;
+    const a = this._find(id); if (a) { this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body); this._assets = this._assets.filter(x => x !== a); this._anchorSkybox(); } return !!a;
+  }
+
+  /** Seat an object at the absolute world centre (x,z → 0) resting on the ground,
+   *  then re-fit the sky around it — for "situate the church at the centre". */
+  centerObject(id) {
+    if (this.isLocked(id) || id === '__sky__' || id === '__scene__') return false;
+    const a = this._find(id); if (!a) return false;
+    const box = new THREE.Box3().setFromObject(a.mesh);
+    const c = box.getCenter(new THREE.Vector3());
+    a.mesh.position.x += -c.x;
+    a.mesh.position.z += -c.z;
+    a.mesh.position.y += (this.cfg.groundY || 0) - box.min.y;   // rest its base on the ground
+    this._syncCollider(a);
+    this._anchorSkybox();          // sky re-centres + re-encloses around the now-centred model
+    return true;
   }
 
   /** Shared GLTF loader (DRACO-enabled). */
@@ -1027,6 +1082,7 @@ export class WorldTemplate {
 
   /** Absolute transform set (any subset). position {x,y,z}, rotationDeg {x,y,z}, scale number|{x,y,z} */
   setObjectTransform(id, t = {}) {
+    if (this.isLocked(id)) return false;
     if (id === '__sky__') {
       if (typeof t.scale === 'number') this.setSkyboxScale(t.scale);
       if (t.rotationDeg && this._skybox) this._skybox.rotation.y = THREE.MathUtils.degToRad(t.rotationDeg.y ?? 0);
@@ -1042,6 +1098,7 @@ export class WorldTemplate {
     if (typeof t.scale === 'number') a.mesh.scale.setScalar(t.scale);
     else if (t.scale) a.mesh.scale.set(t.scale.x ?? 1, t.scale.y ?? 1, t.scale.z ?? 1);
     this._syncCollider(a);
+    this._anchorSkybox();          // moving/scaling a model re-fits the sky around the new extent
     return true;
   }
 
@@ -1094,13 +1151,13 @@ export class WorldTemplate {
     const c = this._sceneCenter();
     const list = [];
     if (this._skyboxUrl) list.push({
-      id: '__sky__', label: 'sky', type: 'skybox', special: 'sky',
+      id: '__sky__', label: 'sky', type: 'skybox', special: 'sky', locked: !!this._skyLocked,
       position: [+c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2)],
       scale: +(this._skyboxUserScale || 1).toFixed(2), color: null,
       note: 'environment shell — always encloses & stays centred on the world; scale_object {label:"sky"} to grow it',
     });
     if (this.model) list.push({
-      id: '__scene__', label: 'world (environment)', type: 'environment', special: 'scene',
+      id: '__scene__', label: this.modelLabel || 'world', type: 'environment', special: 'scene', locked: !!this._sceneLocked,
       position: this.model.position.toArray().map(n => +n.toFixed(2)),
       scale: +this.model.scale.x.toFixed(2), color: null, editable: !!this.sceneIsObject,
     });
@@ -1111,6 +1168,7 @@ export class WorldTemplate {
       position: a.mesh.position.toArray().map(n => +n.toFixed(2)),
       scale: +a.mesh.scale.x.toFixed(2),
       color: a.mesh.material && a.mesh.material.color ? '#' + a.mesh.material.color.getHexString() : null,
+      locked: !!a.locked,
     });
     return list;
   }
@@ -1161,12 +1219,23 @@ export class WorldTemplate {
                 pitchDeg: +THREE.MathUtils.radToDeg(this.pitch).toFixed(0) },
       // Whole-scene spatial extent (metres, Y up) so placement is situationally aware.
       scene: {
+        name: this.modelLabel || 'world',
         boundsMin: [r2(min.x), r2(min.y), r2(min.z)],
         boundsMax: [r2(max.x), r2(max.y), r2(max.z)],
         center: [r2(c.x), r2(c.y), r2(c.z)],
         size: [r2(s.x), r2(s.y), r2(s.z)],
         groundY: this.cfg.groundY || 0,
       },
+      // Bounding sphere of ALL content (base + every placed model) + the sky shell,
+      // so the agent can centre a model and grow the sky to truly surround everything.
+      content: (() => { const sp = this._contentSphere(); return { center: sp.center.toArray().map(r2), radius: +sp.radius.toFixed(2) }; })(),
+      sky: this._skyboxUrl ? {
+        center: this._sceneCenter().toArray().map(r2),
+        radius: +(this._skyEnclosingDiameter() / 2).toFixed(1),
+        userScale: +(this._skyboxUserScale || 1).toFixed(2),
+        surroundsAllContent: true,
+        locked: !!this._skyLocked,
+      } : null,
       lookingAt: this.selectInView(),
       selection: this.getSelection(),
       landmarks: this.getLandmarks(),

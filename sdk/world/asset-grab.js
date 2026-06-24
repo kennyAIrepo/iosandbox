@@ -71,6 +71,7 @@ export class AssetManipulator {
   _pick(point, reach) {
     let best = null, bestD = Infinity;
     for (const a of this.world.assets) {
+      if (a.locked) continue;                                    // locked objects can't be hand-grabbed
       const s = this._sphere(a);
       const surfD = point.distanceTo(s.center) - s.radius;       // <0 = inside the object
       if (surfD < reach && surfD < bestD) { best = { a, s }; bestD = surfD; }
