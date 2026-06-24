@@ -434,6 +434,7 @@ document.getElementById('shellExit').addEventListener('click',exitShell);
 document.querySelectorAll('.chip[data-mode]').forEach(c=>c.addEventListener('click',()=>setMode(c.dataset.mode)));
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){if(shell.classList.contains('on'))exitShell();menuWrap.classList.remove('open')}});
 document.querySelectorAll('[data-enter]').forEach(el=>{const mode=el.dataset.enter;el.addEventListener('click',e=>{e.preventDefault();menuWrap.classList.remove('open');enterShell(mode)});el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();enterShell(mode)}})});
+document.getElementById('mirror').addEventListener('click',()=>enterShell('mirror'));
 document.getElementById('mirror').addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();enterShell('mirror')}});
 
 /* live holo mirror preview (real camera + MediaPipe, procedural fallback) */
