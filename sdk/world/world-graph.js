@@ -46,13 +46,19 @@ export function mountWorldGraph(canvas, items, opts = {}) {
   let userMoved = false;    // once the user pans/zooms, stop auto-fitting on resize
   let drag = null;          // { idx, startX, startY, moved }
   let hover = -1;
-  const toWorld = (cx, cy) => ({ x: (cx - W / 2 - panX) / scale, y: (cy - H / 2 - panY) / scale });
-  // A node is hit by its circle OR its title band below it (so the label is clickable too).
-  const hit = (wx, wy) => {
+  // Pointer position in CSS px relative to the canvas — clientX/rect is reliable
+  // everywhere (e.offsetX can be wrong on a full-screen fixed canvas, which made the
+  // hover/hit miss → cursor stuck on "grab" and clicks never opened a node).
+  const evXY = (e) => { const r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  // Hit-test in SCREEN space directly (project each node, compare to the cursor) so it
+  // exactly matches what's drawn. A node is hit by its circle OR its title band below.
+  const nodeAt = (sx, sy) => {
     for (let i = nodes.length - 1; i >= 0; i--) {
-      const n = nodes[i], dx = wx - n.x;
-      if (dx * dx + (wy - n.y) ** 2 <= (n.r + 8) ** 2) return i;
-      if (Math.abs(dx) < n.r + 34 && wy > n.y + n.r && wy < n.y + n.r + 46) return i;   // title/sub band
+      const n = nodes[i];
+      const px = W / 2 + panX + n.x * scale, py = H / 2 + panY + n.y * scale, pr = n.r * scale;
+      const dx = sx - px, dy = sy - py;
+      if (dx * dx + dy * dy <= (pr + 10) ** 2) return i;
+      if (Math.abs(dx) < pr + 38 && dy > pr && dy < pr + 54) return i;   // title/sub band
     }
     return -1;
   };
@@ -89,21 +95,20 @@ export function mountWorldGraph(canvas, items, opts = {}) {
 
   // ── Pointer handling: drag node / pan / click ──
   canvas.addEventListener('pointerdown', e => {
-    canvas.setPointerCapture(e.pointerid ?? e.pointerId);
-    const w = toWorld(e.offsetX, e.offsetY);
-    const idx = hit(w.x, w.y);
-    drag = { idx, startX: e.offsetX, startY: e.offsetY, lx: e.offsetX, ly: e.offsetY, moved: false };
+    canvas.setPointerCapture(e.pointerId);
+    const p = evXY(e);
+    drag = { idx: nodeAt(p.x, p.y), startX: p.x, startY: p.y, lx: p.x, ly: p.y, moved: false };
   });
   canvas.addEventListener('pointermove', e => {
-    const w = toWorld(e.offsetX, e.offsetY);
-    hover = hit(w.x, w.y);
-    canvas.style.cursor = hover >= 0 ? 'pointer' : (drag ? 'grabbing' : 'grab');
+    const p = evXY(e);
+    hover = nodeAt(p.x, p.y);
+    canvas.style.cursor = hover >= 0 ? 'pointer' : (drag && drag.moved ? 'grabbing' : 'grab');
     if (!drag) return;
     // Only treat it as a DRAG past a 5px deadzone — sub-pixel jitter during a tap must
     // not move the node/pan, or the click-to-open would never register.
-    if (!drag.moved && Math.hypot(e.offsetX - drag.startX, e.offsetY - drag.startY) > 5) drag.moved = true;
-    const dx = e.offsetX - drag.lx, dy = e.offsetY - drag.ly;
-    drag.lx = e.offsetX; drag.ly = e.offsetY;
+    if (!drag.moved && Math.hypot(p.x - drag.startX, p.y - drag.startY) > 5) drag.moved = true;
+    const dx = p.x - drag.lx, dy = p.y - drag.ly;
+    drag.lx = p.x; drag.ly = p.y;
     if (!drag.moved) return;                              // still within the tap deadzone → ignore
     if (drag.idx >= 0) { nodes[drag.idx].x += dx / scale; nodes[drag.idx].y += dy / scale; }
     else { panX += dx; panY += dy; userMoved = true; }   // pan the whole graph freely across the screen
@@ -111,16 +116,17 @@ export function mountWorldGraph(canvas, items, opts = {}) {
   // Wheel / trackpad zoom, anchored on the cursor.
   canvas.addEventListener('wheel', e => {
     e.preventDefault();
+    const p = evXY(e);
     const ns = Math.max(0.2, Math.min(3, scale * Math.exp(-e.deltaY * 0.0012)));
-    const wx = (e.offsetX - W / 2 - panX) / scale, wy = (e.offsetY - H / 2 - panY) / scale;
-    panX = e.offsetX - W / 2 - wx * ns; panY = e.offsetY - H / 2 - wy * ns;
+    const wx = (p.x - W / 2 - panX) / scale, wy = (p.y - H / 2 - panY) / scale;
+    panX = p.x - W / 2 - wx * ns; panY = p.y - H / 2 - wy * ns;
     scale = ns; userMoved = true;
   }, { passive: false });
   let _opening = false;                                  // guard so a tap can't double-navigate
   function doOpen(it) { if (_opening) return; _opening = true; onOpen(it); }
   function tapOpen(e) {
-    const w = toWorld(e.offsetX, e.offsetY);
-    const idx = hit(w.x, w.y);
+    const p = evXY(e);
+    const idx = nodeAt(p.x, p.y);
     if (idx >= 0) doOpen(nodes[idx].it);
   }
   function endDrag(e) {
