@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>hopeOS — Enter World</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{overflow:hidden;background:#0a0a0f;font-family:'SF Mono','Fira Code',monospace;color:#cce}
@@ -130,37 +133,44 @@ video.h{display:none}
 </div>
 
 <style>
-#builder{position:fixed;inset:0;z-index:60;background:radial-gradient(ellipse at 50% 35%,#0b0f16 0%,#06080b 70%,#000 100%);
-  display:none;flex-direction:column;align-items:center;justify-content:center;padding:24px}
+/* Build-your-own-world overlay — neon-green design system (matches the landing) */
+#builder{position:fixed;inset:0;z-index:60;background:radial-gradient(ellipse 82% 60% at 50% 32%,#0a160f 0%,#05090b 68%,#020405 100%);
+  display:none;flex-direction:column;align-items:center;justify-content:center;padding:24px;
+  font-family:'Space Grotesk',system-ui,sans-serif;font-feature-settings:"zero" 0,"tnum" 1}
 #builder.show{display:flex}
-.bWrap{width:min(680px,94vw);display:flex;flex-direction:column;gap:14px;max-height:92vh}
-.bTitle{font-size:13px;letter-spacing:4px;color:#4a7fb5;text-align:center}
-.bTitle b{color:#d4a843}
-#bChat{display:flex;flex-direction:column;gap:8px;overflow:auto;max-height:34vh;padding:4px}
-.bub{max-width:80%;padding:9px 13px;border-radius:12px;font-size:13px;line-height:1.5}
-.bub.agent{align-self:flex-start;background:rgba(40,60,100,.32);border:1px solid rgba(80,140,220,.25);color:#cfe0f5}
-.bub.user{align-self:flex-end;background:rgba(212,168,67,.18);border:1px solid rgba(212,168,67,.3);color:#f0e2c0}
-#bGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;overflow:auto;max-height:34vh}
+#builder::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(0deg,rgba(73,231,134,.035) 0 1px,transparent 1px 3px);mix-blend-mode:screen;opacity:.55}
+.bWrap{position:relative;width:min(720px,94vw);display:flex;flex-direction:column;gap:16px;max-height:92vh}
+.bTitle{font-size:12px;letter-spacing:5px;color:#5dff9b;text-align:center;text-shadow:0 0 14px rgba(93,255,155,.5)}
+.bTitle b{color:#b7ffce}
+#bChat{display:flex;flex-direction:column;gap:9px;overflow:auto;max-height:36vh;padding:4px}
+.bub{max-width:82%;padding:10px 14px;border-radius:13px;font-size:13.5px;line-height:1.55}
+.bub.agent{align-self:flex-start;background:rgba(73,231,134,.08);border:1px solid rgba(73,231,134,.22);color:#d7ecdd}
+.bub.user{align-self:flex-end;background:rgba(93,255,155,.14);border:1px solid rgba(93,255,155,.32);color:#eafff1}
+#bGrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;overflow:auto;max-height:34vh}
 #bGrid:empty{display:none}
-#bGrid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:pointer;border:1px solid transparent;transition:border .15s,transform .15s}
-#bGrid img:hover{border-color:#d4a843;transform:scale(1.03)}
+#bGrid img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:10px;cursor:pointer;border:1px solid rgba(73,231,134,.18);transition:border .15s,transform .15s,box-shadow .15s}
+#bGrid img:hover{border-color:#5dff9b;transform:scale(1.03);box-shadow:0 0 18px rgba(93,255,155,.4)}
 #bBar{display:flex;gap:8px}
-#bInput{flex:1;background:rgba(20,24,34,.85);border:1px solid rgba(80,140,220,.3);color:#cce;border-radius:10px;
-  padding:12px 14px;font-family:inherit;font-size:13px;outline:none}
-#bSend{background:linear-gradient(135deg,#4a7fb5,#3a6fa5);border:none;color:#fff;border-radius:10px;padding:0 18px;cursor:pointer;font-family:inherit;font-size:14px}
+#bInput{flex:1;background:rgba(7,16,12,.85);border:1px solid rgba(73,231,134,.28);color:#d7ecdd;border-radius:11px;
+  padding:13px 15px;font-family:inherit;font-size:13.5px;outline:none;transition:border .15s,box-shadow .15s}
+#bInput:focus{border-color:#5dff9b;box-shadow:0 0 14px rgba(93,255,155,.25)}
+#bInput::placeholder{color:#5d7468}
+#bSend{background:#5dff9b;border:none;color:#02110a;border-radius:11px;padding:0 20px;cursor:pointer;font-family:inherit;font-size:15px;font-weight:600;box-shadow:0 0 18px rgba(93,255,155,.35)}
+#bSend:hover{background:#b7ffce}
 #bTools{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
-.btool{background:rgba(40,40,30,.5);border:1px solid rgba(212,168,67,.3);color:#cb9;border-radius:8px;
-  padding:8px 14px;cursor:pointer;font-family:inherit;font-size:12px}
-.btool:hover{background:rgba(212,168,67,.2);color:#fff}
-#bHint{text-align:center;color:#778;font-size:10px;letter-spacing:1px}
-#bLib{display:flex;flex-direction:column;gap:7px;margin-bottom:4px}
-.bLibTitle{font-size:10px;letter-spacing:1.5px;color:#89a;text-transform:uppercase}
-.bLibRow{display:flex;gap:7px;flex-wrap:wrap}
-.bcard{position:relative;background:rgba(74,127,181,.14);border:1px solid rgba(80,140,220,.3);color:#cfe0f5;
-  border-radius:8px;padding:8px 26px 8px 12px;cursor:pointer;font-family:inherit;font-size:12px}
-.bcard:hover{background:rgba(74,127,181,.28);border-color:#4a7fb5}
-.bcard small{color:#89a;font-size:10px;margin-left:4px}
-.bdel{position:absolute;top:3px;right:5px;color:#a66;font-size:11px;opacity:.6}
+.btool{background:rgba(7,16,12,.6);border:1px solid rgba(73,231,134,.25);color:#9fe6bd;border-radius:9px;
+  padding:9px 15px;cursor:pointer;font-family:inherit;font-size:12px;transition:.15s}
+.btool:hover{background:rgba(73,231,134,.12);color:#5dff9b;border-color:#5dff9b}
+#bHint{text-align:center;color:#5d7468;font-size:10px;letter-spacing:1.5px}
+#bLib{display:flex;flex-direction:column;gap:8px;margin-bottom:4px}
+.bLibTitle{font-size:10px;letter-spacing:1.5px;color:#43e07a;text-transform:uppercase}
+.bLibRow{display:flex;gap:8px;flex-wrap:wrap}
+.bcard{position:relative;background:rgba(73,231,134,.1);border:1px solid rgba(73,231,134,.28);color:#d7ecdd;
+  border-radius:9px;padding:9px 28px 9px 13px;cursor:pointer;font-family:inherit;font-size:12px;transition:.15s}
+.bcard:hover{background:rgba(73,231,134,.18);border-color:#5dff9b}
+.bcard small{color:#5d7468;font-size:10px;margin-left:4px}
+.bdel{position:absolute;top:3px;right:6px;color:#7a5;font-size:11px;opacity:.6}
 .bdel:hover{opacity:1;color:#f99}
 </style>
 

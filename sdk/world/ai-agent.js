@@ -287,12 +287,15 @@ export class WorldAgent {
     this.busy = true;
     const guide = await this._loadGuide();
     const messages = [{ role: 'user', content: text }];
+    const isBuild = this.mode === 'build';
+    const maxTurns = isBuild ? 16 : 6;          // build agent runs long multi-step briefs to completion
+    const maxTokens = isBuild ? 8000 : 1024;    // room to plan + chain many tool calls
     try {
-      for (let turn = 0; turn < 6; turn++) {
+      for (let turn = 0; turn < maxTurns; turn++) {
         const res = await fetch(this.endpoint, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ model: this.model, max_tokens: 1024, system: this._system(guide), tools: TOOLS, messages }),
+          body: JSON.stringify({ model: this.model, max_tokens: maxTokens, system: this._system(guide), tools: TOOLS, messages }),
         });
         const data = await res.json();
         if (data.error) { this.onSay('AI error: ' + data.error.message); break; }
