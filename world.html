@@ -377,6 +377,8 @@ video.h{display:none}
     border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;outline:none">
   <button id="aiSend" style="background:linear-gradient(135deg,#4a7fb5,#3a6fa5);border:none;color:#fff;
     border-radius:8px;padding:9px 14px;cursor:pointer;font-family:inherit;font-size:13px">↵</button>
+  <button id="deiBtn" title="Runtime DEI — live scene scripting console (with AI assist)" style="background:rgba(12,30,22,.7);
+    border:1px solid rgba(73,231,134,.4);color:#5dff9b;border-radius:8px;padding:9px 11px;cursor:pointer;font-family:inherit;font-size:13px;white-space:nowrap">&lt;/&gt; DEI</button>
 </div>
 <!-- Transient action signals (selected / locked / …) beside the OBJECTS panel. -->
 <div id="flash"></div>
@@ -446,6 +448,81 @@ video.h{display:none}
 .sp-link{font-size:12px;color:#7dd0ff;text-decoration:none;word-break:break-all}
 .sp-link:hover{text-decoration:underline}
 .sp-foot{font-size:10px;color:#5d7468;line-height:1.45;margin-top:2px}
+</style>
+
+<!-- Runtime DEI — a live scripting console for the CLIENT-SIDE runtime API (scale,
+     spawn, navigate, gizmo, sky…). Runs only in this browser session against the live
+     scene; the firm server/backend is never exposed. Built-in AI assist annotates,
+     writes, reviews and debugs snippets in plain language. -->
+<div id="deiPanel">
+  <div class="dei-head">
+    <span class="dei-title">&lt;/&gt; Runtime DEI <span class="dei-sub">live scene scripting · this session only · server code never exposed</span></span>
+    <button id="deiClose" class="dei-x" title="close">✕</button>
+  </div>
+  <div class="dei-body">
+    <div class="dei-left">
+      <div class="dei-bar">
+        <span class="dei-scope">scope: <code>world · scene · camera · THREE · hope · nav · editor</code></span>
+        <span class="dei-grow"></span>
+        <button id="deiClear" class="dei-mini" title="clear console">clear</button>
+        <button id="deiRun" class="dei-run" title="run (Ctrl/Cmd+Enter)">▶ Run</button>
+      </div>
+      <textarea id="deiCode" spellcheck="false" placeholder="// JS against the live scene. e.g.
+const id = world.findByLabel('sky');
+world.scaleObject(id, 1.5);            // grow the sky
+// hope.onFrame(dt => { /* per-frame */ });"></textarea>
+      <div class="dei-aibar">
+        <input id="deiAsk" placeholder="ask the build agent to write / explain / debug this in plain words…">
+        <button id="deiAskBtn" class="dei-mini ai" title="AI assist">✨ assist</button>
+      </div>
+      <pre id="deiOut" class="dei-out"></pre>
+    </div>
+    <div class="dei-right">
+      <div class="dei-refhead">RUNTIME API <span class="dei-sub">click a line to insert</span></div>
+      <div id="deiRef" class="dei-ref"></div>
+    </div>
+  </div>
+</div>
+<style>
+#deiPanel{position:fixed;inset:auto 0 0 0;left:50%;bottom:0;transform:translateX(-50%);z-index:58;display:none;flex-direction:column;
+  width:min(960px,98vw);height:min(62vh,560px);background:rgba(5,11,9,.97);border:1px solid rgba(73,231,134,.4);
+  border-bottom:none;border-radius:14px 14px 0 0;box-shadow:0 -16px 60px rgba(0,0,0,.6);font-family:'Space Grotesk',system-ui,sans-serif;color:#d7ecdd}
+#deiPanel.show{display:flex}
+.dei-head{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;border-bottom:1px solid rgba(73,231,134,.18)}
+.dei-title{font-size:14px;font-weight:600;color:#7dffb0}
+.dei-sub{font-size:10px;font-weight:400;color:#5d7468;letter-spacing:0}
+.dei-x{background:rgba(60,30,30,.4);border:1px solid rgba(200,80,80,.3);color:#f99;border-radius:7px;width:28px;height:28px;cursor:pointer}
+.dei-x:hover{background:rgba(200,80,80,.2)}
+.dei-body{flex:1;display:flex;gap:0;min-height:0}
+.dei-left{flex:1;display:flex;flex-direction:column;min-width:0;padding:10px;gap:8px}
+.dei-right{width:300px;border-left:1px solid rgba(73,231,134,.15);display:flex;flex-direction:column;min-height:0}
+.dei-bar{display:flex;align-items:center;gap:8px}
+.dei-scope{font-size:10px;color:#5d7468}
+.dei-scope code{color:#7fd4a0;background:rgba(73,231,134,.08);padding:1px 5px;border-radius:5px;font-size:10px}
+.dei-grow{flex:1}
+.dei-mini{background:rgba(7,16,12,.7);border:1px solid rgba(73,231,134,.25);color:#9fe6bd;border-radius:7px;padding:5px 10px;cursor:pointer;font-family:inherit;font-size:11px}
+.dei-mini:hover{background:rgba(73,231,134,.14);color:#5dff9b}
+.dei-mini.ai{border-color:rgba(120,170,230,.4);color:#9bf}
+.dei-mini.ai:hover{background:rgba(80,140,220,.18);color:#bcf}
+.dei-run{background:linear-gradient(135deg,#36d178,#21b85f);border:none;color:#02110a;border-radius:7px;padding:6px 14px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600}
+.dei-run:hover{filter:brightness(1.1)}
+#deiCode{flex:1;min-height:90px;resize:none;background:rgba(2,7,5,.92);border:1px solid rgba(73,231,134,.22);color:#d7f5e2;border-radius:9px;
+  padding:11px;font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:12.5px;line-height:1.5;outline:none;tab-size:2}
+#deiCode:focus{border-color:rgba(93,255,155,.5)}
+.dei-aibar{display:flex;gap:7px}
+#deiAsk{flex:1;background:rgba(14,20,30,.85);border:1px solid rgba(80,140,220,.3);color:#cce;border-radius:8px;padding:8px 11px;font-family:inherit;font-size:12px;outline:none}
+#deiAsk:focus{border-color:rgba(120,170,230,.6)}
+.dei-out{margin:0;background:rgba(2,7,5,.9);border:1px solid rgba(73,231,134,.16);border-radius:9px;padding:9px 11px;height:104px;overflow:auto;
+  font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;font-size:11.5px;line-height:1.5;color:#9fb3a6;white-space:pre-wrap;word-break:break-word}
+.dei-out .ok{color:#7dffb0}.dei-out .err{color:#ff9a9a}.dei-out .ai{color:#9bf}.dei-out .dim{color:#5d7468}
+.dei-refhead{padding:10px 12px 6px;font-size:10px;letter-spacing:1px;color:#43e07a}
+.dei-ref{flex:1;overflow:auto;padding:0 8px 10px}
+.dei-ref .grp{font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#5d7468;margin:9px 4px 3px}
+.dei-ref .row{padding:5px 8px;border-radius:6px;cursor:pointer;border:1px solid transparent}
+.dei-ref .row:hover{background:rgba(73,231,134,.1);border-color:rgba(73,231,134,.22)}
+.dei-ref .row code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;color:#8fe6b3}
+.dei-ref .row .d{display:block;font-size:10px;color:#5d7468;margin-top:1px}
+@media(max-width:680px){.dei-right{display:none}}
 </style>
 
 <script type="module">
@@ -1176,6 +1253,7 @@ wireSketchfab();
 document.getElementById('saveBtn').addEventListener('click', () => openSaveModal('save'));
 document.getElementById('pubBtn').addEventListener('click', () => openSaveModal('publish'));
 wireSaveModal();
+wireDEI();
 
 // Before leaving a built session, offer to save the world (quiet auto-save).
 els.exit.addEventListener('click', async () => {
@@ -1507,6 +1585,137 @@ function wireSaveModal() {
       spStatus('✅ “' + r.name + '” has been PUBLISHED! Live at ' + r.link + ' (link copied). Find it in “Other Worlds” & the world graph.', 'ok');
       const a = $('spLink'); a.href = r.link; a.textContent = '🌐 open ' + r.link; a.style.display = 'inline-block';
     } else { spStatus('⚠ publish failed: ' + r.error, 'err'); }
+  });
+}
+
+// ── Runtime DEI — live scene-scripting console (client-side runtime only) ──────────
+// Exposes the SAME in-browser API the agent's run_script uses (world/scene/camera/
+// THREE/hope/nav/editor) so anyone can directly drive scaling, spawning, navigation,
+// gizmo, sky, etc. — and paste in runtime scripts. The firm server/backend (keys,
+// /api/*) is NEVER exposed here. Every reference line is annotated, and the build
+// agent can write/explain/debug snippets in plain language (AI assist).
+const DEI_REF = [
+  ['Read / recall', [
+    ['world.getSceneState()', 'full live snapshot: avatar, bounds, sky, every object'],
+    ['world.listObjects()', 'array of {id,label,type,position,scale,locked} incl. sky & world'],
+    ["world.findByLabel('sky')", "id by name; 'sky'=__sky__, 'world'=__scene__"],
+    ['world.selectInView()', 'id of the object you are looking at'],
+  ]],
+  ['Spawn', [
+    ["world.addObject('box', {color:0x4a7fb5, scale:1})", 'box|sphere|cylinder|cone in front of you'],
+    ["await world.importGLBFromURL(url, {label:'lamp'})", 'import any .glb → returns id'],
+    ["world.placeInSelection('box', {scale:1})", 'drop onto the marked surface'],
+  ]],
+  ['Transform', [
+    ['world.scaleObject(id, 1.5)', 'multiply scale (sky/world aware)'],
+    ['world.moveObject(id, dx, dy, dz)', 'translate by metres'],
+    ['world.rotateObject(id, 90)', 'rotate Y degrees'],
+    ['world.setObjectTransform(id, {position, rotationDeg, scale})', 'absolute set'],
+    ['world.centerObject(id)', 'seat at world origin; re-fit sky'],
+    ['world.setLocked(id, true)', 'lock / unlock an object'],
+    ['world.duplicateObject(id)', 'clone → new id'],
+    ['world.deleteObject(id)', 'remove'],
+  ]],
+  ['Sky / environment', [
+    ["await world.addSkybox(url)", 'enclosing sky shell (auto-centres + encloses)'],
+    ['world.scaleSkybox(1.5)', 'grow the sky'],
+    ['world.setSceneTransform({scaleFactor:2})', 'scale the whole world GLB'],
+    ['world.setTimeOfDay(18)', 'sun arc + relight (0–24h)'],
+    ['world.setAtmosphere({sky:"#87b0e0", fogFar:200})', 'sky/fog/exposure'],
+    ["world.setWeather('foggy')", 'clear|cloudy|foggy|storm'],
+  ]],
+  ['Navigate / camera', [
+    ['world.navigateTo(x, z)', 'walk the avatar to a point'],
+    ['world.teleportNear(x, z)', 'jump POV there (through walls)'],
+    ['nav.turnBy(45)', 'rotate view (deg)'],
+    ['nav.faceUp(30) / nav.faceLevel()', 'aim pitch'],
+  ]],
+  ['Selection / gizmo', [
+    ['editor.selectById(id)', 'select an object (shows gizmo)'],
+    ["editor.setMode('scale')", 'translate | rotate | scale'],
+    ['world.markSurfaceInView(2)', 'mark the wall/floor you face'],
+  ]],
+  ['Animate', [
+    ['hope.onFrame(dt => { /* per frame */ })', 'run code every frame'],
+  ]],
+];
+
+function deiOut(msg, cls) {
+  const o = document.getElementById('deiOut'); if (!o) return;
+  const line = document.createElement('div'); if (cls) line.className = cls; line.textContent = msg;
+  o.appendChild(line); o.scrollTop = o.scrollHeight;
+}
+function deiRunCode() {
+  const code = document.getElementById('deiCode').value.trim();
+  if (!code) return;
+  deiOut('▶ ' + code.split('\n')[0].slice(0, 80) + (code.includes('\n') ? ' …' : ''), 'dim');
+  // Capture console.log within the snippet; expose ONLY the runtime scene objects.
+  const logs = []; const _log = console.log;
+  console.log = (...a) => { logs.push(a.map(x => { try { return typeof x === 'object' ? JSON.stringify(x) : String(x); } catch { return String(x); } }).join(' ')); _log(...a); };
+  (async () => {
+    try {
+      const fn = new Function('world', 'scene', 'camera', 'THREE', 'hope', 'nav', 'editor',
+        `return (async () => { ${code}\n })();`);
+      const r = await fn(world, hope.scene, hope.camera, hope.THREE, hope, nav, editor);
+      logs.forEach(l => deiOut(l));
+      deiOut('✓ ' + (r !== undefined ? (typeof r === 'object' ? JSON.stringify(r) : String(r)) : 'ok'), 'ok');
+      refreshObjList();   // reflect any spawned/removed objects in the OBJECTS menu
+    } catch (e) { logs.forEach(l => deiOut(l)); deiOut('✗ ' + e.message, 'err'); }
+    finally { console.log = _log; }
+  })();
+}
+async function deiAssist() {
+  const ask = document.getElementById('deiAsk');
+  const q = ask.value.trim(); if (!q || !agent) return;
+  ask.value = '';
+  deiOut('✨ ' + q, 'ai');
+  const code = document.getElementById('deiCode').value;
+  try {
+    const res = await agent.assistCode(q, code);
+    if (res.explanation) deiOut(res.explanation, 'ai');
+    if (res.code) {
+      document.getElementById('deiCode').value = res.code;
+      deiOut('↳ inserted into the editor — review, then ▶ Run', 'dim');
+    }
+  } catch (e) { deiOut('✗ assist failed: ' + e.message, 'err'); }
+}
+function buildDEIRef() {
+  const host = document.getElementById('deiRef'); if (!host || host.dataset.built) return;
+  host.dataset.built = '1';
+  for (const [grp, rows] of DEI_REF) {
+    const g = document.createElement('div'); g.className = 'grp'; g.textContent = grp; host.appendChild(g);
+    for (const [code, desc] of rows) {
+      const r = document.createElement('div'); r.className = 'row';
+      const c = document.createElement('code'); c.textContent = code;
+      const d = document.createElement('span'); d.className = 'd'; d.textContent = desc;
+      r.append(c, d);
+      r.addEventListener('click', () => {
+        const ta = document.getElementById('deiCode');
+        ta.value += (ta.value && !ta.value.endsWith('\n') ? '\n' : '') + code + '\n';
+        ta.focus(); ta.scrollTop = ta.scrollHeight;
+      });
+      host.appendChild(r);
+    }
+  }
+}
+function openDEI() {
+  buildDEIRef();
+  document.getElementById('deiPanel').classList.add('show');
+  document.getElementById('deiCode').focus();
+}
+function wireDEI() {
+  document.getElementById('deiBtn').addEventListener('click', () => {
+    const p = document.getElementById('deiPanel');
+    p.classList.contains('show') ? p.classList.remove('show') : openDEI();
+  });
+  document.getElementById('deiClose').addEventListener('click', () => document.getElementById('deiPanel').classList.remove('show'));
+  document.getElementById('deiRun').addEventListener('click', deiRunCode);
+  document.getElementById('deiClear').addEventListener('click', () => { document.getElementById('deiOut').innerHTML = ''; });
+  document.getElementById('deiAskBtn').addEventListener('click', deiAssist);
+  document.getElementById('deiAsk').addEventListener('keydown', e => { if (e.key === 'Enter') deiAssist(); });
+  document.getElementById('deiCode').addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); deiRunCode(); }
+    if (e.key === 'Tab') { e.preventDefault(); const t = e.target, s = t.selectionStart; t.value = t.value.slice(0, s) + '  ' + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = s + 2; }
   });
 }
 

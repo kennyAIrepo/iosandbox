@@ -181,6 +181,36 @@ export class WorldAgent {
     return this.mode;
   }
 
+  /**
+   * Runtime DEI assist — write / explain / debug a live-scene JS snippet in plain
+   * language. Returns { explanation, code }. Runs against the client-side runtime API
+   * only (world/scene/camera/THREE/hope/nav/editor); never the server. Used by the
+   * in-world DEI console so the script editor has built-in NLP, not just raw code.
+   */
+  async assistCode(request, currentCode) {
+    const sys = [
+      "You are the coding assistant inside the hopeOS Runtime DEI — a live JS console that drives the in-browser 3D scene. There is NO server/backend access and no secrets here; only the runtime scene API.",
+      "Snippets run as an async function body with these in scope: world (WorldTemplate), scene (THREE.Scene), camera, THREE, hope (SDK; hope.onFrame(cb) animates), nav (avatar navigator), editor (gizmo/selection). You may use await.",
+      "Prefer the world API: addObject('box'|'sphere'|'cylinder'|'cone',{color,scale,position}); await importGLBFromURL(url,{label}); scaleObject(id,f); moveObject(id,dx,dy,dz); rotateObject(id,deg); setObjectTransform(id,{position,rotationDeg,scale}); centerObject(id); setLocked(id,bool); duplicateObject(id); deleteObject(id); findByLabel('sky'|'world'|label) (sky=__sky__, world=__scene__); listObjects(); getSceneState(); addSkybox(url); scaleSkybox(f); setSceneTransform({scaleFactor}); setTimeOfDay(h); setAtmosphere({sky,fog,fogNear,fogFar,exposure}); setWeather(kind); navigateTo(x,z); teleportNear(x,z). Also nav.turnBy(deg)/faceUp(d)/faceDown(d)/faceLevel(); editor.selectById(id)/setMode('translate'|'rotate'|'scale').",
+      "Write SMALL, safe, runnable snippets with brief inline comments. When the user asks you to WRITE or FIX code, return the full snippet. When they ask to EXPLAIN/REVIEW, explain plainly and only return code if helpful.",
+      "Respond with ONLY a JSON object: {\"explanation\":\"<plain words>\",\"code\":\"<js snippet, or empty string>\"}. No markdown, no prose outside the JSON.",
+      "Live scene state (for grounding ids/labels/coords):\n" + JSON.stringify(this.world.getSceneState()),
+    ].join('\n\n');
+    const user = (currentCode && currentCode.trim() ? "Current editor code:\n```js\n" + currentCode + "\n```\n\n" : "") + request;
+    const res = await fetch(this.endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: this.models.build, max_tokens: 1600, system: sys, messages: [{ role: 'user', content: user }] }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { const m = text.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]); } catch { /* fall through */ } } }
+    if (parsed) return { explanation: parsed.explanation || '', code: parsed.code || '' };
+    const cb = text.match(/```(?:js|javascript)?\s*\n([\s\S]*?)```/);
+    return cb ? { explanation: text.replace(/```[\s\S]*?```/, '').trim(), code: cb[1].trim() } : { explanation: text, code: '' };
+  }
+
   /** Fetch the design-knowledge doc once (falls back to an embedded summary). */
   async _loadGuide() {
     if (this._guide !== undefined) return this._guide;
