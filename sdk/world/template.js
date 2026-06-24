@@ -224,7 +224,7 @@ export class WorldTemplate {
   recordScript(code, explanation) { if (code) this.scripts.push({ code, explanation: explanation || '' }); }
 
   /** Current environment settings (for saving in a world snapshot). */
-  getEnvironment() { return { ...this.environment }; }
+  getEnvironment() { return { ...this.environment, skyboxUrl: this._skyboxUrl || null }; }
 
   /** Re-apply a saved environment after a world loads. */
   applyEnvironment(env) {
@@ -234,6 +234,37 @@ export class WorldTemplate {
     if (env.hour != null) this.setTimeOfDay(env.hour);
     else if (env.sunAz != null) this.setSunAzEl(env.sunAz, env.sunEl);
     if (env.sky || env.fog) this.setAtmosphere({ sky: env.sky, fog: env.fog && env.fog.color, fogNear: env.fog && env.fog.near, fogFar: env.fog && env.fog.far });
+    if (env.skyboxUrl) this.addSkybox(env.skyboxUrl).catch(() => {});
+  }
+
+  /**
+   * Wrap the scene in a SKY/environment shell — a GLB dome/sphere viewed from the
+   * INSIDE. Scaled to enclose the whole scene, centred on it, rendered first, with
+   * back-face materials + fog off so it always shows (fixes the "skybox never
+   * appears after enlarging" problem: huge shells were clipped by the far plane and
+   * back-face-culled). Not collidable; persists with the world via skyboxUrl.
+   */
+  async addSkybox(url, opts = {}) {
+    if (this._skybox) { this.scene.remove(this._skybox); this._skybox = null; }
+    const gltf = await this._gltf().loadAsync(url);
+    const obj = gltf.scene;
+    const box = new THREE.Box3().setFromObject(obj);
+    const dim = box.getSize(new THREE.Vector3());
+    const longest = Math.max(dim.x, dim.y, dim.z) || 1;
+    const sceneSpan = this.bounds ? Math.max(...this.bounds.getSize(new THREE.Vector3()).toArray()) : 30;
+    const diameter = Math.max(sceneSpan, 24) * (opts.enclose || 1.6);
+    obj.scale.setScalar(opts.scale ? opts.scale : (diameter / longest));
+    const center = this.bounds ? this.bounds.getCenter(new THREE.Vector3()) : new THREE.Vector3(0, this.cfg.groundY || 0, 0);
+    obj.position.copy(center);
+    obj.renderOrder = -1;
+    obj.traverse(c => {
+      if (!c.isMesh) return;
+      c.castShadow = c.receiveShadow = false; c.frustumCulled = false;
+      (Array.isArray(c.material) ? c.material : [c.material]).forEach(m => { if (m) { m.side = THREE.BackSide; m.fog = false; m.depthWrite = false; } });
+    });
+    this.scene.add(obj);
+    this._skybox = obj; this._skyboxUrl = url;
+    return 'sky shell set (enclosing the scene)';
   }
 
   _fitShadowToBounds(box) {
@@ -817,7 +848,9 @@ export class WorldTemplate {
     return new Promise((resolve, reject) => {
       this._gltf().load(url, (gltf) => {
         const obj = gltf.scene;
-        obj.traverse(c => { if (c.isMesh) { c.castShadow = c.receiveShadow = true; if (c.material) c.material.envMapIntensity = 1.0; } });
+        obj.traverse(c => { if (c.isMesh) { c.castShadow = c.receiveShadow = true;
+          (Array.isArray(c.material) ? c.material : [c.material]).forEach(m => { if (m) { m.side = THREE.DoubleSide; m.envMapIntensity = 1.0; } });   // DoubleSide → interiors/domes visible from inside
+        } });
 
         // normalise: scale longest dimension to fit the selection (or ~1.5m)
         const box = new THREE.Box3().setFromObject(obj);

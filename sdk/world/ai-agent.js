@@ -59,6 +59,8 @@ const TOOLS = [
     input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
   { name: 'import_model', description: 'Import a SPECIFIC Sketchfab model by its uid (taken from search_assets results) into the active selection. Give it a recall label.',
     input_schema: { type: 'object', properties: { uid: { type: 'string' }, label: { type: 'string' } }, required: ['uid'] } },
+  { name: 'set_skybox', description: 'Wrap the whole scene in a SKY / environment shell from a Sketchfab query OR a direct .glb URL — a dome/sphere rendered from the INSIDE, auto-scaled to enclose everything and centred on the scene. Use for "add a sky", "put a skybox", "wrap this in a night sky". Persists with the world.',
+    input_schema: { type: 'object', properties: { query: { type: 'string' }, url: { type: 'string' } } } },
   { name: 'import_glb_url', description: 'Import any direct .glb URL (Meshy export, self-hosted, etc.) into the active selection.',
     input_schema: { type: 'object', properties: { url: { type: 'string' }, label: { type: 'string', description: 'recall name for the object, e.g. "lamp"' } }, required: ['url'] } },
   { name: 'fill_selection_with_import', description: 'Clone the most recently imported model across the marked region as miniatures.',
@@ -249,6 +251,16 @@ export class WorldAgent {
           const url = await resolveGLB(input.uid);
           const id = await w.importGLBFromURL(url, { label: input.label || 'model' });
           return `imported ${input.label || input.uid} → ${id}`;
+        }
+        case 'set_skybox': {
+          let url = input.url;
+          if (!url && input.query) {
+            const { results } = await searchModels(input.query, { count: 24 });
+            if (!results.length) return `no downloadable sky found for "${input.query}" — try a direct .glb URL`;
+            url = await resolveGLB(bestMatch(results, input.query).uid);
+          }
+          if (!url) return 'give a sky query or a direct .glb URL';
+          return await w.addSkybox(url);
         }
         case 'fill_selection_with_import': {
           const ids = w.fillSelectionWithImport(input.rows, input.cols, { scale: input.scale });

@@ -13,7 +13,9 @@ export const CAM_Z = 2.0;
 
 // ── Scene graph ──
 export const scene = new THREE.Scene();
-export const camera = new THREE.PerspectiveCamera(CAM_FOV, innerWidth / innerHeight, 0.01, 100);
+// far = 6000 so large skyboxes / scaled-up environments stay inside the view frustum
+// (a 100m far plane clipped any enlarged sky shell and it vanished).
+export const camera = new THREE.PerspectiveCamera(CAM_FOV, innerWidth / innerHeight, 0.01, 6000);
 camera.position.set(0, 0, CAM_Z);
 
 // ── Renderer (created lazily when init is called) ──
@@ -52,7 +54,7 @@ function setupLights() {
 /** Initialize renderer on a canvas element. Call once.
  *  opts.lights=false skips the AR-tuned lights (world mode supplies its own). */
 export function initScene(canvas, opts = {}) {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
   renderer.setClearColor(0, 0);
   renderer.setSize(innerWidth, innerHeight);
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
