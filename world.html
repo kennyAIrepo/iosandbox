@@ -1807,7 +1807,10 @@ async function loadPublishedWorld(slug) {
   els.play.textContent = 'LOADING “' + slug + '”…';
   dbg('1 fetch /api/world/' + slug);
   try {
-    const r = await fetch('/api/world/' + encodeURIComponent(slug));
+    const r = await Promise.race([
+      fetch('/api/world/' + encodeURIComponent(slug)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('world-data fetch timed out (network/API)')), 15000)),
+    ]);
     dbg('2 fetch status ' + r.status);
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || ('not found (' + r.status + ')'));
     const json = await r.json();
