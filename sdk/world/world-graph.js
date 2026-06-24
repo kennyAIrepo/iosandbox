@@ -99,9 +99,12 @@ export function mountWorldGraph(canvas, items, opts = {}) {
     hover = hit(w.x, w.y);
     canvas.style.cursor = hover >= 0 ? 'pointer' : (drag ? 'grabbing' : 'grab');
     if (!drag) return;
+    // Only treat it as a DRAG past a 5px deadzone — sub-pixel jitter during a tap must
+    // not move the node/pan, or the click-to-open would never register.
+    if (!drag.moved && Math.hypot(e.offsetX - drag.startX, e.offsetY - drag.startY) > 5) drag.moved = true;
     const dx = e.offsetX - drag.lx, dy = e.offsetY - drag.ly;
     drag.lx = e.offsetX; drag.ly = e.offsetY;
-    if (Math.abs(e.offsetX - drag.startX) + Math.abs(e.offsetY - drag.startY) > 4) drag.moved = true;
+    if (!drag.moved) return;                              // still within the tap deadzone → ignore
     if (drag.idx >= 0) { nodes[drag.idx].x += dx / scale; nodes[drag.idx].y += dy / scale; }
     else { panX += dx; panY += dy; userMoved = true; }   // pan the whole graph freely across the screen
   });
@@ -113,12 +116,22 @@ export function mountWorldGraph(canvas, items, opts = {}) {
     panX = e.offsetX - W / 2 - wx * ns; panY = e.offsetY - H / 2 - wy * ns;
     scale = ns; userMoved = true;
   }, { passive: false });
+  let _opening = false;                                  // guard so a tap can't double-navigate
+  function doOpen(it) { if (_opening) return; _opening = true; onOpen(it); }
+  function tapOpen(e) {
+    const w = toWorld(e.offsetX, e.offsetY);
+    const idx = hit(w.x, w.y);
+    if (idx >= 0) doOpen(nodes[idx].it);
+  }
   function endDrag(e) {
-    if (drag && drag.idx >= 0 && !drag.moved) onOpen(nodes[drag.idx].it);
+    // A tap (never crossed the drag deadzone) → open the node under the release point.
+    if (drag && !drag.moved) tapOpen(e);
     drag = null;
   }
   canvas.addEventListener('pointerup', endDrag);
   canvas.addEventListener('pointercancel', () => { drag = null; });
+  // Fallback for environments where pointerup lands oddly: a plain click still opens.
+  canvas.addEventListener('click', e => { if (!(drag && drag.moved)) tapOpen(e); });
 
   // ── Render loop ──
   let t = 0;
