@@ -46,9 +46,10 @@ export class SpatialGrid {
     this.cfg = {
       color:    0x39ff5a,   // neon matrix green (lines + dots)
       hi:       0x9dff4d,   // brighter green for chosen marks
-      step:     2,          // metres per cell
-      radius:   9,          // cells out from the camera (the LOD window)
-      height:   7,          // cells up from the ground
+      step:     0.5,        // metres per cell — FINE half-metre lattice for precise placement
+      radius:   16,         // cells out from the camera (×0.5m = 8m window each way)
+      height:   8,          // cells up from the ground (×0.5m = 4m)
+      coarse:   4,          // structural lines every Nth cell (×0.5m = 2m) so the fine dot lattice stays readable
       ground:   0,
       ...opts,
     };
@@ -68,11 +69,12 @@ export class SpatialGrid {
   get visible() { return this.group.visible; }
   setGround(y) { this.groundY = y; this._cell = null; }
 
-  // ── LOD window: rebuild only when the camera crosses into a new cell ──
+  // ── LOD window: rebuild only when the camera crosses a COARSE cell (so a fine
+  //    0.5m lattice doesn't rebuild every half-metre of walking) ──
   update(camera) {
     if (!this.group.visible) return;
-    const s = this.step;
-    const cx = Math.round(camera.position.x / s), cz = Math.round(camera.position.z / s);
+    const rs = this.step * this.cfg.coarse;                 // rebuild interval (≈2m)
+    const cx = Math.round(camera.position.x / rs), cz = Math.round(camera.position.z / rs);
     if (!this._cell || this._cell.x !== cx || this._cell.z !== cz) {
       this._cell = { x: cx, z: cz };
       this._buildAt(camera.position);
@@ -89,33 +91,35 @@ export class SpatialGrid {
 
   _buildAt(center) {
     this._clear(this.group);
-    const s = this.step, R = this.cfg.radius;
+    const s = this.step, R = this.cfg.radius, cs = s * this.cfg.coarse;   // fine cell, coarse structural cell
+    const E = 1e-6;
     const cx = Math.round(center.x / s) * s, cz = Math.round(center.z / s) * s;
     const x0 = cx - R * s, x1 = cx + R * s, z0 = cz - R * s, z1 = cz + R * s;
     const y0 = this.groundY, y1 = this.groundY + this.cfg.height * s;
+    const ax0 = Math.ceil(x0 / cs) * cs, az0 = Math.ceil(z0 / cs) * cs;   // snapped coarse origins
 
-    const ground = [];                               // bright ground plane
-    for (let x = x0; x <= x1; x += s) ground.push(x, y0, z0, x, y0, z1);
-    for (let z = z0; z <= z1; z += s) ground.push(x0, y0, z, x1, y0, z);
-    this.group.add(this._line(ground, 0.42));
+    const ground = [];                               // fine graph-paper ground (subtle)
+    for (let x = x0; x <= x1 + E; x += s) ground.push(x, y0, z0, x, y0, z1);
+    for (let z = z0; z <= z1 + E; z += s) ground.push(x0, y0, z, x1, y0, z);
+    this.group.add(this._line(ground, 0.22));
 
-    const vert = [];                                 // faint "rain" columns
-    for (let x = x0; x <= x1; x += s) for (let z = z0; z <= z1; z += s) vert.push(x, y0, z, x, y1, z);
-    this.group.add(this._line(vert, 0.10));
+    const vert = [];                                 // faint COARSE "rain" columns (every ~2m, not every dot)
+    for (let x = ax0; x <= x1 + E; x += cs) for (let z = az0; z <= z1 + E; z += cs) vert.push(x, y0, z, x, y1, z);
+    this.group.add(this._line(vert, 0.08));
 
-    const layers = [];                               // faint horizontal layers above ground
-    for (let y = y0 + s; y <= y1; y += s) {
-      for (let x = x0; x <= x1; x += s) layers.push(x, y, z0, x, y, z1);
-      for (let z = z0; z <= z1; z += s) layers.push(x0, y, z, x1, y, z);
+    const layers = [];                               // faint COARSE horizontal layers above ground
+    for (let y = y0 + cs; y <= y1 + E; y += cs) {
+      for (let x = x0; x <= x1 + E; x += cs) layers.push(x, y, z0, x, y, z1);
+      for (let z = z0; z <= z1 + E; z += cs) layers.push(x0, y, z, x1, y, z);
     }
-    this.group.add(this._line(layers, 0.07));
+    this.group.add(this._line(layers, 0.06));
 
-    const dots = [];                                 // clickable nodes (every coordinate)
-    for (let x = x0; x <= x1; x += s) for (let z = z0; z <= z1; z += s) for (let y = y0; y <= y1; y += s) dots.push(x, y, z);
+    const dots = [];                                 // FINE clickable nodes — every 0.5m coordinate
+    for (let x = x0; x <= x1 + E; x += s) for (let z = z0; z <= z1 + E; z += s) for (let y = y0; y <= y1 + E; y += s) dots.push(x, y, z);
     const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.Float32BufferAttribute(dots, 3));
-    // Normal blending (not additive) so dots stay visible on bright skies AND dark interiors.
-    const dm = new THREE.PointsMaterial({ color: this.cfg.color, map: dotTexture(), size: s * 0.085, sizeAttenuation: true,
-      transparent: true, opacity: 0.92, alphaTest: 0.02, depthWrite: false });
+    // Small, crisp dots. Normal blending so they stay visible on bright skies AND dark interiors.
+    const dm = new THREE.PointsMaterial({ color: this.cfg.color, map: dotTexture(), size: Math.max(s * 0.14, 0.05), sizeAttenuation: true,
+      transparent: true, opacity: 0.85, alphaTest: 0.02, depthWrite: false });
     this.dotsObj = new THREE.Points(dg, dm); this.dotsObj.renderOrder = 996;
     this.group.add(this.dotsObj);
   }
@@ -174,12 +178,12 @@ export class SpatialGrid {
         transparent: true, opacity: 1, alphaTest: 0.02, depthWrite: false, blending: THREE.AdditiveBlending }));
       o.renderOrder = 998; this.hiGroup.add(o);
     };
-    // pending corner shows as a single bright dot
-    if (this.sel.cornerA) markDots([this.sel.cornerA], this.step * 0.16);
-    markDots(this.sel.dots, this.step * 0.14);
+    // pending corner shows as a single bright dot (kept clearly visible at fine scale)
+    if (this.sel.cornerA) markDots([this.sel.cornerA], Math.max(this.step * 0.5, 0.16));
+    markDots(this.sel.dots, Math.max(this.step * 0.42, 0.14));
 
     if (this.sel.traj.length) {
-      markDots(this.sel.traj, this.step * 0.12);
+      markDots(this.sel.traj, Math.max(this.step * 0.38, 0.12));
       if (this.sel.traj.length > 1) {
         const g = new THREE.BufferGeometry().setFromPoints(this.sel.traj);
         const o = new THREE.Line(g, new THREE.LineBasicMaterial({ color: C, transparent: true, opacity: 0.95, depthWrite: false, linewidth: 2 }));

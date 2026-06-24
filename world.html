@@ -445,6 +445,7 @@ video.h{display:none}
 .sp-status{font-size:12px;line-height:1.4;min-height:16px;color:#9fb3a6;white-space:pre-wrap}
 .sp-status.ok{color:#7dffb0}
 .sp-status.err{color:#ff9a9a}
+.sp-status.warn{color:#f0c25a}
 .sp-link{font-size:12px;color:#7dd0ff;text-decoration:none;word-break:break-all}
 .sp-link:hover{text-decoration:underline}
 .sp-foot{font-size:10px;color:#5d7468;line-height:1.45;margin-top:2px}
@@ -1561,8 +1562,14 @@ function openSaveModal(focus) {
   document.getElementById('spName').value = (currentWorld && currentWorld.name) || world.modelLabel || 'my world';
   _spSetThumb(captureThumb());
   spStatus('');
+  document.getElementById('spLink').style.display = 'none';
   document.getElementById('spModal').classList.add('show');
   document.getElementById(focus === 'publish' ? 'spPublish' : 'spName').focus();
+  // Pre-flight the cloud: if no Blob store is connected, publishing can't work yet —
+  // tell the user up-front (saving a draft still works) instead of failing on click.
+  fetch('/api/blob-upload').then(r => r.json()).then(h => {
+    if (h && h.hasToken === false) spStatus('ℹ Publishing to the cloud needs a Vercel Blob store connected to THIS project (one-time setup). Saving a draft works now. To enable Publish: Vercel → this project → Storage → create/connect a Blob store → Redeploy. Then /api/blob-upload should report hasToken:true.', 'warn');
+  }).catch(() => {});
 }
 function closeSaveModal() { document.getElementById('spModal').classList.remove('show'); }
 function wireSaveModal() {
@@ -1727,10 +1734,11 @@ function captureThumb() {
   try {
     hope.renderer.render(hope.scene, hope.camera);          // fresh frame so the buffer is valid
     const src = hope.renderer.domElement;
-    const w = 220, h = Math.max(140, Math.round(220 * src.height / src.width));
+    const w = 480, h = Math.max(300, Math.round(480 * src.height / src.width));   // hi-res so graph node thumbs stay crisp
     const c = document.createElement('canvas'); c.width = w; c.height = h;
-    c.getContext('2d').drawImage(src, 0, 0, w, h);
-    return c.toDataURL('image/jpeg', 0.6);
+    const cx = c.getContext('2d'); cx.imageSmoothingQuality = 'high';
+    cx.drawImage(src, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', 0.82);
   } catch (e) { return null; }
 }
 
