@@ -261,6 +261,7 @@ export class WorldAgent {
       "ANIMATION — use animate_object / stop_animation ONLY; NEVER animate inside run_script. A run_script frame loop cannot be stopped, so 'stop'/'revert' would silently fail. animate_object registers a managed spin/bob/pulse/orbit that remembers the start transform. To STOP: stop_animation {revert:false} freezes it where it is; 'stop and revert'/'undo the rotation'/'put it back' → stop_animation {revert:true} (the default) snaps it to its original transform. 'stop everything' → stop_animation {all:true}. After stopping, confirm honestly — only say it stopped because the tool returned success.",
       "EVERYTHING YOU CREATE IS A REAL GAME OBJECT — and you can SEE and EDIT all of it. Objects from create_object/import_*/place_* are auto-registered. ANYTHING you build in run_script (a text label, a sign/panel, a custom mesh/group) is ALSO auto-registered the moment your snippet adds it to `scene` — it appears in objects[], selectable and movable, with no extra step (you may still call world.adopt(obj,{label}) to set a nice label). So you ALWAYS have access to AI-made content; never claim you can't see or reach something the scene built.",
       "BUILD IN-WORLD CONTENT AS 3D GAME OBJECTS, NOT DOM OVERLAYS. A sign/plaque/panel should be a THREE mesh placed in the scene (it becomes a real, selectable, movable game object). Do NOT build it as a full-screen HTML/DOM overlay, and NEVER attach a page-wide or document-level click handler — that hijacks clicks meant for other UI (the user couldn't even press Publish because a panel expanded on every click). If a panel must expand/collapse, the click target must be ONLY that panel's own mesh/element — tightly scoped, nothing else.",
+      "YOU CAN SEE IMAGES. The user may attach pictures with a message: a SCREENSHOT of the current 3D view (use it to judge what's actually there — scale, placement, lighting, what looks wrong — and fix it) and/or a hand-drawn SKETCH or top-down PLAN of the set (use it as a layout brief: read the marked positions/labels and place, arrange, or import objects to match). Map the sketch onto the world with scene.boundsMin/boundsMax/center/size: e.g. a mark in the top-left of a top-down plan → the −X/−Z corner of the floor; left-to-right in the image → −X to +X; the avatar/camera is your reference for 'front'. Translate what you SEE into concrete tool calls (create_object/import_*/set_transform/place_in_selection). Briefly say what you read from the image, then build it; if the picture is ambiguous, ask one specific question.",
       "YOU CAN FIX YOUR OWN SCRIPTED EFFECTS. Scene state lists scripts[] (every saved behavior, by index + explanation) and objects[] (every game object). When the user asks to fix/change/remove something you scripted — e.g. 'fix the green panel', 'make it expand only when clicked', 'make the panel a real game object not a script' — LOCATE it in scripts[]/objects[], remove the offending behavior with remove_script {index}, then re-create it correctly with run_script (tightly-scoped handlers) or as a proper object. Confirm honestly once done; never say it's outside your reach.",
       "Chain multiple tool calls for multi-step requests (create → position → colour). Keep spoken text short and natural — the user hears it.",
       "When asked for an object that fits a vibe, turn it into a specific Sketchfab query (material+object+style), import the best match, name it, and place it well. Offer an alternative if it feels off.",
@@ -404,13 +405,26 @@ export class WorldAgent {
     } catch (e) { return `error: ${e.message}`; }
   }
 
-  /** Run one natural-language command. Loops through Claude tool calls. */
-  async command(text) {
-    if (!text || !text.trim()) return;
+  /** Convert a data: URL (screenshot / uploaded sketch) into an Anthropic image block. */
+  static _imageBlock(dataURL) {
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(dataURL || ''));
+    return m ? { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } } : null;
+  }
+
+  /** Run one natural-language command, optionally with attached images (screenshots of
+   *  the live view and/or a hand-drawn sketch/plan the user wants you to build to).
+   *  Loops through Claude tool calls. */
+  async command(text, images = []) {
+    const imgBlocks = (Array.isArray(images) ? images : []).map(WorldAgent._imageBlock).filter(Boolean);
+    if ((!text || !text.trim()) && !imgBlocks.length) return;
     if (this.busy) return;
     this.busy = true;
     const guide = await this._loadGuide();
-    const messages = [{ role: 'user', content: text }];
+    // Images first, then the text — so the model reads the picture, then the instruction.
+    const userContent = imgBlocks.length
+      ? [...imgBlocks, ...(text && text.trim() ? [{ type: 'text', text }] : [])]
+      : text;
+    const messages = [{ role: 'user', content: userContent }];
     const isBuild = this.mode === 'build';
     const maxTurns = isBuild ? 16 : 6;          // build agent runs long multi-step briefs to completion
     const maxTokens = isBuild ? 8000 : 1024;    // room to plan + chain many tool calls

@@ -373,6 +373,10 @@ video.h{display:none}
     color:#f0c25a;border-radius:8px;padding:8px 10px;cursor:pointer;font-family:inherit;font-size:11px;white-space:nowrap">🛠 BUILD</button>
   <button id="micBtn" title="toggle voice" style="background:rgba(40,60,100,.4);border:1px solid rgba(80,140,220,.3);
     color:#9bf;border-radius:8px;padding:8px 11px;cursor:pointer;font-family:inherit;font-size:13px">🎤</button>
+  <button id="shotBtn" title="attach a screenshot of the current view for the agent to read" style="background:rgba(40,60,100,.4);border:1px solid rgba(80,140,220,.3);
+    color:#9bf;border-radius:8px;padding:8px 10px;cursor:pointer;font-family:inherit;font-size:13px">📷</button>
+  <button id="imgBtn" title="attach a sketch / plan / image from your device" style="background:rgba(40,60,100,.4);border:1px solid rgba(80,140,220,.3);
+    color:#9bf;border-radius:8px;padding:8px 10px;cursor:pointer;font-family:inherit;font-size:13px">🖼</button>
   <input id="aiInput" placeholder="ask the world…  e.g. take me to the stairs"
     style="flex:1;background:rgba(20,24,34,.8);border:1px solid rgba(80,140,220,.25);color:#cce;
     border-radius:8px;padding:9px 12px;font-family:inherit;font-size:13px;outline:none">
@@ -381,6 +385,11 @@ video.h{display:none}
   <button id="deiBtn" title="Runtime DEI — live scene scripting console (with AI assist)" style="background:rgba(12,30,22,.7);
     border:1px solid rgba(73,231,134,.4);color:#5dff9b;border-radius:8px;padding:9px 11px;cursor:pointer;font-family:inherit;font-size:13px;white-space:nowrap">&lt;/&gt; DEI</button>
 </div>
+<!-- Attached images (screenshots / sketches) queued for the next AI message. -->
+<div id="aiAttach" style="position:fixed;bottom:62px;left:50%;transform:translateX(-50%);z-index:31;
+  display:none;gap:6px;align-items:center;background:rgba(8,10,16,.72);padding:6px 8px;border-radius:10px;
+  backdrop-filter:blur(8px);border:1px solid rgba(73,231,134,.35)"></div>
+
 <!-- Transient action signals (selected / locked / …) beside the OBJECTS panel. -->
 <div id="flash"></div>
 
@@ -789,12 +798,42 @@ function setAgentMode(mode, announce) {
   }
 }
 
+// Images (screenshots / sketches) the user has attached for the NEXT AI message.
+let aiImages = [];
+function renderAttach() {
+  const strip = document.getElementById('aiAttach');
+  if (!strip) return;
+  strip.innerHTML = '';
+  strip.style.display = aiImages.length ? 'flex' : 'none';
+  aiImages.forEach((src, i) => {
+    const wrap = document.createElement('div'); wrap.style.cssText = 'position:relative;line-height:0';
+    const im = document.createElement('img'); im.src = src;
+    im.style.cssText = 'height:48px;border-radius:6px;border:1px solid rgba(73,231,134,.45);display:block';
+    const x = document.createElement('span'); x.textContent = '✕'; x.title = 'remove';
+    x.style.cssText = 'position:absolute;top:-7px;right:-7px;width:17px;height:17px;border-radius:50%;background:#1a1f1c;' +
+      'color:#fff;font-size:10px;display:grid;place-items:center;cursor:pointer;border:1px solid rgba(73,231,134,.5)';
+    x.onclick = () => { aiImages.splice(i, 1); renderAttach(); };
+    wrap.appendChild(im); wrap.appendChild(x); strip.appendChild(wrap);
+  });
+}
+function attachImage(src, note) { if (src) { aiImages.push(src); renderAttach(); flash(note); } }
+
 function wireAIBar() {
   const input = document.getElementById('aiInput');
-  const send = () => { const v = input.value; input.value = ''; if (v.trim()) { sayAI(v, 'you'); agent.command(v); } };
+  const send = () => {
+    const v = input.value; input.value = '';
+    if (!v.trim() && !aiImages.length) return;
+    const imgs = aiImages.slice(); aiImages = []; renderAttach();
+    sayAI((v.trim() || '(see attached)') + (imgs.length ? '  [📎 ' + imgs.length + ' image' + (imgs.length > 1 ? 's' : '') + ']' : ''), 'you');
+    if (imgs.length && agentMode !== 'build') setAgentMode('build', true);   // vision → max-capability build agent
+    agent.command(v, imgs);
+  };
   document.getElementById('aiSend').addEventListener('click', send);
   document.getElementById('modeBtn').addEventListener('click', () => setAgentMode(agentMode === 'build' ? 'converse' : 'build', true));
   input.addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
+  // 📷 attach a screenshot of the live view · 🖼 attach a sketch/plan from the device
+  document.getElementById('shotBtn').addEventListener('click', () => attachImage(captureThumb(), '📷 view attached — tell the agent what to do with it'));
+  document.getElementById('imgBtn').addEventListener('click', async () => attachImage(await pickImageDataURL(), '🖼 image attached — describe what to build from it'));
   document.getElementById('micBtn').addEventListener('click', async () => {
     const btn = document.getElementById('micBtn');
     if (!voiceOn) {
