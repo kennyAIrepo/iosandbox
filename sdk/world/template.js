@@ -82,6 +82,8 @@ export class WorldTemplate {
     this.editor = null;           // ObjectEditor (gizmo selection) — set by the host after creation
     this._animations = new Map(); // id → managed animation { tick, base, spec } (stoppable + revertible)
     this.surfaceHit = null;       // live mouse-on-mesh hit from SurfaceTracer { point, normal, id }
+    this.sketches = [];           // user-drawn neon directional sketches the AI reads as spatial directives
+    this._sketchId = 0;
     this.gridSelection = null;    // current 3D-grid pick (dots/path/surface/volume) for the AI
     this.sel = null;              // SelectionManager (spatial/surface marking)
     this._skyLocked = false;      // lock toggles — a locked object can't be moved/scaled/edited until unlocked
@@ -1424,6 +1426,10 @@ export class WorldTemplate {
       // Where the user is pointing on a real mesh surface (Surface Trace on): exact
       // hit point + surface normal + the object's id. Treat as 'here' for placement.
       surfaceHit: this.surfaceHit || null,
+      // Neon directional sketches the user drew on the scene to direct you (where + what):
+      // each has world points, centre, surface normal, on-surface size, the surface's id,
+      // and a coarse shape (rectangle/circle/line/freeform). Act on the exact region.
+      sketches: this.sketches,
       objects: this.listObjects(),
       // Saved BEHAVIORS (run_script snippets) — so the AI can SEE every scripted effect it
       // made (animations, panels, interactions) and fix/remove them by index on request.
@@ -1443,4 +1449,19 @@ export class WorldTemplate {
     this.scripts = this.scripts.filter(s => !String(s.code || '').includes(marker));
     return before - this.scripts.length;
   }
+
+  // ── AI DIRECTIONAL SKETCHES ───────────────────────────────────────────────────
+  // Neon guide-lines the user draws on a surface to TELL the agent where/what to change
+  // (a rectangle on a wall = "make a door/window here"; a circle = "put a portal here").
+  // Each carries its world geometry + a coarse shape class so the agent acts on the exact
+  // region. registerSketch returns an id; the host also draws the line + persists it.
+  registerSketch(rec = {}) {
+    const id = 'sketch_' + (++this._sketchId);
+    this.sketches.push({ id, color: rec.color || '#39ff5a', shape: rec.shape || 'freeform',
+      closed: !!rec.closed, surfaceId: rec.surfaceId || null, center: rec.center || null,
+      normal: rec.normal || null, size: rec.size || null, points: rec.points || [], note: rec.note || '' });
+    return id;
+  }
+  removeSketch(id) { const n = this.sketches.length; this.sketches = this.sketches.filter(s => s.id !== id); return n !== this.sketches.length; }
+  clearSketches() { const n = this.sketches.length; this.sketches = []; return n; }
 }

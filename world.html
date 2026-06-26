@@ -193,7 +193,8 @@ video.h{display:none}
   <span class="gbtn" id="gbGrid" title="show / hide grid">▦</span>
   <span class="gbtn" id="gbTrace" title="surface trace — mouse rides the real mesh surface of any model (precise placement / painting)">⊹ trace</span>
   <span class="gbtn" id="gbPaint" title="paint / graffiti — drag your cursor on any wall, floor or object; press harder for a thicker stroke (pen/touch)">🖌 paint</span>
-  <span class="gbtn" id="gbErase" title="eraser — click or drag over any painted stroke to remove it">🧽 erase</span>
+  <span class="gbtn" id="gbSketch" title="AI sketch — draw neon directional lines on a surface to TELL the build agent where & what to change (e.g. a rectangle on a wall → 'make a door here'). The agent reads your sketch's exact spot, surface & shape.">✎ AI sketch</span>
+  <span class="gbtn" id="gbErase" title="eraser — click or drag over any painted stroke or AI sketch to remove it">🧽 erase</span>
   <input id="paintColor" type="color" value="#39ff5a" title="brush colour"
     style="width:24px;height:24px;padding:0;border:1px solid rgba(73,231,134,.4);border-radius:6px;background:none;cursor:pointer;vertical-align:middle">
   <input id="paintSize" type="range" min="0.04" max="0.6" step="0.02" value="0.16" title="brush size"
@@ -603,7 +604,7 @@ document.getElementById('modeOpts').addEventListener('click', e => {
 });
 
 let hope, world, nav, embody, agent, voice, manip, editor, grid, tracer, running = false;
-let traceOn = false, paintOn = false, eraseOn = false;
+let traceOn = false, paintOn = false, eraseOn = false, sketchOn = false, _drawMode = 'paint';
 let gridShown = false, jumpMode = false, gridMode = 'off', camOn = true;   // grid hidden by default on spawn
 
 // Reflect the camera/gesture-tracking toggle state on the corner button.
@@ -1094,13 +1095,25 @@ let _stroke = null, _strokeN = 0, _lastPaint = null, _graffitiSeq = 0;
 
 function togglePaint(on) {
   paintOn = !!on;
-  if (paintOn && eraseOn) toggleErase(false);
+  if (paintOn) { if (eraseOn) toggleErase(false); if (sketchOn) toggleSketch(false); _drawMode = 'paint'; }
   document.getElementById('gbPaint').classList.toggle('gon', paintOn);
   if (paintOn) {
     traceOn = true; tracer.setEnabled(true); document.getElementById('gbTrace').classList.add('gon');
     tracer.setPainting(true); refreshEditor();
     flash('🖌 paint ON — drag on a wall / floor / object to brush it. Press harder = thicker (pen/touch). Right-drag still looks.');
-  } else { tracer.setPainting(false); refreshEditor(); flash('paint off'); }
+  } else if (!sketchOn) { tracer.setPainting(false); refreshEditor(); flash('paint off'); }
+}
+// AI directional sketch: draw neon-green guide lines on a surface that the BUILD AGENT
+// reads as spatial directives (where + what to change). Same stroke machinery as paint.
+function toggleSketch(on) {
+  sketchOn = !!on;
+  if (sketchOn) { if (eraseOn) toggleErase(false); if (paintOn) togglePaint(false); _drawMode = 'sketch'; }
+  document.getElementById('gbSketch').classList.toggle('gon', sketchOn);
+  if (sketchOn) {
+    traceOn = true; tracer.setEnabled(true); document.getElementById('gbTrace').classList.add('gon');
+    tracer.setPainting(true); refreshEditor();
+    flash('✎ AI sketch ON — draw a line / rectangle / circle on a surface, then tell the build agent what that spot should become.');
+  } else if (!paintOn) { tracer.setPainting(false); refreshEditor(); flash('AI sketch off'); }
 }
 function toggleErase(on) {
   eraseOn = !!on;
@@ -1120,6 +1133,7 @@ function _brushRadius(hit) {
   return base * (0.45 + p * 1.5);
 }
 function paintStart() {
+  if (_drawMode === 'sketch') return sketchStart();
   _stroke = new hope.THREE.Group(); _stroke.name = 'graffiti';
   _stroke.userData.strokeId = 'g' + Date.now().toString(36) + (_graffitiSeq++);
   hope.scene.add(_stroke); _strokeN = 0; _lastPaint = null;
@@ -1134,6 +1148,7 @@ function _stampDisc(point, normal, radius, col) {
   _stroke.add(disc); _strokeN++;
 }
 function paintDab(hit) {
+  if (_drawMode === 'sketch') return sketchMove(hit);
   if (!_stroke) paintStart();
   const T = hope.THREE;
   const col = document.getElementById('paintColor').value || '#39ff5a';
@@ -1155,6 +1170,7 @@ function paintDab(hit) {
   _lastPaint = { point: pt, normal: nm };
 }
 function paintEnd() {
+  if (_drawMode === 'sketch') return sketchEnd();
   if (_stroke && _strokeN) {
     const sid = _stroke.userData.strokeId;
     const dabs = _stroke.children.map(d => ({
@@ -1189,7 +1205,99 @@ function eraseAt(hit) {
     a.mesh.traverse(o => { if (o.isMesh) { o.getWorldPosition(wp); if (wp.distanceTo(P) <= er) near = true; } });
     if (near) { world.deleteObject(a.id); if (sid) world.removeScriptsByMarker(sid); removed++; }
   }
-  if (removed) flash('🧽 erased ' + removed + ' paint stroke' + (removed > 1 ? 's' : ''));
+  // also erase AI directional sketches near the cursor (registry + object + script)
+  for (const s of world.sketches.slice()) {
+    const pts = s.points || [];
+    const near = (s.center && new T.Vector3(s.center[0], s.center[1], s.center[2]).distanceTo(P) <= er * 1.6)
+      || pts.some(p => new T.Vector3(p[0], p[1], p[2]).distanceTo(P) <= er * 1.6);
+    if (near) {
+      world.removeSketch(s.id);
+      const a = world.assets.find(x => x.mesh && x.mesh.userData && x.mesh.userData.sketchId === s.id);
+      if (a) { const sid = a.mesh.userData.strokeId; world.deleteObject(a.id); if (sid) world.removeScriptsByMarker(sid); }
+      removed++;
+    }
+  }
+  if (removed) flash('🧽 erased ' + removed + ' stroke' + (removed > 1 ? 's' : ''));
+}
+
+// ── AI DIRECTIONAL SKETCH ─────────────────────────────────────────────────────
+// A neon line the user draws on a surface to direct the build agent. Captured with its
+// world points, centre, surface normal, on-surface size and a coarse shape, registered in
+// world.sketches (which the agent reads), drawn as a selectable/erasable neon tube, and
+// recorded as a rebuild script so it persists and re-registers on reload.
+let _sk = null;
+function sketchStart() { _sk = { pts: [], normals: [], sid: 's' + Date.now().toString(36) + (_graffitiSeq++), line: null }; }
+function sketchMove(hit) {
+  if (!_sk) sketchStart();
+  const p = hit.point.clone().addScaledVector(hit.normal, 0.02);
+  const last = _sk.pts[_sk.pts.length - 1];
+  if (last && p.distanceTo(last) < 0.04) return;       // downsample
+  _sk.pts.push(p); _sk.normals.push(hit.normal.clone());
+  const T = hope.THREE;
+  if (_sk.line) { hope.scene.remove(_sk.line); _sk.line.geometry.dispose(); }
+  if (_sk.pts.length >= 2) {
+    _sk.line = new T.Line(new T.BufferGeometry().setFromPoints(_sk.pts),
+      new T.LineBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.95, depthTest: false }));
+    _sk.line.renderOrder = 997; hope.scene.add(_sk.line);
+  }
+}
+function _sketchBasis(normal) {
+  const T = hope.THREE; let up = new T.Vector3(0, 1, 0);
+  if (Math.abs(normal.dot(up)) > 0.9) up = new T.Vector3(1, 0, 0);
+  const u = new T.Vector3().crossVectors(up, normal).normalize();
+  const v = new T.Vector3().crossVectors(normal, u).normalize();
+  return { u, v };
+}
+function _classifySketch(pts, normals) {
+  const T = hope.THREE;
+  const center = new T.Vector3(); pts.forEach(p => center.add(p)); center.divideScalar(pts.length);
+  const normal = new T.Vector3(); normals.forEach(n => normal.add(n)); normal.normalize();
+  const { u, v } = _sketchBasis(normal);
+  const p2 = pts.map(p => { const d = p.clone().sub(center); return [d.dot(u), d.dot(v)]; });
+  let minx = 1e9, maxx = -1e9, miny = 1e9, maxy = -1e9;
+  p2.forEach(([x, y]) => { minx = Math.min(minx, x); maxx = Math.max(maxx, x); miny = Math.min(miny, y); maxy = Math.max(maxy, y); });
+  const w = maxx - minx, h = maxy - miny, diag = Math.hypot(w, h) || 1;
+  const closed = pts[0].distanceTo(pts[pts.length - 1]) < diag * 0.28;
+  const radii = p2.map(([x, y]) => Math.hypot(x, y)); const rm = radii.reduce((a, b) => a + b, 0) / radii.length;
+  const rvar = Math.sqrt(radii.reduce((a, r) => a + (r - rm) * (r - rm), 0) / radii.length) / (rm || 1);
+  let shape;
+  if (closed) shape = (rvar < 0.22 && Math.abs(w - h) / Math.max(w, h) < 0.35) ? 'circle' : 'rectangle';
+  else {
+    const a = p2[0], b = p2[p2.length - 1], ab = [b[0] - a[0], b[1] - a[1]], abl2 = (ab[0] * ab[0] + ab[1] * ab[1]) || 1;
+    let dev = 0; p2.forEach(([x, y]) => { const t = ((x - a[0]) * ab[0] + (y - a[1]) * ab[1]) / abl2; const px = a[0] + t * ab[0], py = a[1] + t * ab[1]; dev = Math.max(dev, Math.hypot(x - px, y - py)); });
+    shape = dev < diag * 0.12 ? 'line' : 'freeform';
+  }
+  const step = Math.max(1, Math.floor(pts.length / 12));
+  const points = pts.filter((_, i) => i % step === 0).map(p => p.toArray().map(n => +n.toFixed(2)));
+  return { shape, closed, center: center.toArray().map(n => +n.toFixed(2)), normal: normal.toArray().map(n => +n.toFixed(2)), size: [+w.toFixed(2), +h.toFixed(2)], points };
+}
+function _buildSketchTube(pts, sid, sketchId) {
+  const T = hope.THREE;
+  const curve = new T.CatmullRomCurve3(pts);
+  const mesh = new T.Mesh(new T.TubeGeometry(curve, Math.max(8, pts.length * 2), 0.03, 6, false),
+    new T.MeshBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.95, depthTest: false }));
+  mesh.renderOrder = 997;
+  const grp = new T.Group(); grp.name = 'ai-sketch'; grp.userData.strokeId = sid; grp.userData.sketchId = sketchId;
+  grp.add(mesh); hope.scene.add(grp); return grp;
+}
+function sketchEnd() {
+  if (!_sk || _sk.pts.length < 2) { if (_sk && _sk.line) hope.scene.remove(_sk.line); _sk = null; return; }
+  const meta = _classifySketch(_sk.pts, _sk.normals);
+  meta.surfaceId = (world.surfaceHit && world.surfaceHit.id) || null;
+  const sketchId = world.registerSketch(meta);
+  const grp = _buildSketchTube(_sk.pts, _sk.sid, sketchId);
+  world.adopt(grp, { label: 'ai-sketch ' + meta.shape });
+  // Persist: rebuild the tube AND re-register the directive on reload (tagged by sid).
+  const pced = _sk.pts.map(p => p.toArray().map(n => +n.toFixed(3)));
+  const code = "const _T=THREE,_p=" + JSON.stringify(pced) + ".map(a=>new _T.Vector3(a[0],a[1],a[2]));"
+    + "const _c=new _T.CatmullRomCurve3(_p),_m=new _T.Mesh(new _T.TubeGeometry(_c,Math.max(8,_p.length*2),0.03,6,false),"
+    + "new _T.MeshBasicMaterial({color:0x39ff5a,transparent:true,opacity:0.95,depthTest:false}));_m.renderOrder=997;"
+    + "const _g=new _T.Group();_g.name='ai-sketch';_g.userData.strokeId='" + _sk.sid + "';_g.add(_m);scene.add(_g);"
+    + "_g.userData.sketchId=world.registerSketch(" + JSON.stringify(meta) + ");";
+  world.recordScript(code, 'ai-sketch ' + meta.shape + ' ' + _sk.sid);
+  if (_sk.line) { hope.scene.remove(_sk.line); _sk.line.geometry.dispose(); }
+  _sk = null;
+  sayAI('✎ I see your ' + meta.shape + ' sketch on the surface — tell me what to make there (e.g. "make a door", "turn this into a portal").', 'sys');
 }
 
 // ── 3D grid canvas: show/hide, modes, dot-picking, coordinate readout ──
@@ -1202,12 +1310,14 @@ function wireGridCanvas() {
   document.getElementById('gbTrace').addEventListener('click', () => {
     traceOn = !traceOn; tracer.setEnabled(traceOn);
     document.getElementById('gbTrace').classList.toggle('gon', traceOn);
-    if (!traceOn && paintOn) togglePaint(false);   // trace off ⇒ paint off
-    if (!traceOn && eraseOn) toggleErase(false);   // trace off ⇒ erase off
+    if (!traceOn && paintOn) togglePaint(false);    // trace off ⇒ paint off
+    if (!traceOn && sketchOn) toggleSketch(false);  // trace off ⇒ AI sketch off
+    if (!traceOn && eraseOn) toggleErase(false);    // trace off ⇒ erase off
     flash(traceOn ? '⊹ surface trace ON — mouse rides the mesh; the ring shows the exact hit point'
                   : 'surface trace off');
   });
   document.getElementById('gbPaint').addEventListener('click', () => togglePaint(!paintOn));
+  document.getElementById('gbSketch').addEventListener('click', () => toggleSketch(!sketchOn));
   document.getElementById('gbErase').addEventListener('click', () => toggleErase(!eraseOn));
   bar.addEventListener('click', e => { const b = e.target.closest('[data-gm]'); if (b) setGridMode(b.dataset.gm); });
   document.getElementById('gbClear').addEventListener('click', () => {
