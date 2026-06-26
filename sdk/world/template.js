@@ -469,7 +469,10 @@ export class WorldTemplate {
           this.bounds.min.toArray().map(n => n.toFixed(1)), '→',
           this.bounds.max.toArray().map(n => n.toFixed(1)),
           '| spawn', Object.values(this.cfg.spawn).map(n => n.toFixed(1)));
-        finish();
+        // Success path: `settled` was set true above to beat the timeout, so finish()
+        // would no-op here — resolve() must be called directly or boot() hangs forever.
+        clearTimeout(timer);
+        resolve();
       }, undefined, (err) => {
         clearTimeout(timer);
         console.warn('[world] model load failed, using empty floor:', err);
