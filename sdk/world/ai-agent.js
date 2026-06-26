@@ -143,6 +143,9 @@ const TOOLS = [
       all: { type: 'boolean', description: 'stop every animation in the scene' },
       revert: { type: 'boolean', description: 'snap back to the original transform (default true)' } } } },
 
+  { name: 'remove_script', description: 'Delete a saved behavior/script by its index (see scripts[] in scene state) so it stops replaying — use to remove a buggy or unwanted scripted effect (e.g. a misbehaving panel). Its already-running effects clear on the next world load; to also undo it NOW, follow up with run_script that removes/hides what it created.',
+    input_schema: { type: 'object', properties: { index: { type: 'number', description: 'the scripts[] index to remove' }, all: { type: 'boolean', description: 'remove every saved script' } } } },
+
   // ── Live frontend scripting (escape hatch for anything the tools can't express) ──
   { name: 'run_script', description: 'Run a small JavaScript snippet to make a custom LIVE change the other tools cannot express — wire a custom interaction, tweak materials/lights, batch-edit objects. Do NOT use this to ANIMATE — use animate_object (a run_script loop cannot be stopped). Your snippet body runs with these in scope: world (WorldTemplate), scene, camera, THREE, hope (the SDK), nav. You may use await. Return a short status string. Keep it small, reversible, and only when no dedicated tool fits.',
     input_schema: { type: 'object', properties: { code: { type: 'string', description: 'JS to execute (function body; may use await; can return a string)' }, explanation: { type: 'string', description: 'one line on what it does' } }, required: ['code'] } },
@@ -256,7 +259,9 @@ export class WorldAgent {
       "Every object has a short recall NAME (label) — imports are named after what was searched (e.g. 'dragon'). Act on an object by passing its label instead of its id (e.g. scale_object {label:'dragon', factor:2}); use select_in_view for 'this/that', or get_scene to read all labels. rename_object gives something a friendlier name.",
       "TARGET EXACTLY WHAT THE USER MEANS — never edit the wrong object. LIVE STATE has `selectedObject` = the object the user currently has SELECTED (clicked, gizmo on it). RULES: (1) If the user says 'this/that/it/the selected one' OR gives no clear object, act on `selectedObject` — pass NO id/label so the tool defaults to the selection. (2) If they name an object, pass that exact label; if `selectedObject` is set and matches what they named, you may pass its id from state to be certain. (3) NEVER fall back to 'the most recent object' when the user has something selected — operate on the selection. (4) If you genuinely can't tell which object they mean and nothing is selected, ASK rather than guess. When the user selects the pedestal and says 'change its colour/texture', you change the PEDESTAL — not the sculpture.",
       "ANIMATION — use animate_object / stop_animation ONLY; NEVER animate inside run_script. A run_script frame loop cannot be stopped, so 'stop'/'revert' would silently fail. animate_object registers a managed spin/bob/pulse/orbit that remembers the start transform. To STOP: stop_animation {revert:false} freezes it where it is; 'stop and revert'/'undo the rotation'/'put it back' → stop_animation {revert:true} (the default) snaps it to its original transform. 'stop everything' → stop_animation {all:true}. After stopping, confirm honestly — only say it stopped because the tool returned success.",
-      "EVERYTHING YOU CREATE IS A REAL GAME OBJECT. Objects from create_object/import_*/place_* are auto-registered and appear in the object menu — selectable, movable, editable. If you build anything in run_script (a text label, a sign/panel in front of a sculpture, a custom mesh/group), you MUST register it so it is selectable and movable too: call `world.adopt(obj, {label:'plaque'})` (or `world.adopt(group, {label})`) on the THREE.Object3D you added to the scene. Never leave AI-made content as an un-selectable orphan — always adopt it with a clear label.",
+      "EVERYTHING YOU CREATE IS A REAL GAME OBJECT — and you can SEE and EDIT all of it. Objects from create_object/import_*/place_* are auto-registered. ANYTHING you build in run_script (a text label, a sign/panel, a custom mesh/group) is ALSO auto-registered the moment your snippet adds it to `scene` — it appears in objects[], selectable and movable, with no extra step (you may still call world.adopt(obj,{label}) to set a nice label). So you ALWAYS have access to AI-made content; never claim you can't see or reach something the scene built.",
+      "BUILD IN-WORLD CONTENT AS 3D GAME OBJECTS, NOT DOM OVERLAYS. A sign/plaque/panel should be a THREE mesh placed in the scene (it becomes a real, selectable, movable game object). Do NOT build it as a full-screen HTML/DOM overlay, and NEVER attach a page-wide or document-level click handler — that hijacks clicks meant for other UI (the user couldn't even press Publish because a panel expanded on every click). If a panel must expand/collapse, the click target must be ONLY that panel's own mesh/element — tightly scoped, nothing else.",
+      "YOU CAN FIX YOUR OWN SCRIPTED EFFECTS. Scene state lists scripts[] (every saved behavior, by index + explanation) and objects[] (every game object). When the user asks to fix/change/remove something you scripted — e.g. 'fix the green panel', 'make it expand only when clicked', 'make the panel a real game object not a script' — LOCATE it in scripts[]/objects[], remove the offending behavior with remove_script {index}, then re-create it correctly with run_script (tightly-scoped handlers) or as a proper object. Confirm honestly once done; never say it's outside your reach.",
       "Chain multiple tool calls for multi-step requests (create → position → colour). Keep spoken text short and natural — the user hears it.",
       "When asked for an object that fits a vibe, turn it into a specific Sketchfab query (material+object+style), import the best match, name it, and place it well. Offer an alternative if it feels off.",
       (this.mode === 'build' ? "── BUILD PLAYBOOK ──\n" + BUILD_KNOWLEDGE + "\n\n" : "") + "── DESIGN GUIDE ──\n" + (guide || FALLBACK_GUIDE),
@@ -370,6 +375,10 @@ export class WorldAgent {
         case 'set_weather':      w.setWeather(input.kind); return `weather: ${input.kind}`;
         case 'make_scene_editable': w.sceneIsObject = !!input.editable; return input.editable ? 'the world is now a game object — click it or transform it' : 'the world is a fixed backdrop again';
         case 'transform_scene':  { w.sceneIsObject = true; return w.setSceneTransform({ scaleFactor: input.scaleFactor, rotationDeg: input.rotationDegY != null ? { y: input.rotationDegY } : undefined, position: input.position }) ? 'transformed the whole environment' : 'no scene model loaded'; }
+        case 'remove_script': {
+          if (input.all) { const n = w.clearScripts(); return n ? `removed all ${n} script${n > 1 ? 's' : ''} (reload to fully clear their effects)` : 'no scripts to remove'; }
+          return w.removeScript(input.index) ? `removed script ${input.index} (reload to fully clear its effect, or run_script to undo it now)` : 'no script at that index';
+        }
         case 'run_script': {
           // Live frontend edit hatch. Runs in the user's own browser/session against
           // the live scene — the in-world equivalent of an engine script console.
@@ -377,11 +386,17 @@ export class WorldAgent {
           if (!this.env) return 'no scene environment wired for scripting';
           const { scene, camera, THREE, hope } = this.env;
           try {
+            const before = w.sceneChildrenSnapshot();    // capture scene before so new objects can be auto-adopted
             const fn = new Function('world', 'scene', 'camera', 'THREE', 'hope', 'nav',
               `return (async () => { ${input.code}\n })();`);
             const r = await fn(w, scene, camera, THREE, hope, nav);
+            // Auto-register ANYTHING the script added to the scene (signs, text, panels, meshes)
+            // as a real game object — selectable, movable, and visible to you in the menu.
+            const adopted = w.adoptNewChildren(before);
             w.recordScript(input.code, input.explanation);   // persist so it saves + replays with the world
-            return 'ran' + (input.explanation ? ` (${input.explanation})` : '') + (r !== undefined ? `: ${String(r).slice(0, 200)}` : '');
+            return 'ran' + (input.explanation ? ` (${input.explanation})` : '')
+                 + (adopted.length ? ` — added ${adopted.length} object${adopted.length > 1 ? 's' : ''} to the menu (${adopted.join(', ')})` : '')
+                 + (r !== undefined ? `: ${String(r).slice(0, 200)}` : '');
           } catch (e) { return 'script error: ' + e.message; }
         }
         default: return `unknown tool ${name}`;

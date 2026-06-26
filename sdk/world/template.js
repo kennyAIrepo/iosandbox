@@ -925,6 +925,31 @@ export class WorldTemplate {
     return this._registerAsset(obj, 'import', { label: meta.label || obj.name || 'object', source: meta.source || 'ai' }).id;
   }
 
+  /** Snapshot the scene's top-level children — pair with adoptNewChildren() around a script. */
+  sceneChildrenSnapshot() { return new Set(this.scene ? this.scene.children : []); }
+
+  /**
+   * AUTO-ADOPT: after a script runs, register any mesh-bearing object it parented under
+   * the scene as a real game object — so EVERYTHING the AI conjures (a neon sign, a text
+   * panel, a custom mesh) shows in the object menu and is selectable/movable, with NO
+   * need for the script to call adopt() itself. System objects (lights, camera, the
+   * asset layer, the world model, the sky, gizmos, helpers) are skipped.
+   */
+  adoptNewChildren(beforeSet) {
+    if (!this.scene) return [];
+    const out = [];
+    for (const o of [...this.scene.children]) {
+      if (beforeSet && beforeSet.has(o)) continue;                 // existed before the script
+      if (o === this.assetLayer || o === this.model || o === this._skybox) continue;
+      if (o.isLight || o.isCamera || o.isTransformControls || /TransformControls|BoxHelper|Helper/.test(o.type || '')) continue;
+      if (o.userData && o.userData.id) continue;                   // already a registered asset
+      let hasMesh = false; o.traverse(c => { if (c.isMesh) hasMesh = true; });
+      if (!hasMesh) continue;                                      // skip empty/helper groups
+      out.push(this.adopt(o, { label: o.name || 'object', source: 'ai' }));
+    }
+    return out;
+  }
+
   /**
    * MESH COLLISION for hands (interaction ⇄ world). Register every mesh of the
    * object as a BVH collider in the shared interaction registry, so the holo
@@ -1156,7 +1181,11 @@ export class WorldTemplate {
         obj.position.copy(pos);
 
         this._ensureAssetLayer().add(obj);
-        const asset = this._registerAsset(obj, 'import', { label: opts.label || this._labelFromURL(url), source: 'import', url, blob: opts.blob || null });
+        // A blob: URL is an in-memory handle valid ONLY in this session — it dies on
+        // reload/elsewhere. NEVER persist it; keep the blob bytes (opts.blob) instead so
+        // save/publish can re-host the real model. (This is what made uploads "disappear".)
+        const persistUrl = (url && !String(url).startsWith('blob:')) ? url : null;
+        const asset = this._registerAsset(obj, 'import', { label: opts.label || this._labelFromURL(url), source: 'import', url: persistUrl, blob: opts.blob || null });
         this._lastImport = asset.id;
         resolve(asset.id);
       }, undefined, (err) => reject(err));
@@ -1237,14 +1266,20 @@ export class WorldTemplate {
    */
   snapshot() {
     const r3 = (n) => +n.toFixed(3), r1 = (n) => +n.toFixed(1);
-    return this._assets.map((a) => {
+    const cleanUrl = (u) => (u && !String(u).startsWith('blob:')) ? u : null;   // NEVER persist a session-only blob: URL
+    return this._assets
+      // Procedural objects the AI built in run_script (source 'ai', no hostable URL and no
+      // bytes) are re-created by their saved script on load — don't ALSO save them as
+      // objects, or they'd come back as phantom boxes (no url/ptype to rebuild from).
+      .filter(a => !(a.source === 'ai' && !cleanUrl(a.url) && !(a.blob instanceof Blob)))
+      .map((a) => {
       const m = a.mesh, isImport = a.ptype === 'import';
       const mat = !isImport && m.material && m.material.color ? '#' + m.material.color.getHexString() : null;
       return {
         id: a.id,
         label: a.label,
         kind: isImport ? 'import' : 'primitive',
-        url: isImport ? (a.url || null) : null,
+        url: isImport ? cleanUrl(a.url) : null,
         blob: isImport ? (a.blob || null) : null,   // uploaded local GLB bytes → persist so it reloads
         ptype: isImport ? null : a.ptype,
         color: mat,
@@ -1365,6 +1400,14 @@ export class WorldTemplate {
       environment: this.getEnvironment(),
       gridSelection: this.gridSelection,
       objects: this.listObjects(),
+      // Saved BEHAVIORS (run_script snippets) — so the AI can SEE every scripted effect it
+      // made (animations, panels, interactions) and fix/remove them by index on request.
+      scripts: this.scripts.map((s, i) => ({ index: i, explanation: s.explanation || String(s.code || '').slice(0, 90) })),
     };
   }
+
+  /** Remove a saved behavior/script by index (stops it replaying on the next load). */
+  removeScript(i) { if (i == null || i < 0 || i >= this.scripts.length) return false; this.scripts.splice(i, 1); return true; }
+  /** Remove every saved behavior/script. Returns how many were cleared. */
+  clearScripts() { const n = this.scripts.length; this.scripts = []; return n; }
 }

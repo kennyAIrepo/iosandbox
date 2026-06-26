@@ -1431,8 +1431,11 @@ async function openSavedWorld(rec) {
 function replayScripts(scripts) {
   for (const s of (scripts || [])) {
     try {
+      const before = world.sceneChildrenSnapshot();
       const fn = new Function('world', 'scene', 'camera', 'THREE', 'hope', 'nav', `return (async () => { ${s.code}\n })();`);
-      fn(world, hope.scene, hope.camera, hope.THREE, hope, nav);
+      Promise.resolve(fn(world, hope.scene, hope.camera, hope.THREE, hope, nav))
+        .then(() => world.adoptNewChildren(before))     // re-register script-built objects so they're selectable after reload too
+        .catch(e => console.warn('[world] script effect failed:', e.message));
       world.recordScript(s.code, s.explanation);
     } catch (e) { console.warn('[world] script replay failed:', e.message); }
   }
@@ -1553,11 +1556,14 @@ async function doPublish(name, thumb) {
     // the saved coordinates/scale/rotation replayed from the placement JSON.
     let hosted = 0, dropped = [];
     for (const o of rec.objects) {
+      if (o.url && String(o.url).startsWith('blob:')) o.url = null;   // a session-only blob: URL is dead on reload — force a re-host from the bytes
       if (o.blob instanceof Blob && !o.url) {
         spStatus && spStatus('uploading model “' + (o.label || 'prop') + '”…');
         try { o.url = await uploadBaseToBlob(o.blob, slug + '-' + (o.label || 'prop')); o.kind = 'import'; hosted++; }
         catch { dropped.push(o.label || 'a prop'); }   // upload failed → it WON'T reload in the published copy; warn instead of silently vanishing
         o.blob = null;
+      } else if (o.kind === 'import' && !o.url && !(o.blob instanceof Blob)) {
+        dropped.push(o.label || 'a model');   // an import with neither a URL nor bytes can't reload anywhere — surface it
       }
     }
     spStatus && spStatus('publishing world data…');
