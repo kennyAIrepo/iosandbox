@@ -1773,12 +1773,10 @@ async function openSavedWorld(rec) {
     enterWorld();
     flash('opened “' + rec.name + '”');
     world.setPendingOverrides(rec.overrides);   // apply edits to AI/script objects as they're (re)created
-    restoreObjects(rec.objects).then((placed) => {
-      replayScripts(rec.scripts);
-      // Saved coordinates are authoritative — re-pin AFTER scripts so one-time build
-      // scripts can't drag objects below where they were placed, and re-apply transform
+    restoreObjects(rec.objects).then(async (placed) => {
+      await replayScripts(rec.scripts);         // sequential → stable ids → overrides match
+      // Saved coordinates are authoritative — re-pin restored objects, and re-apply transform
       // overrides so the LAST live edit to AI/script objects (a moved/tilted sign) wins.
-      // Repeat shortly after to beat any async/onFrame repositioning a script kicks off.
       const settle = () => { repinTransforms(placed); world.applyTransformOverrides(rec.overrides); };
       settle();
       setTimeout(settle, 200);
@@ -1792,15 +1790,19 @@ async function openSavedWorld(rec) {
 
 // Re-run the world's saved agent scripts (animations, custom effects) on load,
 // and re-register them so a re-save keeps them.
-function replayScripts(scripts) {
+// Replay saved behaviors STRICTLY IN ORDER — each script fully runs and registers ITS OWN
+// new objects (with its own stable marker) before the next starts. Running them concurrently
+// made the adopt() calls race, stamping unrelated objects with the wrong script's id, so
+// transform overrides never matched on reload (the sign kept reverting). Sequential = stable.
+async function replayScripts(scripts) {
   for (const s of (scripts || [])) {
     try {
       const before = world.sceneChildrenSnapshot();
       const marker = world.scriptMarker(s.code);
       const fn = new Function('world', 'scene', 'camera', 'THREE', 'hope', 'nav', `return (async () => { ${s.code}\n })();`);
-      Promise.resolve(fn(world, hope.scene, hope.camera, hope.THREE, hope, nav))
-        .then(() => world.adoptNewChildren(before, marker))     // re-register with the SAME stable id so overrides/deletes track them
+      await Promise.resolve(fn(world, hope.scene, hope.camera, hope.THREE, hope, nav))
         .catch(e => console.warn('[world] script effect failed:', e.message));
+      world.adoptNewChildren(before, marker);   // re-register ONLY this script's objects, same stable id
       world.recordScript(s.code, s.explanation);
     } catch (e) { console.warn('[world] script replay failed:', e.message); }
   }

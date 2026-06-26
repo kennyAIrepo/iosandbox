@@ -48,10 +48,13 @@ export default async function handler(req, res) {
       const { blobs } = await list({ prefix: path, limit: 1, token });
       const hit = blobs.find(b => b.pathname === path) || blobs[0];
       if (!hit) { res.status(404).json({ error: `world "${name}" not found` }); return; }
-      const r = await fetch(hit.url);
+      // Blob content is CDN-cached as immutable at hit.url, so after an OVERWRITE the same
+      // url still serves the OLD json. Cache-bust + no-store so updates are read immediately.
+      const bust = hit.url + (hit.url.includes('?') ? '&' : '?') + 'v=' + Date.now();
+      const r = await fetch(bust, { cache: 'no-store' });
       const text = await r.text();
       res.setHeader('content-type', 'application/json');
-      res.setHeader('cache-control', 'public, max-age=60');
+      res.setHeader('cache-control', 'no-store, max-age=0, must-revalidate');   // always fetch the latest published version
       res.status(200).send(text);
     } else {
       res.status(405).json({ error: 'GET or POST' });
