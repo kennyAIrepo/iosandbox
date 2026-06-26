@@ -1373,6 +1373,7 @@ function _withTimeout(p, ms, label) {
 // Re-import each saved object onto the freshly-booted base scene, with its transform.
 // A failed/expired asset URL is SKIPPED (with a timeout) so the world still opens.
 async function restoreObjects(objs) {
+  const placed = [];
   for (const o of (objs || [])) {
     let id;
     if (o.kind === 'import' && (o.url || o.blob instanceof Blob)) {
@@ -1384,12 +1385,24 @@ async function restoreObjects(objs) {
       const color = o.color ? parseInt(o.color.replace('#', ''), 16) : undefined;
       id = world.addObject(o.ptype || 'box', { color, label: o.label });
     }
-    world.setObjectTransform(id, {
+    const t = {
       position: { x: o.position[0], y: o.position[1], z: o.position[2] },
       rotationDeg: { x: o.rotationDeg[0], y: o.rotationDeg[1], z: o.rotationDeg[2] },
       scale: { x: o.scale[0], y: o.scale[1], z: o.scale[2] },
-    });
+    };
+    world.setObjectTransform(id, t);
+    placed.push({ id, t });
   }
+  return placed;
+}
+
+// Re-apply the saved transforms to restored objects. Saved coordinates are the FINAL,
+// authoritative positions (they already include whatever the build scripts did). Calling
+// this AFTER replayScripts guarantees one-time build scripts ("shape the box", "seat the
+// sculpture flush on the pedestal") can't drag objects off their saved spots on reload —
+// while their MATERIAL/behavior effects still apply. Saved coords always win.
+function repinTransforms(placed) {
+  for (const { id, t } of (placed || [])) world.setObjectTransform(id, t);
 }
 
 // Open a saved snapshot: resolve its base scene, boot, restore objects + avatar, drop in.
@@ -1419,7 +1432,15 @@ async function openSavedWorld(rec) {
     // stream in afterward in the background.
     enterWorld();
     flash('opened “' + rec.name + '”');
-    restoreObjects(rec.objects).then(() => replayScripts(rec.scripts)).catch(() => {});
+    restoreObjects(rec.objects).then((placed) => {
+      replayScripts(rec.scripts);
+      // Saved coordinates are authoritative — re-pin AFTER scripts so one-time build
+      // scripts can't drag objects below where they were placed. Re-pin again shortly
+      // after to beat any async/onFrame repositioning a script kicks off.
+      repinTransforms(placed);
+      setTimeout(() => repinTransforms(placed), 120);
+      setTimeout(() => repinTransforms(placed), 600);
+    }).catch(() => {});
   } catch (e) {
     _building = false;
     document.getElementById('bHint').textContent = 'could not open “' + rec.name + '”: ' + e.message;
