@@ -118,7 +118,7 @@ export class SurfaceTracer {
       // sensible distance into open space. Snap the target to the nearest grid node so it
       // sits exactly on the lattice. Normal faces the camera (so the cursor/blob reads in 3D).
       const meshD = (hits.length && hits[0].distance < 40) ? hits[0].distance : (this.gridDepth || 4);
-      const target = this._ray.origin.clone().addScaledVector(this._ray.direction, meshD);
+      const target = this._ray.ray.origin.clone().addScaledVector(this._ray.ray.direction, meshD);
       const node = this.grid.snapPoint(target);
       const n = this.camera.position.clone().sub(node).normalize();
       return { point: node, normal: n, object: null, id: '__grid__', onGrid: true };
