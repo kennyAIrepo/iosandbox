@@ -79,6 +79,8 @@ export class WorldTemplate {
     this.sceneIsObject = false;   // the base scene GLB is a fixed backdrop until promoted to a game object
     this.modelLabel = 'world';    // original name of the base GLB (uploaded/downloaded source), shown in the object menu
     this.scripts = [];            // agent run_script snippets, saved + replayed with the world
+    this.editor = null;           // ObjectEditor (gizmo selection) — set by the host after creation
+    this._animations = new Map(); // id → managed animation { tick, base, spec } (stoppable + revertible)
     this.gridSelection = null;    // current 3D-grid pick (dots/path/surface/volume) for the AI
     this.sel = null;              // SelectionManager (spatial/surface marking)
     this._skyLocked = false;      // lock toggles — a locked object can't be moved/scaled/edited until unlocked
@@ -602,6 +604,8 @@ export class WorldTemplate {
    *   sprint: boolean
    */
   step(dt, intent = {}) {
+    // Drive managed object animations (spin/bob/pulse/orbit) — stoppable + revertible.
+    this._tickAnimations(dt);
     // ── Apply look (absolute from navigator; falls back to deltas if provided) ──
     if (intent.yaw !== undefined)   this.yaw = intent.yaw;
     else                            this.yaw += intent.yawDelta || 0;
@@ -868,10 +872,25 @@ export class WorldTemplate {
 
   // Synthetic ids (__sky__, __scene__) are handled by the routing in the transform
   // methods below — never resolve them to a random asset via the most-recent fallback.
+  //
+  // Targeting precision: an EXPLICIT id that matches nothing returns null (so a stale/
+  // wrong id fails loudly instead of silently editing some unrelated object). Only when
+  // NO target is given (id == null) do we fall back to the user's intent — the object
+  // they currently have SELECTED in the gizmo, else the most-recently-added one.
   _find(id) {
     if (id === '__sky__' || id === '__scene__') return null;
-    return this._assets.find(a => a.id === id) || this._assets[this._assets.length - 1];
+    if (id == null) return this._selectedAsset() || this._assets[this._assets.length - 1] || null;
+    return this._assets.find(a => a.id === id) || null;
   }
+
+  /** The single object the user currently has selected with the gizmo (not the sky/world). */
+  _selectedAsset() {
+    const e = this.editor;
+    if (!e || !e.single || e.single.isScene || e.single.isSky) return null;
+    return this._assets.find(a => a.id === e.single.id) || null;
+  }
+  /** Id of the user's current gizmo selection, or null — so the AI edits what they picked. */
+  getSelectedId() { const a = this._selectedAsset(); return a ? a.id : null; }
 
   // ── ASSET REGISTRY (lightweight label + log so objects are recallable) ──
   // Every spawned/imported object flows through here: it gets a stable id, a
@@ -889,6 +908,21 @@ export class WorldTemplate {
     this._anchorSkybox();                      // new model added → sky grows/re-centres to keep surrounding everything
     console.log(`[world] +asset ${id} "${label}" (${asset.source}) — ${this._assets.length} live`);
     return asset;
+  }
+
+  /**
+   * ADOPT an arbitrary object the AI built in run_script (a text label, a sign/panel,
+   * a custom mesh or group) into the live asset registry — so it shows up in the
+   * object menu and is selectable, movable, lockable and editable like everything
+   * else. Keeps its current world transform; gives it a recall label + bbox collider.
+   * Usage inside run_script: world.adopt(myTextMesh, {label:'plaque'}).
+   */
+  adopt(obj, meta = {}) {
+    if (!obj || !obj.isObject3D) return null;
+    const layer = this._ensureAssetLayer();
+    if (obj.parent !== layer) layer.attach(obj);            // reparent but preserve world transform
+    obj.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    return this._registerAsset(obj, 'import', { label: meta.label || obj.name || 'object', source: meta.source || 'ai' }).id;
   }
 
   /**
@@ -991,7 +1025,80 @@ export class WorldTemplate {
     if (this.isLocked(id)) return false;
     if (id === '__sky__') return this.removeSkybox();
     if (id === '__scene__') return false;   // can't delete the world itself
+    this.stopAnimation(id, { revert: false });   // drop any running animation so it can't tick a freed mesh
     const a = this._find(id); if (a) { this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body); this._assets = this._assets.filter(x => x !== a); this._anchorSkybox(); } return !!a;
+  }
+
+  // ── MANAGED ANIMATIONS ──────────────────────────────────────────────────────
+  // A registry of stoppable, revertible per-object animations. Unlike a raw
+  // run_script + hope.onFrame loop (which has no handle and keeps running forever),
+  // every animation here remembers the object's ORIGINAL transform, so it can be
+  // cleanly STOPPED (frozen where it is) or REVERTED (snapped back to original).
+  // Ticked once per frame from step(); the AI drives it via animate_object/stop_animation.
+  //
+  // spec: { type:'spin'|'bob'|'pulse'|'orbit', axis:'x'|'y'|'z', speed, amplitude, radius }
+  //   spin  — rotate around `axis` at `speed` rad/s
+  //   bob   — oscillate up/down ±`amplitude` m at `speed` Hz
+  //   pulse — scale in/out by ±`amplitude` (fraction) at `speed` Hz
+  //   orbit — circle the start point at `radius` m, `speed` rad/s
+  animateObject(id, spec = {}) {
+    const a = this._find(id);
+    if (!a || a.isScene || a.isSky) return null;
+    if (this.isLocked(a.id)) return null;
+    const m = a.mesh;
+    const base = { position: m.position.clone(), quaternion: m.quaternion.clone(), scale: m.scale.clone() };
+    const type = String(spec.type || 'spin').toLowerCase();
+    const axis = ['x', 'y', 'z'].includes(String(spec.axis).toLowerCase()) ? String(spec.axis).toLowerCase() : 'y';
+    const speed = Number.isFinite(spec.speed) ? spec.speed : 1;
+    const amplitude = Number.isFinite(spec.amplitude) ? spec.amplitude
+                      : (type === 'pulse' ? 0.15 : 0.5);
+    const radius = Number.isFinite(spec.radius) ? spec.radius : 2;
+    const anim = { id: a.id, type, base, spec: { type, axis, speed, amplitude, radius }, t: 0 };
+    anim.tick = (dt) => {
+      anim.t += dt;
+      if (type === 'spin')       m.rotation[axis] += speed * dt;
+      else if (type === 'bob')   { m.position.copy(base.position); m.position.y += Math.sin(anim.t * speed * Math.PI * 2) * amplitude; }
+      else if (type === 'pulse') m.scale.copy(base.scale).multiplyScalar(1 + Math.sin(anim.t * speed * Math.PI * 2) * amplitude);
+      else if (type === 'orbit') m.position.set(base.position.x + Math.cos(anim.t * speed) * radius, base.position.y, base.position.z + Math.sin(anim.t * speed) * radius);
+      this._syncCollider(a);
+    };
+    this._animations.set(a.id, anim);
+    return a.id;
+  }
+
+  /** Stop one object's animation. revert:true (default) snaps it back to where it
+   *  started; revert:false freezes it wherever it currently is. */
+  stopAnimation(id, opts = {}) {
+    if (id == null || id === 'all' || opts.all) return this.stopAllAnimations(opts);
+    const a = this._assets.find(x => x.id === id) || this._find(id);
+    const key = a ? a.id : id;
+    const anim = this._animations.get(key);
+    if (!anim) return false;
+    this._animations.delete(key);
+    if (opts.revert !== false) this._revertAnimation(anim);
+    return true;
+  }
+  /** Stop every running animation. Returns how many were stopped. */
+  stopAllAnimations(opts = {}) {
+    let n = 0;
+    for (const anim of this._animations.values()) { if (opts.revert !== false) this._revertAnimation(anim); n++; }
+    this._animations.clear();
+    return n;
+  }
+  _revertAnimation(anim) {
+    const a = this._assets.find(x => x.id === anim.id);
+    if (!a) return;
+    a.mesh.position.copy(anim.base.position);
+    a.mesh.quaternion.copy(anim.base.quaternion);
+    a.mesh.scale.copy(anim.base.scale);
+    this._syncCollider(a);
+  }
+  isAnimating(id) { return this._animations.has(id); }
+  /** Ids of all currently animating objects (for state the AI reads). */
+  animatingIds() { return [...this._animations.keys()]; }
+  _tickAnimations(dt) {
+    if (!this._animations.size) return;
+    for (const anim of this._animations.values()) { try { anim.tick(dt); } catch { /* mesh gone */ } }
   }
 
   /** Seat an object at the absolute world centre (x,z → 0) resting on the ground,
@@ -1250,6 +1357,9 @@ export class WorldTemplate {
         locked: !!this._skyLocked,
       } : null,
       lookingAt: this.selectInView(),
+      // The object the user has SELECTED with the gizmo — the AI's DEFAULT edit target.
+      selectedObject: (() => { const a = this._selectedAsset(); return a ? { id: a.id, label: a.label } : null; })(),
+      animating: this.animatingIds(),
       selection: this.getSelection(),
       landmarks: this.getLandmarks(),
       environment: this.getEnvironment(),

@@ -41,11 +41,13 @@ video.h{display:none}
   background:rgba(0,0,0,.5);padding:6px 16px;border-radius:6px;backdrop-filter:blur(6px);
   color:#9bf;text-align:center;pointer-events:none;opacity:0;transition:opacity .4s}
 #hud.show{opacity:1}
-#legend{position:fixed;bottom:14px;left:14px;z-index:20;font-size:10px;line-height:1.7;color:#89a;
-  background:rgba(0,0,0,.45);padding:10px 14px;border-radius:8px;backdrop-filter:blur(6px);
+#legend{position:fixed;bottom:14px;left:14px;z-index:20;font-size:10px;line-height:1.7;color:#7fe6a8;
+  font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace;letter-spacing:.02em;
+  background:rgba(2,7,5,.55);padding:10px 14px;border-radius:8px;backdrop-filter:blur(6px);
+  border:1px solid rgba(73,231,134,.28);box-shadow:0 0 14px rgba(93,255,155,.12);
   opacity:0;transition:opacity .4s;max-width:260px}
 #legend.show{opacity:1}
-#legend b{color:#9bf}
+#legend b{color:#5dff9b;text-shadow:0 0 8px rgba(93,255,155,.45)}
 #debug{position:fixed;bottom:14px;right:14px;z-index:20;font-size:9px;color:rgba(120,200,160,.5);
   white-space:pre;text-align:right;pointer-events:none}
 #exitBtn{position:fixed;top:14px;right:14px;z-index:25;padding:6px 14px;background:rgba(60,30,30,.5);
@@ -188,7 +190,7 @@ video.h{display:none}
 
 <!-- Spatial grid canvas — modes -->
 <div id="gridBar">
-  <span class="gbtn gon" id="gbGrid" title="show / hide grid">▦</span>
+  <span class="gbtn" id="gbGrid" title="show / hide grid">▦</span>
   <span class="gsep"></span>
   <span class="gbtn sel" data-gm="off">navigate</span>
   <span class="gbtn" data-gm="dot">• dots</span>
@@ -584,7 +586,7 @@ document.getElementById('modeOpts').addEventListener('click', e => {
 });
 
 let hope, world, nav, embody, agent, voice, manip, editor, grid, running = false;
-let gridShown = true, jumpMode = false, gridMode = 'off', camOn = true;
+let gridShown = false, jumpMode = false, gridMode = 'off', camOn = true;   // grid hidden by default on spawn
 
 // Reflect the camera/gesture-tracking toggle state on the corner button.
 function refreshCamBtn() {
@@ -713,10 +715,12 @@ async function boot() {
   // Pointer/gizmo editor — click-select, XYZ gizmo, box-select groups (CREATE mode).
   // Selection signals (selected / deselected / locked / gizmo) go to flash, not chat.
   editor = new ObjectEditor({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world, onSay: flash, onSelect: (n) => onSelectionChanged(n) });
+  world.editor = editor;   // let the AI read the gizmo selection so it edits exactly what the user picked
 
   // Persistent neon 3D coordinate canvas (always on; follows you as you walk).
   grid = new SpatialGrid(hope.scene, { ground: world.cfg.groundY || 0 });
   grid.update(hope.camera);
+  grid.setVisible(gridShown);   // default OFF on spawn so it never blocks the view (toggle ▦ to show)
 
   // Click-to-jump navigation (real physics: no surface under you → you fall).
   wireJump();
@@ -1181,17 +1185,11 @@ function updateHUD(frame) {
 function setLegend() {
   els.legend.innerHTML =
     `<b>CONTROLS</b><br>` +
-    `⌨️ <b>WASD</b> move · <b>← →</b> or <b>Q/E</b> turn · <b>↑ ↓</b> look · <b>scroll</b> dolly in/out<br>` +
-    `   drag to look too (right-drag in CREATE) · idle = you stay put<br>` +
-    `✋ Raise a hand (keyboard idle) to navigate by gesture:<br>` +
-    `   lean = turn · raise/lower = look · hold point = walk<br>` +
-    `✋ While using keyboard, hands are free for hand-stuff<br>` +
-    `🤚 Walk up to an object and grab it with a hand (two hands to resize)<br>` +
-    `🖱️ CREATE: click to select · gizmo or box-select · right-drag to look<br>` +
-    `⌨️ Look at an object: <b>[ ]</b> scale · <b>, .</b> rotate · <b>Del</b> remove<br>` +
-    `🎯 JUMP (top-right): click anywhere to leap there — no floor = you fall<br>` +
-    `▦ CREATE shows a 3D grid (toggle in the panel) for spatial placement<br>` +
-    `⬛ Top-left — PLAY ⇄ CREATE · 🗣️ AI bar (call objects by name)`;
+    `⌨️ <b>WASD</b> move · <b>Q/E</b> turn · <b>↑↓</b> look · <b>scroll</b> zoom · drag to look<br>` +
+    `✋ Raise a hand (idle): lean turn · point walk · grab to move (two hands resize)<br>` +
+    `🖱️ <b>CREATE</b>: click select · gizmo / box-select · <b>[ ]</b> scale · <b>, .</b> rotate · <b>Del</b><br>` +
+    `🎯 <b>JUMP</b> (top-right): click to leap · <b>▦</b> grid toggle for placement<br>` +
+    `⬛ Top-left <b>PLAY ⇄ CREATE</b> · 🗣️ AI bar (call objects by name)`;
 }
 
 function enterWorld() {
@@ -1262,6 +1260,26 @@ els.exit.addEventListener('click', async () => {
   }
   window.location.href = '/';
 });
+
+// ── AUTOSAVE ──────────────────────────────────────────────────────────────────
+// The ONLY persistence used to be a manual Save or the EXIT confirm — so a refresh,
+// tab close, crash or navigation silently lost every model/position added since the
+// last save. Autosave the local draft continuously (and when the page is hidden/closed)
+// so reopening always restores the LATEST state — every added model, in its real spot.
+let _autosaving = false;
+async function autosaveDraft() {
+  if (_autosaving || !world || !running || _building) return;
+  // Only when AUTHORING (in the builder, or a world we've already saved as a draft) —
+  // never silently fork a published world we're merely visiting.
+  if (!(BUILD_MODE || (currentWorld && currentWorld.name))) return;
+  _autosaving = true;
+  try { await doSave((currentWorld && currentWorld.name) || world.modelLabel || 'my world', captureThumb(), { silent: true }); }
+  catch { /* best-effort */ }
+  finally { _autosaving = false; }
+}
+setInterval(autosaveDraft, 15000);                                           // periodic snapshot
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') autosaveDraft(); });  // tab hidden/switched
+window.addEventListener('pagehide', autosaveDraft);                          // refresh / close / navigate away
 
 // Entry mode passed from the lobby (?mode=play|create, ?build=1, or clean route /build).
 const PARAMS = new URLSearchParams(location.search);
@@ -1533,11 +1551,12 @@ async function doPublish(name, thumb) {
     // Host any uploaded PROP models too (Sketchfab/URL props already carry a URL), so
     // EVERY model — not just the base — reloads from its URL on another device, with
     // the saved coordinates/scale/rotation replayed from the placement JSON.
-    let hosted = 0;
+    let hosted = 0, dropped = [];
     for (const o of rec.objects) {
       if (o.blob instanceof Blob && !o.url) {
         spStatus && spStatus('uploading model “' + (o.label || 'prop') + '”…');
-        try { o.url = await uploadBaseToBlob(o.blob, slug + '-' + (o.label || 'prop')); o.kind = 'import'; hosted++; } catch { /* skip; it just won't reload elsewhere */ }
+        try { o.url = await uploadBaseToBlob(o.blob, slug + '-' + (o.label || 'prop')); o.kind = 'import'; hosted++; }
+        catch { dropped.push(o.label || 'a prop'); }   // upload failed → it WON'T reload in the published copy; warn instead of silently vanishing
         o.blob = null;
       }
     }
@@ -1562,7 +1581,8 @@ async function doPublish(name, thumb) {
     if (currentWorld) currentWorld.publishedAs = slug;
     try { await navigator.clipboard.writeText(link); } catch {}
     sayAI('✅ “' + finalName + '” has been published! Live at ' + link + ' — added to the public world graph & Other Worlds.', 'sys');
-    return { ok: true, name: finalName, link, slug };
+    if (dropped.length) sayAI('⚠ ' + dropped.length + ' model(s) couldn’t upload and won’t appear in the published copy: ' + dropped.join(', ') + '. They’re still in your local draft — try publishing again.', 'sys');
+    return { ok: true, name: finalName, link, slug, dropped };
   } catch (e) { return { ok: false, error: e.message }; }
 }
 

@@ -127,8 +127,24 @@ const TOOLS = [
   { name: 'transform_scene', description: 'Transform the WHOLE world ENVIRONMENT — the base scene GLB itself (the building / landscape / room you walk inside), NOT a placed object. Use this whenever the user means "the world / scene / environment / whole place / the map / the floor (as a whole)". scaleFactor multiplies its overall size (2 = twice as big), rotationDegY spins it, position moves it. Colliders rebuild automatically so walking still works. (This also promotes the environment to an editable object.)',
     input_schema: { type: 'object', properties: { scaleFactor: { type: 'number' }, rotationDegY: { type: 'number' }, position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } } } } },
 
+  // ── Animation (managed: ALWAYS stoppable + revertible — never animate via run_script) ──
+  { name: 'animate_object', description: 'Continuously animate an object: spin, bob (up/down), pulse (scale in/out), or orbit. This is the ONLY correct way to animate — it is registered so it can be cleanly STOPPED and REVERTED later (a run_script animation loop CANNOT be stopped — never use one). Target by id OR label; omit both = the user\'s currently SELECTED object. Re-animating an object replaces its current animation.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'string' }, label: { type: 'string' },
+      type: { type: 'string', enum: ['spin', 'bob', 'pulse', 'orbit'] },
+      axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'spin axis (default y)' },
+      speed: { type: 'number', description: 'spin: rad/s; bob/pulse: cycles/s; orbit: rad/s. Default 1' },
+      amplitude: { type: 'number', description: 'bob: metres; pulse: scale fraction (0.15 = ±15%)' },
+      radius: { type: 'number', description: 'orbit radius in metres' } },
+      required: ['type'] } },
+  { name: 'stop_animation', description: 'Stop an object\'s animation. revert:true (default) snaps it back to where it started (use for "stop and revert"); revert:false freezes it where it is now (use for plain "stop"/"hold it there"). Set all:true to stop EVERY animation in the scene. Target by id OR label; omit both = the user\'s currently SELECTED object.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'string' }, label: { type: 'string' },
+      all: { type: 'boolean', description: 'stop every animation in the scene' },
+      revert: { type: 'boolean', description: 'snap back to the original transform (default true)' } } } },
+
   // ── Live frontend scripting (escape hatch for anything the tools can't express) ──
-  { name: 'run_script', description: 'Run a small JavaScript snippet to make a custom LIVE change the other tools cannot express — animate something, wire a custom interaction, tweak materials/lights, batch-edit objects. Your snippet body runs with these in scope: world (WorldTemplate), scene, camera, THREE, hope (the SDK), nav. You may use await. Return a short status string. Keep it small, reversible, and only when no dedicated tool fits.',
+  { name: 'run_script', description: 'Run a small JavaScript snippet to make a custom LIVE change the other tools cannot express — wire a custom interaction, tweak materials/lights, batch-edit objects. Do NOT use this to ANIMATE — use animate_object (a run_script loop cannot be stopped). Your snippet body runs with these in scope: world (WorldTemplate), scene, camera, THREE, hope (the SDK), nav. You may use await. Return a short status string. Keep it small, reversible, and only when no dedicated tool fits.',
     input_schema: { type: 'object', properties: { code: { type: 'string', description: 'JS to execute (function body; may use await; can return a string)' }, explanation: { type: 'string', description: 'one line on what it does' } }, required: ['code'] } },
 ];
 
@@ -238,6 +254,9 @@ export class WorldAgent {
       "TARGETING THE WHOLE WORLD: the base environment is also a listed object, label 'world (environment)' / id __scene__, in objects[]. Use transform_scene (preferred) or scale_object/set_transform with label:'world' to resize/rotate the whole environment — its colliders rebuild and the sky re-encloses automatically. Keep the two straight: 'sky' = the surrounding sky shell; 'world'/'environment' = the building/landscape you walk in.",
       "BRING-ME-TO: navigate_to teleports the avatar's POV straight to a landmark, an object by its label ('the cat', 'tree'), or x/z coordinates — it passes THROUGH walls and lands them standing on the floor there. (Walking with keys/hands still collides normally; only this is a direct jump.)",
       "Every object has a short recall NAME (label) — imports are named after what was searched (e.g. 'dragon'). Act on an object by passing its label instead of its id (e.g. scale_object {label:'dragon', factor:2}); use select_in_view for 'this/that', or get_scene to read all labels. rename_object gives something a friendlier name.",
+      "TARGET EXACTLY WHAT THE USER MEANS — never edit the wrong object. LIVE STATE has `selectedObject` = the object the user currently has SELECTED (clicked, gizmo on it). RULES: (1) If the user says 'this/that/it/the selected one' OR gives no clear object, act on `selectedObject` — pass NO id/label so the tool defaults to the selection. (2) If they name an object, pass that exact label; if `selectedObject` is set and matches what they named, you may pass its id from state to be certain. (3) NEVER fall back to 'the most recent object' when the user has something selected — operate on the selection. (4) If you genuinely can't tell which object they mean and nothing is selected, ASK rather than guess. When the user selects the pedestal and says 'change its colour/texture', you change the PEDESTAL — not the sculpture.",
+      "ANIMATION — use animate_object / stop_animation ONLY; NEVER animate inside run_script. A run_script frame loop cannot be stopped, so 'stop'/'revert' would silently fail. animate_object registers a managed spin/bob/pulse/orbit that remembers the start transform. To STOP: stop_animation {revert:false} freezes it where it is; 'stop and revert'/'undo the rotation'/'put it back' → stop_animation {revert:true} (the default) snaps it to its original transform. 'stop everything' → stop_animation {all:true}. After stopping, confirm honestly — only say it stopped because the tool returned success.",
+      "EVERYTHING YOU CREATE IS A REAL GAME OBJECT. Objects from create_object/import_*/place_* are auto-registered and appear in the object menu — selectable, movable, editable. If you build anything in run_script (a text label, a sign/panel in front of a sculpture, a custom mesh/group), you MUST register it so it is selectable and movable too: call `world.adopt(obj, {label:'plaque'})` (or `world.adopt(group, {label})`) on the THREE.Object3D you added to the scene. Never leave AI-made content as an un-selectable orphan — always adopt it with a clear label.",
       "Chain multiple tool calls for multi-step requests (create → position → colour). Keep spoken text short and natural — the user hears it.",
       "When asked for an object that fits a vibe, turn it into a specific Sketchfab query (material+object+style), import the best match, name it, and place it well. Offer an alternative if it feels off.",
       (this.mode === 'build' ? "── BUILD PLAYBOOK ──\n" + BUILD_KNOWLEDGE + "\n\n" : "") + "── DESIGN GUIDE ──\n" + (guide || FALLBACK_GUIDE),
@@ -330,6 +349,15 @@ export class WorldAgent {
         case 'rotate_object':    return w.rotateObject(rid(input), input.degrees || 0) ? 'rotated' : 'no object';
         case 'scale_object':     return w.scaleObject(rid(input), input.factor) ? 'scaled' : 'no object';
         case 'set_color':        return w.setObjectColor(rid(input), input.color) ? 'recolored' : 'no object';
+        case 'animate_object': {
+          const id = w.animateObject(rid(input), { type: input.type, axis: input.axis, speed: input.speed, amplitude: input.amplitude, radius: input.radius });
+          return id ? `animating ${input.type} → ${id} (call stop_animation to stop/revert)` : 'no object (or it is locked)';
+        }
+        case 'stop_animation': {
+          if (input.all) { const n = w.stopAllAnimations({ revert: input.revert !== false }); return n ? `stopped ${n} animation${n > 1 ? 's' : ''}` : 'nothing was animating'; }
+          const ok = w.stopAnimation(rid(input), { revert: input.revert !== false });
+          return ok ? (input.revert === false ? 'stopped (held in place)' : 'stopped and reverted') : 'that object was not animating';
+        }
         case 'rename_object':    { const l = w.nameObject(input.id || (input.target ? w.findByLabel(input.target) : undefined), input.label); return l ? `renamed → "${l}"` : 'no object'; }
         case 'duplicate_object': { const nid = w.duplicateObject(rid(input)); return nid ? `duplicated → ${nid}` : 'no object'; }
         case 'delete_object':    return w.deleteObject(rid(input)) ? 'deleted' : 'no object (or it is locked)';
