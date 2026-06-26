@@ -1435,4 +1435,12 @@ export class WorldTemplate {
   removeScript(i) { if (i == null || i < 0 || i >= this.scripts.length) return false; this.scripts.splice(i, 1); return true; }
   /** Remove every saved behavior/script. Returns how many were cleared. */
   clearScripts() { const n = this.scripts.length; this.scripts = []; return n; }
+  /** Remove saved scripts whose code contains a marker (e.g. a graffiti stroke id), so an
+   *  erased paint stroke doesn't come back on reload. Returns how many were removed. */
+  removeScriptsByMarker(marker) {
+    if (!marker) return 0;
+    const before = this.scripts.length;
+    this.scripts = this.scripts.filter(s => !String(s.code || '').includes(marker));
+    return before - this.scripts.length;
+  }
 }

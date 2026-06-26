@@ -25,10 +25,12 @@ export class SurfaceTracer {
     this.scene = scene; this.camera = camera; this.dom = domElement; this.world = world;
     this.enabled = false;
     this.painting = false;            // when true, click/drag over a surface paints
-    this.onPaint = null;              // host hook: (hit) => {}  — per dab while dragging
+    this.erasing = false;             // when true, click/drag over painted strokes erases them
+    this.onPaint = null;              // host hook: (hit) => {}  — per move while dragging
     this.onPaintStart = null;         // host hook: (hit) => {}  — pointer down on a surface
     this.onPaintEnd = null;           // host hook: () => {}      — stroke released
-    this.hit = null;                  // { point:Vector3, normal:Vector3, object, id }
+    this.onErase = null;              // host hook: (hit) => {}  — erase the stroke under the cursor
+    this.hit = null;                  // { point:Vector3, normal:Vector3, pressure, object, id }
 
     this._ray = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -81,7 +83,9 @@ export class SurfaceTracer {
   }
 
   /** Enable click/drag painting (host supplies onPaint). */
-  setPainting(on) { this.painting = !!on; }
+  setPainting(on) { this.painting = !!on; if (on) this.erasing = false; }
+  /** Enable click/drag erasing (host supplies onErase). */
+  setErasing(on) { this.erasing = !!on; if (on) this.painting = false; }
 
   // Everything the ray can land on: the base environment + every placed/AI-made object.
   _targets() {
@@ -113,9 +117,13 @@ export class SurfaceTracer {
     return null;
   }
 
+  // Pointer pressure 0..1 (real for pen/touch; mouse reports ~0.5 while a button is down).
+  _pressure(e) { return (e && e.pressure > 0) ? e.pressure : 0.5; }
+
   _onMove(e) {
     const hit = this._raycast(e);
     if (!hit) { this.cursor.visible = false; this._clearWire(); this.hit = null; this.world.surfaceHit = null; return; }
+    hit.pressure = this._pressure(e);
     this.hit = hit;
     this.world.surfaceHit = { point: hit.point.toArray().map(n => +n.toFixed(3)), normal: hit.normal.toArray().map(n => +n.toFixed(3)), id: hit.id };
 
@@ -127,15 +135,21 @@ export class SurfaceTracer {
     this.cursor.visible = true;
     this._highlight(hit.object);
 
-    if (this._down && this.painting && this.onPaint) this.onPaint(this.hit);
+    if (this._down) {
+      if (this.painting && this.onPaint) this.onPaint(this.hit);
+      else if (this.erasing && this.onErase) this.onErase(this.hit);
+    }
   }
 
   _onDown(e) {
-    if (e.button !== 0) return;       // left button paints; right is look-around
+    if (e.button !== 0) return;       // left button paints/erases; right is look-around
     this._down = true;
+    if (this.hit) this.hit.pressure = this._pressure(e);
     if (this.painting && this.hit) {
       if (this.onPaintStart) this.onPaintStart(this.hit);
       if (this.onPaint) this.onPaint(this.hit);
+    } else if (this.erasing && this.hit && this.onErase) {
+      this.onErase(this.hit);
     }
   }
   _onUp() {

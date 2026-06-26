@@ -192,7 +192,8 @@ video.h{display:none}
 <div id="gridBar">
   <span class="gbtn" id="gbGrid" title="show / hide grid">▦</span>
   <span class="gbtn" id="gbTrace" title="surface trace — mouse rides the real mesh surface of any model (precise placement / painting)">⊹ trace</span>
-  <span class="gbtn" id="gbPaint" title="paint / graffiti — drag your cursor on any wall, floor or object to paint on its real surface">🖌 paint</span>
+  <span class="gbtn" id="gbPaint" title="paint / graffiti — drag your cursor on any wall, floor or object; press harder for a thicker stroke (pen/touch)">🖌 paint</span>
+  <span class="gbtn" id="gbErase" title="eraser — click or drag over any painted stroke to remove it">🧽 erase</span>
   <input id="paintColor" type="color" value="#39ff5a" title="brush colour"
     style="width:24px;height:24px;padding:0;border:1px solid rgba(73,231,134,.4);border-radius:6px;background:none;cursor:pointer;vertical-align:middle">
   <input id="paintSize" type="range" min="0.04" max="0.6" step="0.02" value="0.16" title="brush size"
@@ -602,7 +603,7 @@ document.getElementById('modeOpts').addEventListener('click', e => {
 });
 
 let hope, world, nav, embody, agent, voice, manip, editor, grid, tracer, running = false;
-let traceOn = false, paintOn = false;
+let traceOn = false, paintOn = false, eraseOn = false;
 let gridShown = false, jumpMode = false, gridMode = 'off', camOn = true;   // grid hidden by default on spawn
 
 // Reflect the camera/gesture-tracking toggle state on the corner button.
@@ -746,6 +747,7 @@ async function boot() {
   tracer.onPaintStart = paintStart;
   tracer.onPaint = paintDab;
   tracer.onPaintEnd = paintEnd;
+  tracer.onErase = eraseAt;
 
   // Click-to-jump navigation (real physics: no surface under you → you fall).
   wireJump();
@@ -1085,42 +1087,76 @@ function updateHistoryButtons() {
   if (d) d.classList.toggle('dim', !(editor && editor.selectionCount));
 }
 
-// ── Surface paint / graffiti: drag the cursor on any real mesh surface to drop flat
-//    decals that conform to the surface; each stroke becomes a selectable game object. ──
-let _stroke = null, _strokeN = 0;
+// ── Surface paint / graffiti: drag the cursor on any real mesh surface to lay down a
+//    continuous, pressure-sensitive stroke of surface-conforming decals. Each stroke is a
+//    selectable game object AND records a rebuild script so it survives reload. ──
+let _stroke = null, _strokeN = 0, _lastPaint = null, _graffitiSeq = 0;
+
 function togglePaint(on) {
   paintOn = !!on;
+  if (paintOn && eraseOn) toggleErase(false);
   document.getElementById('gbPaint').classList.toggle('gon', paintOn);
   if (paintOn) {
-    traceOn = true; tracer.setEnabled(true);
-    document.getElementById('gbTrace').classList.add('gon');
-    tracer.setPainting(true);
-    refreshEditor();                 // editor yields the click to the brush
-    flash('🖌 paint ON — drag on a wall / floor / object to graffiti it. Right-drag still looks around.');
-  } else {
-    tracer.setPainting(false);
-    refreshEditor();
-    flash('paint off');
-  }
+    traceOn = true; tracer.setEnabled(true); document.getElementById('gbTrace').classList.add('gon');
+    tracer.setPainting(true); refreshEditor();
+    flash('🖌 paint ON — drag on a wall / floor / object to brush it. Press harder = thicker (pen/touch). Right-drag still looks.');
+  } else { tracer.setPainting(false); refreshEditor(); flash('paint off'); }
 }
-function paintStart() { _stroke = new hope.THREE.Group(); _stroke.name = 'graffiti'; hope.scene.add(_stroke); _strokeN = 0; }
-function paintDab(hit) {
+function toggleErase(on) {
+  eraseOn = !!on;
+  if (eraseOn && paintOn) togglePaint(false);
+  document.getElementById('gbErase').classList.toggle('gon', eraseOn);
+  if (eraseOn) {
+    traceOn = true; tracer.setEnabled(true); document.getElementById('gbTrace').classList.add('gon');
+    tracer.setErasing(true); refreshEditor();
+    flash('🧽 erase ON — click or drag over any painted stroke to remove it.');
+  } else { tracer.setErasing(false); refreshEditor(); flash('erase off'); }
+}
+
+// Brush radius scales with pen/touch pressure (mouse → steady mid size; use the slider).
+function _brushRadius(hit) {
+  const base = parseFloat(document.getElementById('paintSize').value) || 0.16;
+  const p = (hit && hit.pressure != null) ? hit.pressure : 0.5;
+  return base * (0.45 + p * 1.5);
+}
+function paintStart() {
+  _stroke = new hope.THREE.Group(); _stroke.name = 'graffiti';
+  _stroke.userData.strokeId = 'g' + Date.now().toString(36) + (_graffitiSeq++);
+  hope.scene.add(_stroke); _strokeN = 0; _lastPaint = null;
+}
+function _stampDisc(point, normal, radius, col) {
   const T = hope.THREE;
-  if (!_stroke) paintStart();
-  const col = document.getElementById('paintColor').value || '#39ff5a';
-  const sz = parseFloat(document.getElementById('paintSize').value) || 0.16;
   const disc = new T.Mesh(
-    new T.CircleGeometry(sz, 18),
+    new T.CircleGeometry(radius, 16),
     new T.MeshBasicMaterial({ color: new T.Color(col), side: T.DoubleSide, transparent: true, opacity: 0.97, depthWrite: false }));
-  const n = hit.normal.clone();
-  disc.position.copy(hit.point).addScaledVector(n, 0.015);   // float just off the surface to avoid z-fighting
-  disc.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), n);
+  disc.position.copy(point).addScaledVector(normal, 0.015);   // float just off the surface to avoid z-fighting
+  disc.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), normal);
   _stroke.add(disc); _strokeN++;
+}
+function paintDab(hit) {
+  if (!_stroke) paintStart();
+  const T = hope.THREE;
+  const col = document.getElementById('paintColor').value || '#39ff5a';
+  const radius = _brushRadius(hit);
+  const pt = hit.point.clone(), nm = hit.normal.clone();
+  // Fill the gap from the last dab so the stroke is CONTINUOUS, not dotted.
+  if (_lastPaint) {
+    const dist = pt.distanceTo(_lastPaint.point);
+    const step = Math.max(radius * 0.4, 0.03);
+    const n = Math.min(80, Math.floor(dist / step));
+    for (let i = 1; i <= n; i++) {
+      const t = i / (n + 1);
+      const p = _lastPaint.point.clone().lerp(pt, t);
+      const no = _lastPaint.normal.clone().lerp(nm, t).normalize();
+      _stampDisc(p, no, radius, col);
+    }
+  }
+  _stampDisc(pt, nm, radius, col);
+  _lastPaint = { point: pt, normal: nm };
 }
 function paintEnd() {
   if (_stroke && _strokeN) {
-    // Capture the stroke as data, then record a compact rebuild script so the graffiti
-    // SURVIVES reload (replayScripts re-creates it and auto-adopts it as a game object).
+    const sid = _stroke.userData.strokeId;
     const dabs = _stroke.children.map(d => ({
       p: d.position.toArray().map(n => +n.toFixed(3)),
       q: d.quaternion.toArray().map(n => +n.toFixed(4)),
@@ -1128,14 +1164,26 @@ function paintEnd() {
       c: '#' + d.material.color.getHexString(),
     }));
     world.adopt(_stroke, { label: 'graffiti' });   // live: selectable / movable now
-    const code = "const _T=THREE,_g=new _T.Group();_g.name='graffiti';scene.add(_g);"
-      + "for(const d of " + JSON.stringify(dabs) + "){const m=new _T.Mesh(new _T.CircleGeometry(d.s,18),"
+    // Compact rebuild script (tagged with the stroke id so the eraser can also drop it).
+    const code = "const _T=THREE,_g=new _T.Group();_g.name='graffiti';_g.userData.strokeId='" + sid + "';scene.add(_g);"
+      + "for(const d of " + JSON.stringify(dabs) + "){const m=new _T.Mesh(new _T.CircleGeometry(d.s,16),"
       + "new _T.MeshBasicMaterial({color:new _T.Color(d.c),side:_T.DoubleSide,transparent:true,opacity:0.97,depthWrite:false}));"
       + "m.position.fromArray(d.p);m.quaternion.fromArray(d.q);_g.add(m);}";
-    world.recordScript(code, 'graffiti stroke (' + _strokeN + ' marks)');
+    world.recordScript(code, 'graffiti stroke ' + sid);
     flash('🖌 painted ' + _strokeN + ' marks → saved (survives reload) & in the object menu');
   } else if (_stroke) hope.scene.remove(_stroke);
-  _stroke = null; _strokeN = 0;
+  _stroke = null; _strokeN = 0; _lastPaint = null;
+}
+// Erase the painted stroke under the cursor (and drop its rebuild script so it stays gone).
+function eraseAt(hit) {
+  if (!hit || !hit.id) return;
+  const a = world.assets.find(x => x.id === hit.id);
+  if (!a) return;
+  const sid = a.mesh && a.mesh.userData && a.mesh.userData.strokeId;
+  if (!(sid || (a.label && a.label.indexOf('graffiti') === 0))) return;   // only erase paint, not real models
+  world.deleteObject(a.id);
+  if (sid) world.removeScriptsByMarker(sid);
+  flash('🧽 erased a paint stroke');
 }
 
 // ── 3D grid canvas: show/hide, modes, dot-picking, coordinate readout ──
@@ -1149,10 +1197,12 @@ function wireGridCanvas() {
     traceOn = !traceOn; tracer.setEnabled(traceOn);
     document.getElementById('gbTrace').classList.toggle('gon', traceOn);
     if (!traceOn && paintOn) togglePaint(false);   // trace off ⇒ paint off
+    if (!traceOn && eraseOn) toggleErase(false);   // trace off ⇒ erase off
     flash(traceOn ? '⊹ surface trace ON — mouse rides the mesh; the ring shows the exact hit point'
                   : 'surface trace off');
   });
   document.getElementById('gbPaint').addEventListener('click', () => togglePaint(!paintOn));
+  document.getElementById('gbErase').addEventListener('click', () => toggleErase(!eraseOn));
   bar.addEventListener('click', e => { const b = e.target.closest('[data-gm]'); if (b) setGridMode(b.dataset.gm); });
   document.getElementById('gbClear').addEventListener('click', () => {
     grid.clearSelection(); world.gridSelection = grid.getSelection(); updateCoordBox(null); showCoordTag(null); flash('grid selection cleared');
