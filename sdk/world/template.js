@@ -86,6 +86,7 @@ export class WorldTemplate {
     this._sketchId = 0;
     this.spawnPoint = null;       // user-designated "home" { position:[x,y,z], yaw, pitch } the agent returns to
     this._spawnMarker = null;     // floating neon halo at the spawn point
+    this._pendingOverrides = null; // transform overrides applied as procedural objects get adopted
     this.gridSelection = null;    // current 3D-grid pick (dots/path/surface/volume) for the AI
     this.sel = null;              // SelectionManager (spatial/surface marking)
     this._skyLocked = false;      // lock toggles — a locked object can't be moved/scaled/edited until unlocked
@@ -1014,10 +1015,17 @@ export class WorldTemplate {
       // own), else derive one from the creating script's marker so the SAME script makes the
       // SAME id every load — lets later edits (transform overrides) and deletions track it.
       if (marker && !(o.userData && o.userData.strokeId)) { o.userData = o.userData || {}; o.userData.strokeId = marker + '#' + (ord++); }
-      out.push(this.adopt(o, { label: o.name || 'object', source: 'ai' }));
+      const id = this.adopt(o, { label: o.name || 'object', source: 'ai' });
+      // Apply a saved transform override THE MOMENT this object is adopted — robust to the
+      // script creating it asynchronously (so a moved/tilted sign lands edited, not default).
+      const sid = o.userData && o.userData.strokeId, t = sid && this._pendingOverrides && this._pendingOverrides[sid];
+      if (t) { if (t.p) o.position.fromArray(t.p); if (t.q) o.quaternion.fromArray(t.q); if (t.s) o.scale.fromArray(t.s); const a = this._find(id); if (a) this._syncCollider(a); }
+      out.push(id);
     }
     return out;
   }
+  /** Hold transform overrides so they apply as objects get adopted (any time after load). */
+  setPendingOverrides(ov) { this._pendingOverrides = ov || null; }
 
   /** Deterministic marker for a script's content — same code → same marker across reloads. */
   scriptMarker(code) {

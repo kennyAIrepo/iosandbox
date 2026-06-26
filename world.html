@@ -431,6 +431,11 @@ video.h{display:none}
       </div>
     </div>
 
+    <label id="spUpdateWrap" class="sp-update" style="display:none">
+      <input type="checkbox" id="spUpdate" checked>
+      <span>Update the live published world <b>(same link)</b> — your edits replace it at its current URL. Off = live this session only (the published world is untouched).</span>
+    </label>
+
     <div id="spStatus" class="sp-status"></div>
     <a id="spLink" class="sp-link" target="_blank" rel="noopener" style="display:none"></a>
 
@@ -462,6 +467,9 @@ video.h{display:none}
 .sp-b{border-radius:9px;cursor:pointer;font-family:inherit;font-size:13px;padding:10px 12px;transition:.13s;border:1px solid transparent}
 .sp-b.ghost{background:rgba(7,16,12,.6);border-color:rgba(73,231,134,.25);color:#9fe6bd;padding:8px 10px;font-size:12px;text-align:left}
 .sp-b.ghost:hover{background:rgba(73,231,134,.12);color:#5dff9b;border-color:rgba(73,231,134,.55)}
+.sp-update{display:flex;align-items:flex-start;gap:8px;margin:8px 0 2px;font-size:11px;color:#9fc7ad;line-height:1.4;cursor:pointer}
+.sp-update input{margin-top:2px;accent-color:#39ff5a;flex:none}
+.sp-update b{color:#5dff9b}
 .sp-actions{display:flex;gap:9px;margin-top:6px}
 .sp-b.save{flex:1;background:rgba(40,60,100,.5);border-color:rgba(80,140,220,.4);color:#bcd}
 .sp-b.save:hover{background:rgba(50,75,125,.7);color:#dfeeff}
@@ -1764,6 +1772,7 @@ async function openSavedWorld(rec) {
     // stream in afterward in the background.
     enterWorld();
     flash('opened “' + rec.name + '”');
+    world.setPendingOverrides(rec.overrides);   // apply edits to AI/script objects as they're (re)created
     restoreObjects(rec.objects).then((placed) => {
       replayScripts(rec.scripts);
       // Saved coordinates are authoritative — re-pin AFTER scripts so one-time build
@@ -1884,21 +1893,30 @@ async function doPublish(name, thumb) {
     if (!useHere) return { ok: false, error: 'set a spawn point first — use the ◎ Spawn tool to drop a halo, then publish' };
     const p = world.getAvatarPosition(); world.setSpawnPoint(p.x, p.y, p.z, { yaw: nav.yaw, pitch: nav.pitch });
   }
+  const pubAs = currentWorld && currentWorld.publishedAs;
+  const updateChk = document.getElementById('spUpdate');
+  const updateSame = pubAs && (!updateChk || updateChk.checked);   // default: update the existing published URL
+  // Toggle OFF on an already-published world → don't touch the public copy (live this session only).
+  if (pubAs && updateChk && !updateChk.checked)
+    return { ok: false, error: 'live-only: your edits stay in this session — turn on "Update the published world" to save them to ' + location.origin + '/world/' + pubAs };
+
   const saved = await doSave(name, thumb, { silent: true });
   if (!saved.ok) return saved;
   name = saved.name;
 
-  // Don't overwrite someone else's (or a previous different) public world of the same
-  // name — only update IN PLACE the one THIS draft already published. Else uniquify.
-  let finalName = name, slug = worldSlug(name);
-  try {
-    if ((currentWorld && currentWorld.publishedAs) !== slug) {
-      let n = 2;
-      while ((await fetch('/api/world/' + encodeURIComponent(slug)).then(r => r.ok).catch(() => false))) {
-        finalName = name + ' ' + n; slug = worldSlug(finalName); n++; if (n > 60) break;
+  // Update IN PLACE the world this draft already published (same link). Otherwise — a new
+  // world, or "update" unchecked — uniquify the slug so we never clobber a different world.
+  let finalName = name, slug = updateSame ? pubAs : worldSlug(name);
+  if (!updateSame) {
+    try {
+      if (pubAs !== slug) {
+        let n = 2;
+        while ((await fetch('/api/world/' + encodeURIComponent(slug)).then(r => r.ok).catch(() => false))) {
+          finalName = name + ' ' + n; slug = worldSlug(finalName); n++; if (n > 60) break;
+        }
       }
-    }
-  } catch { /* offline → just try the chosen slug */ }
+    } catch { /* offline → just try the chosen slug */ }
+  }
 
   try {
     // If the base scene is an uploaded local GLB, it's too big to embed in the POST
@@ -1966,6 +1984,12 @@ function openSaveModal(focus) {
   _spSetThumb(captureThumb());
   spStatus('');
   document.getElementById('spLink').style.display = 'none';
+  // If this world is already published, show the "update same link" toggle (default ON) and
+  // make Publish say so — so edits default to updating the existing URL, not a renamed copy.
+  const pubAs = currentWorld && currentWorld.publishedAs;
+  document.getElementById('spUpdateWrap').style.display = pubAs ? 'flex' : 'none';
+  if (pubAs) document.getElementById('spUpdate').checked = true;
+  document.getElementById('spPublish').textContent = pubAs ? '🌐 Update published' : '🌐 Publish';
   document.getElementById('spModal').classList.add('show');
   document.getElementById(focus === 'publish' ? 'spPublish' : 'spName').focus();
   // Pre-flight the cloud: if no Blob store is connected, publishing can't work yet —
@@ -2208,6 +2232,10 @@ async function loadPublishedWorld(slug) {
     const rec = await WorldStore.fromPortable(json);
     dbg('4 fromPortable ok → openSavedWorld');
     await openSavedWorld(rec);
+    // Remember this came from a published slug → editing + re-publishing UPDATES THE SAME
+    // url (same link) instead of spawning a renamed copy.
+    if (currentWorld) currentWorld.publishedAs = slug;
+    rec.publishedAs = slug; try { await WorldStore.saveWorld(rec); } catch {}
     dbg('9 openSavedWorld returned');
   } catch (e) {
     console.error('[world] published load failed:', e);
