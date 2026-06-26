@@ -197,8 +197,8 @@ video.h{display:none}
   <span class="gbtn" id="gbErase" title="eraser — click or drag over any painted stroke or AI sketch to remove it">🧽 erase</span>
   <input id="paintColor" type="color" value="#39ff5a" title="brush colour"
     style="width:24px;height:24px;padding:0;border:1px solid rgba(73,231,134,.4);border-radius:6px;background:none;cursor:pointer;vertical-align:middle">
-  <input id="paintSize" type="range" min="0.04" max="0.6" step="0.02" value="0.16" title="brush size"
-    style="width:64px;vertical-align:middle;accent-color:#39ff5a">
+  <input id="paintSize" type="range" min="0.004" max="0.6" step="0.004" value="0.1" title="brush size — drag low for fine, detailed strokes"
+    style="width:72px;vertical-align:middle;accent-color:#39ff5a">
   <span class="gsep"></span>
   <span class="gbtn sel" data-gm="off">navigate</span>
   <span class="gbtn" data-gm="dot">• dots</span>
@@ -1157,8 +1157,8 @@ function paintDab(hit) {
   // Fill the gap from the last dab so the stroke is CONTINUOUS, not dotted.
   if (_lastPaint) {
     const dist = pt.distanceTo(_lastPaint.point);
-    const step = Math.max(radius * 0.4, 0.03);
-    const n = Math.min(80, Math.floor(dist / step));
+    const step = Math.max(radius * 0.4, 0.004);   // tight spacing so even a fine brush stays continuous, not dotted
+    const n = Math.min(160, Math.floor(dist / step));
     for (let i = 1; i <= n; i++) {
       const t = i / (n + 1);
       const p = _lastPaint.point.clone().lerp(pt, t);
