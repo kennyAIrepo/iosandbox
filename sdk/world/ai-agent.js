@@ -418,7 +418,7 @@ export class WorldAgent {
             const r = await fn(w, scene, camera, THREE, hope, nav);
             // Auto-register ANYTHING the script added to the scene (signs, text, panels, meshes)
             // as a real game object — selectable, movable, and visible to you in the menu.
-            const adopted = w.adoptNewChildren(before);
+            const adopted = w.adoptNewChildren(before, w.scriptMarker(input.code));   // stable ids so edits/deletes track these objects across reloads
             w.recordScript(input.code, input.explanation);   // persist so it saves + replays with the world
             return 'ran' + (input.explanation ? ` (${input.explanation})` : '')
                  + (adopted.length ? ` — added ${adopted.length} object${adopted.length > 1 ? 's' : ''} to the menu (${adopted.join(', ')})` : '')

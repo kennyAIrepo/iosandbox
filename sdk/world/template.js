@@ -1000,9 +1000,9 @@ export class WorldTemplate {
    * need for the script to call adopt() itself. System objects (lights, camera, the
    * asset layer, the world model, the sky, gizmos, helpers) are skipped.
    */
-  adoptNewChildren(beforeSet) {
+  adoptNewChildren(beforeSet, marker) {
     if (!this.scene) return [];
-    const out = [];
+    const out = []; let ord = 0;
     for (const o of [...this.scene.children]) {
       if (beforeSet && beforeSet.has(o)) continue;                 // existed before the script
       if (o === this.assetLayer || o === this.model || o === this._skybox) continue;
@@ -1010,9 +1010,58 @@ export class WorldTemplate {
       if (o.userData && (o.userData.id || o.userData.system)) continue;   // already an asset, or a system helper (cursor)
       let hasMesh = false; o.traverse(c => { if (c.isMesh) hasMesh = true; });
       if (!hasMesh) continue;                                      // skip empty/helper groups
+      // Stable identity across reloads: keep an existing strokeId (paint/sketch set their
+      // own), else derive one from the creating script's marker so the SAME script makes the
+      // SAME id every load — lets later edits (transform overrides) and deletions track it.
+      if (marker && !(o.userData && o.userData.strokeId)) { o.userData = o.userData || {}; o.userData.strokeId = marker + '#' + (ord++); }
       out.push(this.adopt(o, { label: o.name || 'object', source: 'ai' }));
     }
     return out;
+  }
+
+  /** Deterministic marker for a script's content — same code → same marker across reloads. */
+  scriptMarker(code) {
+    const s = String(code || ''); let h = 5381;
+    for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return 'rs' + (h >>> 0).toString(36);
+  }
+
+  /** Live transform of every procedural (script-built) object, keyed by its stable id — so
+   *  later gizmo/AI edits to AI-made things (a moved/tilted sign) survive reload. */
+  transformOverrides() {
+    const r3 = (n) => +n.toFixed(3), ov = {};
+    for (const a of this._assets) {
+      const sid = a.mesh.userData && a.mesh.userData.strokeId;
+      if (!sid) continue;
+      const m = a.mesh;
+      ov[sid] = { p: m.position.toArray().map(r3), q: m.quaternion.toArray().map(n => +n.toFixed(4)), s: m.scale.toArray().map(r3) };
+    }
+    return ov;
+  }
+  /** Re-apply saved transform overrides after scripts replay — the last live edit wins. */
+  applyTransformOverrides(ov) {
+    if (!ov) return 0; let n = 0;
+    for (const a of this._assets) {
+      const sid = a.mesh.userData && a.mesh.userData.strokeId, t = sid && ov[sid];
+      if (!t) continue;
+      if (t.p) a.mesh.position.fromArray(t.p);
+      if (t.q) a.mesh.quaternion.fromArray(t.q);
+      if (t.s) a.mesh.scale.fromArray(t.s);
+      this._syncCollider(a); n++;
+    }
+    return n;
+  }
+  /** Remove the rebuild script(s) that recreate a procedural object, so deleting/erasing it
+   *  makes it stay gone on reload. Paint/sketch embed their id in the script; AI objects are
+   *  matched by the creating script's marker. */
+  _removeObjectScripts(strokeId) {
+    if (!strokeId) return;
+    if (String(strokeId).includes('#')) {
+      const marker = String(strokeId).split('#')[0];
+      this.scripts = this.scripts.filter(s => this.scriptMarker(s.code) !== marker);
+    } else {
+      this.removeScriptsByMarker(strokeId);
+    }
   }
 
   /**
@@ -1116,7 +1165,15 @@ export class WorldTemplate {
     if (id === '__sky__') return this.removeSkybox();
     if (id === '__scene__') return false;   // can't delete the world itself
     this.stopAnimation(id, { revert: false });   // drop any running animation so it can't tick a freed mesh
-    const a = this._find(id); if (a) { this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body); this._assets = this._assets.filter(x => x !== a); this._anchorSkybox(); } return !!a;
+    const a = this._find(id);
+    if (a) {
+      const sid = a.mesh.userData && a.mesh.userData.strokeId;
+      this._removeObjectScripts(sid);                                            // so it doesn't reappear on reload
+      if (a.mesh.userData && a.mesh.userData.sketchId) this.removeSketch(a.mesh.userData.sketchId);
+      this._removeHandColliders(a); a.mesh.parent?.remove(a.mesh); if (a.body) this.world.removeRigidBody(a.body);
+      this._assets = this._assets.filter(x => x !== a); this._anchorSkybox();
+    }
+    return !!a;
   }
 
   // ── MANAGED ANIMATIONS ──────────────────────────────────────────────────────

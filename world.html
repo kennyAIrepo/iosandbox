@@ -48,6 +48,11 @@ video.h{display:none}
   opacity:0;transition:opacity .4s;max-width:260px}
 #legend.show{opacity:1}
 #legend b{color:#5dff9b;text-shadow:0 0 8px rgba(93,255,155,.45)}
+#legendHead{cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:8px;user-select:none}
+#legendHead .c{color:#43e07a;transition:transform .2s}
+#legend.collapsed #legendHead .c{transform:rotate(-90deg)}
+#legend.collapsed #legendBody{display:none}
+#legendBody{margin-top:5px}
 #debug{position:fixed;bottom:14px;right:14px;z-index:20;font-size:9px;color:rgba(120,200,160,.5);
   white-space:pre;text-align:right;pointer-events:none}
 #exitBtn{position:fixed;top:14px;right:14px;z-index:25;padding:6px 14px;background:rgba(60,30,30,.5);
@@ -1507,12 +1512,15 @@ function updateHUD(frame) {
 
 function setLegend() {
   els.legend.innerHTML =
-    `<b>CONTROLS</b><br>` +
+    `<div id="legendHead"><b>⌨ CONTROLS</b> <span class="c">▾</span></div>` +
+    `<div id="legendBody">` +
     `⌨️ <b>WASD</b> move · <b>Q/E</b> turn · <b>↑↓</b> look · <b>scroll</b> zoom · drag to look<br>` +
     `✋ Raise a hand (idle): lean turn · point walk · grab to move (two hands resize)<br>` +
     `🖱️ <b>CREATE</b>: click select · gizmo / box-select · <b>[ ]</b> scale · <b>, .</b> rotate · <b>Del</b><br>` +
     `🎯 <b>JUMP</b> (top-right): click to leap · <b>▦</b> grid toggle for placement<br>` +
-    `⬛ Top-left <b>PLAY ⇄ CREATE</b> · 🗣️ AI bar (call objects by name)`;
+    `⬛ Top-left <b>PLAY ⇄ CREATE</b> · 🗣️ AI bar (call objects by name)` +
+    `</div>`;
+  document.getElementById('legendHead').addEventListener('click', () => els.legend.classList.toggle('collapsed'));
 }
 
 function enterWorld() {
@@ -1759,11 +1767,13 @@ async function openSavedWorld(rec) {
     restoreObjects(rec.objects).then((placed) => {
       replayScripts(rec.scripts);
       // Saved coordinates are authoritative — re-pin AFTER scripts so one-time build
-      // scripts can't drag objects below where they were placed. Re-pin again shortly
-      // after to beat any async/onFrame repositioning a script kicks off.
-      repinTransforms(placed);
-      setTimeout(() => repinTransforms(placed), 120);
-      setTimeout(() => repinTransforms(placed), 600);
+      // scripts can't drag objects below where they were placed, and re-apply transform
+      // overrides so the LAST live edit to AI/script objects (a moved/tilted sign) wins.
+      // Repeat shortly after to beat any async/onFrame repositioning a script kicks off.
+      const settle = () => { repinTransforms(placed); world.applyTransformOverrides(rec.overrides); };
+      settle();
+      setTimeout(settle, 200);
+      setTimeout(settle, 700);
     }).catch(() => {});
   } catch (e) {
     _building = false;
@@ -1777,9 +1787,10 @@ function replayScripts(scripts) {
   for (const s of (scripts || [])) {
     try {
       const before = world.sceneChildrenSnapshot();
+      const marker = world.scriptMarker(s.code);
       const fn = new Function('world', 'scene', 'camera', 'THREE', 'hope', 'nav', `return (async () => { ${s.code}\n })();`);
       Promise.resolve(fn(world, hope.scene, hope.camera, hope.THREE, hope, nav))
-        .then(() => world.adoptNewChildren(before))     // re-register script-built objects so they're selectable after reload too
+        .then(() => world.adoptNewChildren(before, marker))     // re-register with the SAME stable id so overrides/deletes track them
         .catch(e => console.warn('[world] script effect failed:', e.message));
       world.recordScript(s.code, s.explanation);
     } catch (e) { console.warn('[world] script replay failed:', e.message); }
@@ -1797,6 +1808,7 @@ function _worldRecord(name, thumb, baseOverride) {
     environment: world.getEnvironment(),
     objects: world.snapshot(),
     scripts: world.scripts,
+    overrides: world.transformOverrides(),   // live transforms of AI/script objects → last edit (moved/tilted sign) wins on reload
     spawn: world.getSpawn(),                 // user-designated home (neon halo) → restored on load
     thumb: thumb || captureThumb(),
   };
