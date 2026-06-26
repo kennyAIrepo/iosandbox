@@ -190,14 +190,15 @@ video.h{display:none}
 
 <!-- Spatial grid canvas — modes -->
 <div id="gridBar">
-  <span class="gbtn" id="gbGrid" title="show / hide grid">▦</span>
+  <span class="gbtn" id="gbGrid" title="show / hide the 3D grid — when on, trace & paint snap into open 3D space on the lattice">▦</span>
+  <span class="gbtn" id="gbRefine" title="refine — after marking a ▱ surface or ◰ volume, build a finer sub-grid inside it for higher-precision tracing/painting">⊞ refine</span>
   <span class="gbtn" id="gbTrace" title="surface trace — mouse rides the real mesh surface of any model (precise placement / painting)">⊹ trace</span>
   <span class="gbtn" id="gbPaint" title="paint / graffiti — drag your cursor on any wall, floor or object; press harder for a thicker stroke (pen/touch)">🖌 paint</span>
   <span class="gbtn" id="gbSketch" title="AI sketch — draw neon directional lines on a surface to TELL the build agent where & what to change (e.g. a rectangle on a wall → 'make a door here'). The agent reads your sketch's exact spot, surface & shape.">✎ AI sketch</span>
   <span class="gbtn" id="gbErase" title="eraser — click or drag over any painted stroke or AI sketch to remove it">🧽 erase</span>
   <input id="paintColor" type="color" value="#39ff5a" title="brush colour"
     style="width:24px;height:24px;padding:0;border:1px solid rgba(73,231,134,.4);border-radius:6px;background:none;cursor:pointer;vertical-align:middle">
-  <input id="paintSize" type="range" min="0.004" max="0.6" step="0.004" value="0.1" title="brush size — drag low for fine, detailed strokes"
+  <input id="paintSize" type="range" min="0.004" max="1.2" step="0.004" value="0.1" title="brush size — fine for detail, thick to fill grids / spaces (3D)"
     style="width:72px;vertical-align:middle;accent-color:#39ff5a">
   <span class="gsep"></span>
   <span class="gbtn sel" data-gm="off">navigate</span>
@@ -742,7 +743,10 @@ async function boot() {
   grid.setVisible(gridShown);   // default OFF on spawn so it never blocks the view (toggle ▦ to show)
 
   // Surface tracer — precise mouse-on-mesh targeting (toggle ⊹). Off by default.
-  tracer = new SurfaceTracer({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world });
+  // It also takes the 3D grid: when the grid is shown, the tracer snaps to grid NODES and
+  // treats them like surface points, so trace/paint/sketch work in open 3D space too.
+  tracer = new SurfaceTracer({ scene: hope.scene, camera: hope.camera, domElement: document.getElementById('c'), world, grid });
+  tracer.gridSnap = gridShown;
   // Paint/graffiti brush: drag on a surface → flat decals on the real mesh, grouped per
   // stroke into a selectable/movable game object.
   tracer.onPaintStart = paintStart;
@@ -1138,55 +1142,62 @@ function paintStart() {
   _stroke.userData.strokeId = 'g' + Date.now().toString(36) + (_graffitiSeq++);
   hope.scene.add(_stroke); _strokeN = 0; _lastPaint = null;
 }
-function _stampDisc(point, normal, radius, col) {
+function _stampDisc(point, normal, radius, col, is3D) {
   const T = hope.THREE;
-  const disc = new T.Mesh(
-    new T.CircleGeometry(radius, 16),
-    new T.MeshBasicMaterial({ color: new T.Color(col), side: T.DoubleSide, transparent: true, opacity: 0.97, depthWrite: false }));
-  disc.position.copy(point).addScaledVector(normal, 0.015);   // float just off the surface to avoid z-fighting
-  disc.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), normal);
+  // On the grid (free space) a dab is a 3D SPHERE blob; on a mesh it's a flat surface decal.
+  const geo = is3D ? new T.SphereGeometry(radius, 10, 8) : new T.CircleGeometry(radius, 16);
+  const disc = new T.Mesh(geo, new T.MeshBasicMaterial({ color: new T.Color(col), side: T.DoubleSide, transparent: true, opacity: 0.97, depthWrite: false }));
+  if (is3D) { disc.position.copy(point); }
+  else { disc.position.copy(point).addScaledVector(normal, 0.015); disc.quaternion.setFromUnitVectors(new T.Vector3(0, 0, 1), normal); }
   _stroke.add(disc); _strokeN++;
 }
 function paintDab(hit) {
   if (_drawMode === 'sketch') return sketchMove(hit);
   if (!_stroke) paintStart();
-  const T = hope.THREE;
+  const is3D = !!hit.onGrid;
+  _stroke.userData.is3D = is3D;
   const col = document.getElementById('paintColor').value || '#39ff5a';
   const radius = _brushRadius(hit);
   const pt = hit.point.clone(), nm = hit.normal.clone();
-  // Fill the gap from the last dab so the stroke is CONTINUOUS, not dotted.
+  // Fill the gap from the last dab so the stroke is CONTINUOUS, not dotted (works in 3D too).
   if (_lastPaint) {
     const dist = pt.distanceTo(_lastPaint.point);
-    const step = Math.max(radius * 0.4, 0.004);   // tight spacing so even a fine brush stays continuous, not dotted
+    const step = Math.max(radius * 0.4, 0.004);
     const n = Math.min(160, Math.floor(dist / step));
     for (let i = 1; i <= n; i++) {
       const t = i / (n + 1);
       const p = _lastPaint.point.clone().lerp(pt, t);
       const no = _lastPaint.normal.clone().lerp(nm, t).normalize();
-      _stampDisc(p, no, radius, col);
+      _stampDisc(p, no, radius, col, is3D);
     }
   }
-  _stampDisc(pt, nm, radius, col);
+  _stampDisc(pt, nm, radius, col, is3D);
   _lastPaint = { point: pt, normal: nm };
 }
 function paintEnd() {
   if (_drawMode === 'sketch') return sketchEnd();
   if (_stroke && _strokeN) {
-    const sid = _stroke.userData.strokeId;
+    const T = hope.THREE, sid = _stroke.userData.strokeId, is3D = !!_stroke.userData.is3D;
+    // Recenter the group on the stroke centroid so the object's listed position is the REAL
+    // location (the AI can read where the paint is); children become relative to it.
+    const ctr = new T.Vector3(); _stroke.children.forEach(d => ctr.add(d.position)); ctr.divideScalar(_stroke.children.length);
+    _stroke.children.forEach(d => d.position.sub(ctr)); _stroke.position.copy(ctr);
+    const center = ctr.toArray().map(n => +n.toFixed(3));
     const dabs = _stroke.children.map(d => ({
       p: d.position.toArray().map(n => +n.toFixed(3)),
       q: d.quaternion.toArray().map(n => +n.toFixed(4)),
       s: +(d.geometry.parameters.radius).toFixed(3),
       c: '#' + d.material.color.getHexString(),
     }));
-    world.adopt(_stroke, { label: 'graffiti' });   // live: selectable / movable now
+    world.adopt(_stroke, { label: is3D ? '3d paint' : 'graffiti' });   // live: selectable / movable now
     // Compact rebuild script (tagged with the stroke id so the eraser can also drop it).
-    const code = "const _T=THREE,_g=new _T.Group();_g.name='graffiti';_g.userData.strokeId='" + sid + "';scene.add(_g);"
-      + "for(const d of " + JSON.stringify(dabs) + "){const m=new _T.Mesh(new _T.CircleGeometry(d.s,16),"
+    // Branches on is3D: sphere blobs in open space, or flat surface decals on a mesh.
+    const code = "const _T=THREE,_3=" + (is3D ? 'true' : 'false') + ",_g=new _T.Group();_g.name='" + (is3D ? '3d paint' : 'graffiti') + "';_g.userData.strokeId='" + sid + "';_g.userData.is3D=_3;_g.position.fromArray(" + JSON.stringify(center) + ");scene.add(_g);"
+      + "for(const d of " + JSON.stringify(dabs) + "){const m=new _T.Mesh(_3?new _T.SphereGeometry(d.s,10,8):new _T.CircleGeometry(d.s,16),"
       + "new _T.MeshBasicMaterial({color:new _T.Color(d.c),side:_T.DoubleSide,transparent:true,opacity:0.97,depthWrite:false}));"
-      + "m.position.fromArray(d.p);m.quaternion.fromArray(d.q);_g.add(m);}";
-    world.recordScript(code, 'graffiti stroke ' + sid);
-    flash('🖌 painted ' + _strokeN + ' marks → saved (survives reload) & in the object menu');
+      + "m.position.fromArray(d.p);if(!_3)m.quaternion.fromArray(d.q);_g.add(m);}";
+    world.recordScript(code, (is3D ? '3d paint ' : 'graffiti ') + sid);
+    flash((is3D ? '🖌 3D paint — ' : '🖌 painted ') + _strokeN + ' marks → saved & in the object menu');
   } else if (_stroke) hope.scene.remove(_stroke);
   _stroke = null; _strokeN = 0; _lastPaint = null;
 }
@@ -1305,7 +1316,14 @@ function wireGridCanvas() {
   const bar = document.getElementById('gridBar');
   document.getElementById('gbGrid').addEventListener('click', () => {
     gridShown = !gridShown; grid.setVisible(gridShown);
+    if (tracer) tracer.gridSnap = gridShown;          // grid on ⇒ trace/paint snaps to 3D grid nodes (free-space)
     document.getElementById('gbGrid').classList.toggle('gon', gridShown);
+    flash(gridShown ? '▦ 3D grid ON — trace & paint now snap into open 3D space on the lattice' : 'grid off');
+  });
+  document.getElementById('gbRefine').addEventListener('click', () => {
+    const info = grid.refine(4);
+    if (info) flash('⊞ refined: ' + info.nodes + ' finer nodes (' + info.step + 'm) in the selected region — trace/paint them for detail');
+    else flash('select a 3D region first (▱ surface or ◰ volume), then ⊞ refine it');
   });
   document.getElementById('gbTrace').addEventListener('click', () => {
     traceOn = !traceOn; tracer.setEnabled(traceOn);

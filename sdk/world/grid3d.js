@@ -58,16 +58,55 @@ export class SpatialGrid {
 
     this.group = new THREE.Group(); this.group.name = 'grid_canvas'; this.scene.add(this.group);
     this.hiGroup = new THREE.Group(); this.hiGroup.name = 'grid_selection'; this.scene.add(this.hiGroup);
+    this.fineGroup = new THREE.Group(); this.fineGroup.name = 'grid_fine'; this.scene.add(this.fineGroup);
     this.dotsObj = null;
+    this.fineObj = null;                // finer sub-lattice inside a selected region (refine)
+    this.fineStep = 0;
     this._cell = null;                  // last snapped centre cell {x,z}
 
     this.sel = { mode: 'off', dots: [], traj: [], cornerA: null, rect: null, box: null };
     this._buildAt(new THREE.Vector3());
   }
 
-  setVisible(v) { this.group.visible = !!v; this.hiGroup.visible = !!v; }
+  setVisible(v) { this.group.visible = !!v; this.hiGroup.visible = !!v; this.fineGroup.visible = !!v; }
   get visible() { return this.group.visible; }
   setGround(y) { this.groundY = y; this._cell = null; }
+
+  // ── REFINE: build a finer sub-lattice inside the current volume/surface selection so
+  //    the user (and the tracer) can snap-draw at higher precision in that region. ──
+  refine(factor = 4) {
+    const sel = this.sel.box || (this.sel.rect ? { min: this.sel.rect.min, max: this.sel.rect.max } : null);
+    if (!sel) return null;
+    this.clearRefine();
+    const fs = this.step / Math.max(2, factor);
+    const min = sel.min, max = sel.max, E = 1e-6, pts = [];
+    for (let x = min.x; x <= max.x + E; x += fs)
+      for (let y = min.y; y <= max.y + E; y += fs)
+        for (let z = min.z; z <= max.z + E; z += fs) pts.push(x, y, z);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+    const m = new THREE.PointsMaterial({ color: this.cfg.hi, map: dotTexture(), size: Math.max(fs * 0.2, 0.025),
+      sizeAttenuation: true, transparent: true, opacity: 0.95, alphaTest: 0.02, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.fineObj = new THREE.Points(g, m); this.fineObj.renderOrder = 997;
+    this.fineStep = fs; this.fineBox = { min: min.clone(), max: max.clone() }; this.fineGroup.add(this.fineObj);
+    return { step: +fs.toFixed(3), nodes: pts.length / 3, min: [min.x, min.y, min.z], max: [max.x, max.y, max.z] };
+  }
+  clearRefine() {
+    if (this.fineObj) { this.fineGroup.remove(this.fineObj); this.fineObj.geometry.dispose(); this.fineObj.material.dispose(); this.fineObj = null; this.fineStep = 0; this.fineBox = null; }
+  }
+  get hasFine() { return !!this.fineObj; }
+
+  _inFineBox(p) {
+    const b = this.fineBox; if (!b) return false;
+    return p.x >= b.min.x - 1e-3 && p.x <= b.max.x + 1e-3 && p.y >= b.min.y - 1e-3 && p.y <= b.max.y + 1e-3 && p.z >= b.min.z - 1e-3 && p.z <= b.max.z + 1e-3;
+  }
+  /** Snap any world point to the nearest lattice node (finer step inside a refined region). */
+  snapPoint(p) {
+    const s = (this.fineObj && this._inFineBox(p)) ? this.fineStep : this.step;
+    return new THREE.Vector3(
+      Math.round(p.x / s) * s,
+      this.groundY + Math.round((p.y - this.groundY) / s) * s,
+      Math.round(p.z / s) * s);
+  }
 
   // ── LOD window: rebuild only when the camera crosses a COARSE cell (so a fine
   //    0.5m lattice doesn't rebuild every half-metre of walking) ──
@@ -124,16 +163,28 @@ export class SpatialGrid {
     this.group.add(this.dotsObj);
   }
 
-  /** Nearest grid node under a ray (snapped world coordinate), or null. */
-  pickNode(raycaster) {
-    if (!this.dotsObj) return null;
+  // Nearest node on an object under the ray → { p:Vector3, d:distance } | null.
+  _pickOn(raycaster, obj, thr) {
+    if (!obj) return null;
     const prev = raycaster.params.Points ? raycaster.params.Points.threshold : 1;
-    raycaster.params.Points = { threshold: this.step * 0.4 };
-    const hit = raycaster.intersectObject(this.dotsObj, false);
+    raycaster.params.Points = { threshold: thr };
+    const hit = raycaster.intersectObject(obj, false);
     raycaster.params.Points = { threshold: prev };
     if (!hit.length) return null;
-    const i = hit[0].index, a = this.dotsObj.geometry.getAttribute('position');
-    return new THREE.Vector3(a.getX(i), a.getY(i), a.getZ(i));
+    const i = hit[0].index, a = obj.geometry.getAttribute('position');
+    return { p: new THREE.Vector3(a.getX(i), a.getY(i), a.getZ(i)), d: hit[0].distance };
+  }
+
+  /** Nearest grid node under a ray (snapped world coordinate), or null. Prefers the finer
+   *  refined lattice when present so refined regions snap at higher precision. */
+  pickNode(raycaster) {
+    if (!this.group.visible) return null;
+    const fine = this.fineObj ? this._pickOn(raycaster, this.fineObj, (this.fineStep || this.step) * 0.5) : null;
+    const coarse = this._pickOn(raycaster, this.dotsObj, this.step * 0.45);
+    let best = null;
+    if (fine && coarse) best = (fine.d <= coarse.d + 0.2) ? fine : coarse;  // fine wins near-ties for precision
+    else best = fine || coarse;
+    return best ? best.p : null;
   }
 
   // ── Selection modes ──────────────────────────────────────────────

@@ -21,8 +21,10 @@
 import * as THREE from 'three';
 
 export class SurfaceTracer {
-  constructor({ scene, camera, domElement, world }) {
+  constructor({ scene, camera, domElement, world, grid }) {
     this.scene = scene; this.camera = camera; this.dom = domElement; this.world = world;
+    this.grid = grid || null;         // SpatialGrid — when gridSnap is on, nodes trace like a surface
+    this.gridSnap = false;            // set true while the 3D grid is shown → free-space drawing
     this.enabled = false;
     this.painting = false;            // when true, click/drag over a surface paints
     this.erasing = false;             // when true, click/drag over painted strokes erases them
@@ -107,7 +109,20 @@ export class SurfaceTracer {
     const r = this.dom.getBoundingClientRect();
     this._ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this._ray.setFromCamera(this._ndc, this.camera);
+    // GRID FREE-SPACE: snap to the nearest 3D grid node and treat it exactly like a surface
+    // point — a camera-facing normal — so the cursor + paint + sketch pipeline works in open
+    // space identically to drawing on a real mesh. (Falls through to mesh if no node is hit.)
     const hits = this._ray.intersectObjects(this._targets(), true);
+    if (this.gridSnap && this.grid && this.grid.visible) {
+      // Depth: if aiming at a mesh, draw at THAT depth on the lattice; otherwise reach a
+      // sensible distance into open space. Snap the target to the nearest grid node so it
+      // sits exactly on the lattice. Normal faces the camera (so the cursor/blob reads in 3D).
+      const meshD = (hits.length && hits[0].distance < 40) ? hits[0].distance : (this.gridDepth || 4);
+      const target = this._ray.origin.clone().addScaledVector(this._ray.direction, meshD);
+      const node = this.grid.snapPoint(target);
+      const n = this.camera.position.clone().sub(node).normalize();
+      return { point: node, normal: n, object: null, id: '__grid__', onGrid: true };
+    }
     for (const h of hits) {
       if (h.object === this._wire || h.object.parent === this.cursor || h.object === this.cursor) continue;  // ignore our own helpers
       if (!h.face) continue;                                   // need a face for the normal
@@ -161,7 +176,7 @@ export class SurfaceTracer {
   _highlight(object) {
     if (this._wireFor === object) return;
     this._clearWire();
-    if (!object.geometry) return;
+    if (!object || !object.geometry) return;     // grid free-space hit → no mesh to wireframe
     const wire = new THREE.LineSegments(
       new THREE.WireframeGeometry(object.geometry),
       new THREE.LineBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.22, depthTest: false }));
