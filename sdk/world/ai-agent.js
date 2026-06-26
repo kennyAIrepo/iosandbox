@@ -71,6 +71,8 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {
       target: { type: 'string', description: 'a landmark name, or an object label like "cat" / "tree"' },
       x: { type: 'number' }, z: { type: 'number' } } } },
+  { name: 'go_to_spawn', description: 'Teleport the user to their designated SPAWN point (home) — instantly, THROUGH walls/collision, from anywhere (across a wall, outside the room, mid-air). Use whenever they say "take me back to spawn", "go home", "bring me to the start". The spawn is in scene state as `spawn`; if it is null, tell them to set one with the ◎ Spawn tool first.',
+    input_schema: { type: 'object', properties: {} } },
   { name: 'look', description: 'Aim the camera vertically.',
     input_schema: { type: 'object', properties: { direction: { type: 'string', enum: ['up', 'down', 'level'] }, degrees: { type: 'number' } }, required: ['direction'] } },
   { name: 'turn', description: 'Rotate the view. + = right, − = left (degrees).',
@@ -266,6 +268,7 @@ export class WorldAgent {
       "LOCKING: any object (a prop, the sky, or the whole environment) can be locked so it can't be changed. Use lock_object {label, locked:true/false}. A locked object refuses every move/scale/rotate/edit (from you, the gizmo, or hands) until unlocked — use it to protect a finished piece while you work around it.",
       "TARGETING THE WHOLE WORLD: the base environment is also a listed object, label 'world (environment)' / id __scene__, in objects[]. Use transform_scene (preferred) or scale_object/set_transform with label:'world' to resize/rotate the whole environment — its colliders rebuild and the sky re-encloses automatically. Keep the two straight: 'sky' = the surrounding sky shell; 'world'/'environment' = the building/landscape you walk in.",
       "BRING-ME-TO: navigate_to teleports the avatar's POV straight to a landmark, an object by its label ('the cat', 'tree'), or x/z coordinates — it passes THROUGH walls and lands them standing on the floor there. (Walking with keys/hands still collides normally; only this is a direct jump.)",
+      "SPAWN / HOME: the user can designate a SPAWN point (a neon halo on a surface or mid-air); it's in scene state as `spawn` {position,yaw,pitch}. When they say 'take me back to spawn / home / the start', call go_to_spawn — it teleports them there INSTANTLY and THROUGH walls/collision from anywhere (across a wall, outside the room, in the air). If `spawn` is null, tell them to place one with the ◎ Spawn tool first.",
       "Every object has a short recall NAME (label) — imports are named after what was searched (e.g. 'dragon'). Act on an object by passing its label instead of its id (e.g. scale_object {label:'dragon', factor:2}); use select_in_view for 'this/that', or get_scene to read all labels. rename_object gives something a friendlier name.",
       "TARGET EXACTLY WHAT THE USER MEANS — never edit the wrong object. LIVE STATE has `selectedObject` = the object the user currently has SELECTED (clicked, gizmo on it). RULES: (1) If the user says 'this/that/it/the selected one' OR gives no clear object, act on `selectedObject` — pass NO id/label so the tool defaults to the selection. (2) If they name an object, pass that exact label; if `selectedObject` is set and matches what they named, you may pass its id from state to be certain. (3) NEVER fall back to 'the most recent object' when the user has something selected — operate on the selection. (4) If you genuinely can't tell which object they mean and nothing is selected, ASK rather than guess. When the user selects the pedestal and says 'change its colour/texture', you change the PEDESTAL — not the sculpture.",
       "ANIMATION — use animate_object / stop_animation ONLY; NEVER animate inside run_script. A run_script frame loop cannot be stopped, so 'stop'/'revert' would silently fail. animate_object registers a managed spin/bob/pulse/orbit that remembers the start transform. To STOP: stop_animation {revert:false} freezes it where it is; 'stop and revert'/'undo the rotation'/'put it back' → stop_animation {revert:true} (the default) snaps it to its original transform. 'stop everything' → stop_animation {all:true}. After stopping, confirm honestly — only say it stopped because the tool returned success.",
@@ -340,6 +343,8 @@ export class WorldAgent {
         }
         case 'navigate_to': {
           let { target, x, z } = input;
+          if (target && /^(spawn|home|start)$/i.test(String(target).trim()))
+            return w.goToSpawn() ? 'brought you back to spawn' : 'no spawn point set yet — set one with the ◎ Spawn tool';
           if (typeof x !== 'number' || typeof z !== 'number') {
             const lm = target && w.getLandmarks()[target];
             if (lm) { x = lm.x; z = lm.z; }
@@ -348,6 +353,7 @@ export class WorldAgent {
           if (typeof x === 'number' && typeof z === 'number') { w.teleportNear(x, z); return `brought you to ${target || `(${x.toFixed(1)}, ${z.toFixed(1)})`}`; }
           return 'no such place — give a landmark, an object name, or x/z coordinates';
         }
+        case 'go_to_spawn': return w.goToSpawn() ? 'brought you back to the spawn point' : 'no spawn point set yet — set one with the ◎ Spawn tool (place a halo on a surface or in the air)';
         case 'look':
           if (input.direction === 'up') nav.faceUp(input.degrees ?? 35);
           else if (input.direction === 'down') nav.faceDown(input.degrees ?? 35);

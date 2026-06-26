@@ -196,6 +196,7 @@ video.h{display:none}
   <span class="gbtn" id="gbPaint" title="paint / graffiti — drag your cursor on any wall, floor or object; press harder for a thicker stroke (pen/touch)">🖌 paint</span>
   <span class="gbtn" id="gbSketch" title="AI sketch — draw neon directional lines on a surface to TELL the build agent where & what to change (e.g. a rectangle on a wall → 'make a door here'). The agent reads your sketch's exact spot, surface & shape.">✎ AI sketch</span>
   <span class="gbtn" id="gbErase" title="eraser — click or drag over any painted stroke or AI sketch to remove it">🧽 erase</span>
+  <span class="gbtn" id="gbSpawn" title="set spawn — click a spot on a surface or in mid-air to drop a neon halo as the 'spawn / home' point; ask the agent to 'take me back to spawn' anytime">◎ spawn</span>
   <input id="paintColor" type="color" value="#39ff5a" title="brush colour"
     style="width:24px;height:24px;padding:0;border:1px solid rgba(73,231,134,.4);border-radius:6px;background:none;cursor:pointer;vertical-align:middle">
   <input id="paintSize" type="range" min="0.004" max="1.2" step="0.004" value="0.1" title="brush size — fine for detail, thick to fill grids / spaces (3D)"
@@ -605,7 +606,7 @@ document.getElementById('modeOpts').addEventListener('click', e => {
 });
 
 let hope, world, nav, embody, agent, voice, manip, editor, grid, tracer, running = false;
-let traceOn = false, paintOn = false, eraseOn = false, sketchOn = false, _drawMode = 'paint';
+let traceOn = false, paintOn = false, eraseOn = false, sketchOn = false, _drawMode = 'paint', spawnPickOn = false;
 let gridShown = false, jumpMode = false, gridMode = 'off', camOn = true;   // grid hidden by default on spawn
 
 // Reflect the camera/gesture-tracking toggle state on the corner button.
@@ -618,7 +619,7 @@ function refreshCamBtn() {
 // ── Selection: works in BOTH play (click-select only) and create (full editor) ──
 function refreshEditor() {
   if (!editor) return;
-  if (paintOn || jumpMode || gridMode !== 'off') { editor.setEnabled(false); return; }   // paint/jump/grid tools own the click
+  if (paintOn || sketchOn || eraseOn || spawnPickOn || jumpMode || gridMode !== 'off') { editor.setEnabled(false); return; }   // paint/sketch/erase/spawn/jump/grid own the click
   if (buildMode) editor.setEnabled(true);                                       // full create editor (gizmo, box-select)
   else editor.setEnabled(true, { selectOnly: true });                           // play: click any object to select it
 }
@@ -753,6 +754,7 @@ async function boot() {
   tracer.onPaint = paintDab;
   tracer.onPaintEnd = paintEnd;
   tracer.onErase = eraseAt;
+  tracer.onPick = _onSpawnPick;
 
   // Click-to-jump navigation (real physics: no surface under you → you fall).
   wireJump();
@@ -1130,6 +1132,25 @@ function toggleErase(on) {
   } else { tracer.setErasing(false); refreshEditor(); flash('erase off'); }
 }
 
+// Set-spawn: one click on a surface or in mid-air (with the grid on) drops a neon halo
+// as the spawn/home point. The agent can then "take me back to spawn" from anywhere.
+function toggleSpawnPick(on) {
+  spawnPickOn = !!on;
+  if (spawnPickOn) { if (paintOn) togglePaint(false); if (sketchOn) toggleSketch(false); if (eraseOn) toggleErase(false); }
+  document.getElementById('gbSpawn').classList.toggle('gon', spawnPickOn);
+  if (spawnPickOn) {
+    traceOn = true; tracer.setEnabled(true); document.getElementById('gbTrace').classList.add('gon');
+    tracer.setPicking(true); refreshEditor();
+    flash('◎ click a spot on a surface — or turn on ▦ grid and click in mid-air — to set it as the spawn / home point');
+  } else { tracer.setPicking(false); refreshEditor(); flash('spawn tool off'); }
+}
+function _onSpawnPick(hit) {
+  world.setSpawnPoint(hit.point.x, hit.point.y, hit.point.z, { yaw: nav.yaw, pitch: nav.pitch });
+  toggleSpawnPick(false);
+  flash('◎ spawn set here — say "take me back to spawn" anytime');
+  autosaveDraft();   // persist the spawn immediately
+}
+
 // Brush radius scales with pen/touch pressure (mouse → steady mid size; use the slider).
 function _brushRadius(hit) {
   const base = parseFloat(document.getElementById('paintSize').value) || 0.16;
@@ -1331,12 +1352,14 @@ function wireGridCanvas() {
     if (!traceOn && paintOn) togglePaint(false);    // trace off ⇒ paint off
     if (!traceOn && sketchOn) toggleSketch(false);  // trace off ⇒ AI sketch off
     if (!traceOn && eraseOn) toggleErase(false);    // trace off ⇒ erase off
+    if (!traceOn && spawnPickOn) toggleSpawnPick(false);
     flash(traceOn ? '⊹ surface trace ON — mouse rides the mesh; the ring shows the exact hit point'
                   : 'surface trace off');
   });
   document.getElementById('gbPaint').addEventListener('click', () => togglePaint(!paintOn));
   document.getElementById('gbSketch').addEventListener('click', () => toggleSketch(!sketchOn));
   document.getElementById('gbErase').addEventListener('click', () => toggleErase(!eraseOn));
+  document.getElementById('gbSpawn').addEventListener('click', () => toggleSpawnPick(!spawnPickOn));
   bar.addEventListener('click', e => { const b = e.target.closest('[data-gm]'); if (b) setGridMode(b.dataset.gm); });
   document.getElementById('gbClear').addEventListener('click', () => {
     grid.clearSelection(); world.gridSelection = grid.getSelection(); updateCoordBox(null); showCoordTag(null); flash('grid selection cleared');
@@ -1726,6 +1749,7 @@ async function openSavedWorld(rec) {
     await boot();
     if (rec.avatar) { nav.yaw = rec.avatar.yaw; nav.pitch = rec.avatar.pitch; }
     if (rec.environment) world.applyEnvironment(rec.environment);
+    if (rec.spawn && rec.spawn.position) world.setSpawnPoint(rec.spawn.position[0], rec.spawn.position[1], rec.spawn.position[2], { yaw: rec.spawn.yaw, pitch: rec.spawn.pitch });
     dbg('8b entering world…');
     // ENTER as soon as the base scene is ready — never block the LOADING screen on
     // saved props (a dead/slow asset URL would otherwise hang entry). Props + scripts
@@ -1773,6 +1797,7 @@ function _worldRecord(name, thumb, baseOverride) {
     environment: world.getEnvironment(),
     objects: world.snapshot(),
     scripts: world.scripts,
+    spawn: world.getSpawn(),                 // user-designated home (neon halo) → restored on load
     thumb: thumb || captureThumb(),
   };
 }
@@ -1841,6 +1866,12 @@ async function doPublish(name, thumb) {
   if (!world) return { ok: false, error: 'no world loaded' };
   name = String(name || '').trim();
   if (!name) return { ok: false, error: 'enter a name first' };
+  // Ask for a SPAWN point before a world goes public, so visitors (and "take me to spawn") land somewhere deliberate.
+  if (!world.getSpawn()) {
+    const useHere = confirm('Set a spawn point before publishing?\n\nOK — use your current spot as the spawn.\nCancel — close this and place a halo yourself with ◎ Spawn (then publish again).');
+    if (!useHere) return { ok: false, error: 'set a spawn point first — use the ◎ Spawn tool to drop a halo, then publish' };
+    const p = world.getAvatarPosition(); world.setSpawnPoint(p.x, p.y, p.z, { yaw: nav.yaw, pitch: nav.pitch });
+  }
   const saved = await doSave(name, thumb, { silent: true });
   if (!saved.ok) return saved;
   name = saved.name;

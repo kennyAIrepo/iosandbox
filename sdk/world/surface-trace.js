@@ -32,6 +32,8 @@ export class SurfaceTracer {
     this.onPaintStart = null;         // host hook: (hit) => {}  — pointer down on a surface
     this.onPaintEnd = null;           // host hook: () => {}      — stroke released
     this.onErase = null;              // host hook: (hit) => {}  — erase the stroke under the cursor
+    this.picking = false;             // one-shot pick mode (e.g. place the spawn halo)
+    this.onPick = null;               // host hook: (hit) => {}  — fired once on click
     this.hit = null;                  // { point:Vector3, normal:Vector3, pressure, object, id }
 
     this._ray = new THREE.Raycaster();
@@ -88,6 +90,8 @@ export class SurfaceTracer {
   setPainting(on) { this.painting = !!on; if (on) this.erasing = false; }
   /** Enable click/drag erasing (host supplies onErase). */
   setErasing(on) { this.erasing = !!on; if (on) this.painting = false; }
+  /** Enable a one-shot pick (host supplies onPick) — e.g. placing the spawn halo. */
+  setPicking(on) { this.picking = !!on; if (on) { this.painting = false; this.erasing = false; } }
 
   // Everything the ray can land on: the base environment + every placed/AI-made object.
   _targets() {
@@ -160,6 +164,7 @@ export class SurfaceTracer {
     if (e.button !== 0) return;       // left button paints/erases; right is look-around
     this._down = true;
     if (this.hit) this.hit.pressure = this._pressure(e);
+    if (this.picking && this.hit) { if (this.onPick) this.onPick(this.hit); return; }
     if (this.painting && this.hit) {
       if (this.onPaintStart) this.onPaintStart(this.hit);
       if (this.onPaint) this.onPaint(this.hit);

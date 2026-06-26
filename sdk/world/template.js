@@ -84,6 +84,8 @@ export class WorldTemplate {
     this.surfaceHit = null;       // live mouse-on-mesh hit from SurfaceTracer { point, normal, id }
     this.sketches = [];           // user-drawn neon directional sketches the AI reads as spatial directives
     this._sketchId = 0;
+    this.spawnPoint = null;       // user-designated "home" { position:[x,y,z], yaw, pitch } the agent returns to
+    this._spawnMarker = null;     // floating neon halo at the spawn point
     this.gridSelection = null;    // current 3D-grid pick (dots/path/surface/volume) for the AI
     this.sel = null;              // SelectionManager (spatial/surface marking)
     this._skyLocked = false;      // lock toggles — a locked object can't be moved/scaled/edited until unlocked
@@ -731,6 +733,45 @@ export class WorldTemplate {
   standOn(x, surfaceY, z) {
     const h = this.cfg.capsuleHalfH + this.cfg.capsuleRadius + 0.06;
     this.teleportTo(x, surfaceY + h, z);
+  }
+
+  // ── SPAWN POINT ───────────────────────────────────────────────────────────────
+  // A user-designated "home" the agent can return them to from anywhere. Marked by a
+  // floating neon halo (on a surface or in mid-air). goToSpawn teleports straight there,
+  // THROUGH walls/collisions (it sets the body translation directly), from any spot.
+  setSpawnPoint(x, y, z, opts = {}) {
+    this.spawnPoint = { position: [+x.toFixed(3), +y.toFixed(3), +z.toFixed(3)],
+      yaw: opts.yaw != null ? +opts.yaw.toFixed(3) : this.yaw,
+      pitch: opts.pitch != null ? +opts.pitch.toFixed(3) : 0 };
+    this._buildSpawnMarker(this.spawnPoint.position);
+    return this.spawnPoint;
+  }
+  getSpawn() { return this.spawnPoint || null; }
+  clearSpawnPoint() { this.spawnPoint = null; this._clearSpawnMarker(); }
+  /** Teleport the avatar to the spawn point, ignoring walls/collision. Returns false if none. */
+  goToSpawn() {
+    const s = this.spawnPoint;
+    if (!s) return false;
+    this.teleportTo(s.position[0], s.position[1] + 0.05, s.position[2]);
+    if (s.yaw != null) this.yaw = s.yaw;
+    if (s.pitch != null) this.pitch = s.pitch;
+    return true;
+  }
+  _clearSpawnMarker() {
+    if (this._spawnMarker) { this.scene.remove(this._spawnMarker); this._spawnMarker.traverse(o => { o.geometry && o.geometry.dispose(); o.material && o.material.dispose(); }); this._spawnMarker = null; }
+  }
+  _buildSpawnMarker(p) {
+    this._clearSpawnMarker();
+    const grp = new THREE.Group(); grp.name = 'spawn_marker';
+    const ringMat = (op) => new THREE.MeshBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: op, side: THREE.DoubleSide, depthWrite: false });
+    const r1 = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.64, 44), ringMat(0.9)); r1.rotation.x = -Math.PI / 2;
+    const r2 = new THREE.Mesh(new THREE.RingGeometry(0.82, 0.9, 44), ringMat(0.4)); r2.rotation.x = -Math.PI / 2;
+    const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 3, 8), new THREE.MeshBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.28, depthWrite: false }));
+    beam.position.y = 1.5;
+    grp.add(r1, r2, beam);
+    grp.position.set(p[0], p[1], p[2]);
+    grp.traverse(o => { o.renderOrder = 999; o.userData.system = true; });
+    this.scene.add(grp); this._spawnMarker = grp;
   }
 
   /**
@@ -1426,6 +1467,8 @@ export class WorldTemplate {
       // Where the user is pointing on a real mesh surface (Surface Trace on): exact
       // hit point + surface normal + the object's id. Treat as 'here' for placement.
       surfaceHit: this.surfaceHit || null,
+      // The user's designated SPAWN point (home). go_to_spawn teleports them here through walls.
+      spawn: this.spawnPoint || null,
       // Neon directional sketches the user drew on the scene to direct you (where + what):
       // each has world points, centre, surface normal, on-surface size, the surface's id,
       // and a coarse shape (rectangle/circle/line/freeform). Act on the exact region.
