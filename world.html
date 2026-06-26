@@ -1174,16 +1174,22 @@ function paintEnd() {
   } else if (_stroke) hope.scene.remove(_stroke);
   _stroke = null; _strokeN = 0; _lastPaint = null;
 }
-// Erase the painted stroke under the cursor (and drop its rebuild script so it stays gone).
+// Erase painted strokes near the cursor. Uses the reliable surface hit POINT (not a
+// pixel-perfect disc hit) and removes any graffiti stroke with a dab within the erase
+// radius — plus its rebuild script, so it stays gone on reload. Never touches real models.
 function eraseAt(hit) {
-  if (!hit || !hit.id) return;
-  const a = world.assets.find(x => x.id === hit.id);
-  if (!a) return;
-  const sid = a.mesh && a.mesh.userData && a.mesh.userData.strokeId;
-  if (!(sid || (a.label && a.label.indexOf('graffiti') === 0))) return;   // only erase paint, not real models
-  world.deleteObject(a.id);
-  if (sid) world.removeScriptsByMarker(sid);
-  flash('🧽 erased a paint stroke');
+  if (!hit || !hit.point) return;
+  const T = hope.THREE, P = hit.point, wp = new T.Vector3();
+  const er = (parseFloat(document.getElementById('paintSize').value) || 0.16) * 2.2;
+  let removed = 0;
+  for (const a of world.assets.slice()) {
+    const sid = a.mesh && a.mesh.userData && a.mesh.userData.strokeId;
+    if (!sid && !(a.label && a.label.indexOf('graffiti') === 0)) continue;   // only paint strokes
+    let near = false;
+    a.mesh.traverse(o => { if (o.isMesh) { o.getWorldPosition(wp); if (wp.distanceTo(P) <= er) near = true; } });
+    if (near) { world.deleteObject(a.id); if (sid) world.removeScriptsByMarker(sid); removed++; }
+  }
+  if (removed) flash('🧽 erased ' + removed + ' paint stroke' + (removed > 1 ? 's' : ''));
 }
 
 // ── 3D grid canvas: show/hide, modes, dot-picking, coordinate readout ──
