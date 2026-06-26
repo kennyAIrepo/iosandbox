@@ -81,6 +81,7 @@ export class WorldTemplate {
     this.scripts = [];            // agent run_script snippets, saved + replayed with the world
     this.editor = null;           // ObjectEditor (gizmo selection) — set by the host after creation
     this._animations = new Map(); // id → managed animation { tick, base, spec } (stoppable + revertible)
+    this.surfaceHit = null;       // live mouse-on-mesh hit from SurfaceTracer { point, normal, id }
     this.gridSelection = null;    // current 3D-grid pick (dots/path/surface/volume) for the AI
     this.sel = null;              // SelectionManager (spatial/surface marking)
     this._skyLocked = false;      // lock toggles — a locked object can't be moved/scaled/edited until unlocked
@@ -929,6 +930,27 @@ export class WorldTemplate {
   sceneChildrenSnapshot() { return new Set(this.scene ? this.scene.children : []); }
 
   /**
+   * Place/move an object onto the exact point the user is pointing at with Surface Trace
+   * (this.surfaceHit). Creates a primitive (opts.type) or moves an existing object
+   * (opts.id), seating it ON the surface (lifted by half its height along the normal).
+   */
+  placeOnSurface(opts = {}) {
+    const h = this.surfaceHit;
+    if (!h || !h.point) return null;
+    const p = h.point, n = h.normal || [0, 1, 0];
+    let id = opts.id;
+    if (!id && opts.type) id = this.addObject(opts.type, { color: opts.color, scale: opts.scale });
+    if (!id) { const a = this._selectedAsset() || this._assets[this._assets.length - 1]; id = a && a.id; }
+    const a = this._find(id);
+    if (!a || this.isLocked(a.id)) return null;
+    const size = new THREE.Box3().setFromObject(a.mesh).getSize(new THREE.Vector3());
+    const lift = (size.y || 1) / 2;
+    a.mesh.position.set(p[0] + n[0] * lift, p[1] + n[1] * lift, p[2] + n[2] * lift);
+    this._syncCollider(a); this._anchorSkybox();
+    return a.id;
+  }
+
+  /**
    * AUTO-ADOPT: after a script runs, register any mesh-bearing object it parented under
    * the scene as a real game object — so EVERYTHING the AI conjures (a neon sign, a text
    * panel, a custom mesh) shows in the object menu and is selectable/movable, with NO
@@ -942,7 +964,7 @@ export class WorldTemplate {
       if (beforeSet && beforeSet.has(o)) continue;                 // existed before the script
       if (o === this.assetLayer || o === this.model || o === this._skybox) continue;
       if (o.isLight || o.isCamera || o.isTransformControls || /TransformControls|BoxHelper|Helper/.test(o.type || '')) continue;
-      if (o.userData && o.userData.id) continue;                   // already a registered asset
+      if (o.userData && (o.userData.id || o.userData.system)) continue;   // already an asset, or a system helper (cursor)
       let hasMesh = false; o.traverse(c => { if (c.isMesh) hasMesh = true; });
       if (!hasMesh) continue;                                      // skip empty/helper groups
       out.push(this.adopt(o, { label: o.name || 'object', source: 'ai' }));
@@ -1399,6 +1421,9 @@ export class WorldTemplate {
       landmarks: this.getLandmarks(),
       environment: this.getEnvironment(),
       gridSelection: this.gridSelection,
+      // Where the user is pointing on a real mesh surface (Surface Trace on): exact
+      // hit point + surface normal + the object's id. Treat as 'here' for placement.
+      surfaceHit: this.surfaceHit || null,
       objects: this.listObjects(),
       // Saved BEHAVIORS (run_script snippets) — so the AI can SEE every scripted effect it
       // made (animations, panels, interactions) and fix/remove them by index on request.
