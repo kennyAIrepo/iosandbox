@@ -16,3 +16,6 @@ node_modules/
 # local key overrides (if you ever keep a real-key copy for `vercel dev`)
 config.local.js
 dei_config.local.js
+
+# copyrighted local audio — never commit
+assets/audio/*.mp3

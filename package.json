@@ -4,7 +4,17 @@
   "version": "1.0.0",
   "type": "module",
   "description": "hopeOS — browser-native 3D/AR spatial engine. Static site + Vercel serverless key-proxy.",
+  "scripts": {
+    "test": "node tests/hand-smoke.mjs && node tests/game-smoke.mjs && node tests/body-smoke.mjs",
+    "test:hand": "node tests/hand-smoke.mjs",
+    "test:game": "node tests/game-smoke.mjs",
+    "test:body": "node tests/body-smoke.mjs"
+  },
   "dependencies": {
     "@vercel/blob": "latest"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^25.3.0",
+    "three": "^0.160.0"
   }
 }

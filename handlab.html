@@ -1,0 +1,1007 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>hopeOS · Hand Lab</title>
+<style>
+  :root {
+    --cy: #66e0ff; --cy-dim: rgba(102,224,255,.45);
+    --panel: rgba(13,18,26,.78); --edge: rgba(102,224,255,.22);
+    --txt: #cfe6f2; --mut: #6d8494;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #070a10;
+    font-family: 'Segoe UI', system-ui, sans-serif; color: var(--txt); }
+  video, canvas { position: fixed; inset: 0; width: 100%; height: 100%; }
+  #bgVid { object-fit: cover; transform: scaleX(-1); display: none; filter: brightness(.82) saturate(.9); }
+  #vid { width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+  #c { display: block; }
+
+  .panel { position: fixed; background: var(--panel); border: 1px solid var(--edge);
+    border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(10px); z-index: 10;
+    max-height: calc(100vh - 120px); overflow-y: auto; scrollbar-width: thin; }
+  #hudL { left: 14px; top: 60px; width: 218px; }
+  #hudR { right: 14px; top: 60px; width: 212px; }
+  h1 { position: fixed; left: 16px; top: 14px; font-size: 15px; font-weight: 600; letter-spacing: .16em;
+    color: var(--cy); z-index: 10; text-shadow: 0 0 18px var(--cy-dim); }
+  h1 small { color: var(--mut); letter-spacing: .05em; font-weight: 400; margin-left: 8px; }
+  .sec { margin-bottom: 13px; }
+  .sec:last-child { margin-bottom: 2px; }
+  .lbl { font-size: 9.5px; letter-spacing: .18em; color: var(--mut); margin-bottom: 7px; }
+  .row { display: flex; gap: 5px; flex-wrap: wrap; }
+  button.opt { flex: 1 1 auto; min-width: 56px; background: rgba(30,42,56,.55); color: var(--txt);
+    border: 1px solid rgba(102,224,255,.14); border-radius: 7px; padding: 6px 4px; font-size: 11px;
+    cursor: pointer; transition: all .15s; }
+  button.opt:hover { border-color: var(--cy-dim); }
+  button.opt.sel { background: rgba(38,84,110,.75); border-color: var(--cy); color: #fff;
+    box-shadow: 0 0 12px rgba(102,224,255,.25); }
+  .sld { display: grid; grid-template-columns: 1fr 44px; align-items: center; gap: 6px; margin: 7px 0 2px; }
+  .sld input { width: 100%; accent-color: var(--cy); height: 3px; }
+  .sld span { font-size: 10px; color: var(--cy); text-align: right; font-family: Consolas, monospace; }
+  .sname { font-size: 10.5px; color: var(--txt); opacity: .85; }
+  .chk { display: flex; align-items: center; gap: 7px; font-size: 11px; margin: 6px 0; cursor: pointer; }
+  .chk input { accent-color: var(--cy); }
+  #metrics { font-family: Consolas, monospace; font-size: 10.5px; line-height: 1.75; color: var(--txt); }
+  #metrics b { color: var(--cy); font-weight: 600; }
+  #gameBtn, #cubeBtn { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--cy-dim);
+    background: rgba(28,64,86,.7); color: #fff; font-size: 12px; letter-spacing: .1em; cursor: pointer; }
+  #gameBtn.on, #cubeBtn.on { background: rgba(120,40,40,.6); border-color: rgba(255,120,120,.5); }
+  #entry { position: fixed; inset: 0; display: grid; place-items: center; z-index: 40;
+    background: radial-gradient(ellipse at 50% 40%, #0d1622 0%, #05070c 70%); }
+  #entry .card { text-align: center; max-width: 420px; padding: 30px; }
+  #entry h2 { color: var(--cy); font-size: 22px; letter-spacing: .2em; margin-bottom: 10px; text-shadow: 0 0 26px var(--cy-dim); }
+  #entry p { color: var(--mut); font-size: 12.5px; line-height: 1.7; margin-bottom: 22px; }
+  #startBtn { padding: 13px 46px; font-size: 15px; letter-spacing: .18em; color: #041018;
+    background: linear-gradient(135deg, #66e0ff, #3fa8d8); border: 0; border-radius: 10px; cursor: pointer;
+    box-shadow: 0 0 34px rgba(102,224,255,.35); }
+  #startBtn:disabled { opacity: .55; cursor: wait; }
+  #bootMsg { margin-top: 16px; font-size: 11px; color: var(--cy); font-family: Consolas, monospace; min-height: 15px; }
+  #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30;
+    background: var(--panel); border: 1px solid var(--edge); color: var(--cy); border-radius: 8px;
+    padding: 7px 16px; font-size: 11.5px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  #hint { position: fixed; bottom: 16px; left: 16px; z-index: 10; font-size: 10.5px; color: var(--mut); max-width: 300px; line-height: 1.55; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<video id="bgVid" autoplay playsinline muted></video>
+<video id="vid" autoplay playsinline muted></video>
+<canvas id="c"></canvas>
+
+<h1>HAND LAB <small>hopeOS · holo-hand substrate</small></h1>
+
+<div id="hudL" class="panel">
+  <div class="sec">
+    <div class="lbl">HAND MODEL</div>
+    <div class="row" id="styleOpts">
+      <button class="opt sel" data-s="smooth">Smooth</button>
+      <button class="opt" data-s="full">Full</button>
+      <button class="opt" data-s="slim">Slim</button>
+      <button class="opt" data-s="lowpoly">Lowpoly</button>
+      <button class="opt" data-s="glb">GLB</button>
+    </div>
+    <div class="sld"><input id="alphaSld" type="range" min="0.1" max="0.8" step="0.02" value="0.46"><span id="alphaVal">0.46</span></div>
+    <div class="sname">ghost opacity</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">VIEW · no-flip invariant</div>
+    <div class="row" id="viewOpts">
+      <button class="opt sel" data-v="mirror">🪞 Mirror</button>
+      <button class="opt" data-v="firstPerson">🎮 First-P</button>
+      <button class="opt" data-v="thirdPerson">🎥 Third-P</button>
+      <button class="opt" data-v="inspect">🔍 Inspect</button>
+    </div>
+  </div>
+  <div class="sec">
+    <div class="lbl">SHOW · mesh isolation</div>
+    <div class="row" id="dispOpts">
+      <button class="opt sel" data-disp="lab">Full lab</button>
+      <button class="opt" data-disp="hands">🖐 Hands</button>
+      <button class="opt" data-disp="handsBody">🖐+🧍 Body</button>
+    </div>
+  </div>
+  <div class="sec">
+    <div class="lbl">TRACKING FILTER (One-Euro)</div>
+    <div class="sname">min cutoff <i style="color:var(--mut);font-size:9px">— lower = calmer</i></div>
+    <div class="sld"><input id="cutSld" type="range" min="0.1" max="3" step="0.05" value="1.4"><span id="cutVal">1.40</span></div>
+    <div class="sname">beta <i style="color:var(--mut);font-size:9px">— higher = faster</i></div>
+    <div class="sld"><input id="betaSld" type="range" min="0" max="0.5" step="0.005" value="0.08"><span id="betaVal">0.080</span></div>
+    <div class="sname">prediction (latency comp)</div>
+    <div class="sld"><input id="predSld" type="range" min="0" max="100" step="5" value="40"><span id="predVal">40ms</span></div>
+    <label class="chk"><input id="rawChk" type="checkbox"> show raw landmarks (mirror)</label>
+    <label class="chk"><input id="confChk" type="checkbox" checked> collider conform (ball · cube)</label>
+    <label class="chk"><input id="swapChk" type="checkbox"> swap L/R (device quirk fix)</label>
+  </div>
+  <div class="sec">
+    <div class="lbl">BODY · full-body substrate</div>
+    <label class="chk"><input id="bodyChk" type="checkbox" checked> body mesh (pose-tracked)</label>
+    <div class="sld"><input id="bodyAlphaSld" type="range" min="0.1" max="0.8" step="0.02" value="0.42"><span id="bodyAlphaVal">0.42</span></div>
+    <div class="sname">body opacity · 🪞 mirror = silhouette overlay · 🎥 third-p = your avatar (kinect-style)</div>
+  </div>
+</div>
+
+<div id="hudR" class="panel">
+  <div class="sec">
+    <div class="lbl">METRICS</div>
+    <div id="metrics">booting…</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">GAME · RUBIK'S CUBE</div>
+    <button id="cubeBtn">🧊 SPAWN CUBE</button>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">drops onto the table at the frame bottom
+      · grab ✊ / pinch 🤏 · carry it, drop it, pick it back up · layer twisting: next</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">GAME · BEAT RUSH</div>
+    <div class="row" id="diffOpts">
+      <button class="opt" data-d="chill">Chill</button>
+      <button class="opt sel" data-d="rush">Rush</button>
+      <button class="opt" data-d="insane">Insane</button>
+    </div>
+    <div class="row" style="margin-top:6px" id="trackOpts">
+      <button class="opt" data-t="synth">♪ Synth</button>
+      <button class="opt sel" data-t="baked">⭐ Beat It</button>
+      <button class="opt" data-t="mp3">📂 MP3…</button>
+    </div>
+    <input type="file" id="mp3File" accept="audio/*" style="display:none">
+    <div id="trackName" style="font-size:9.5px;color:var(--mut);margin:6px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">track: Beat It ⭐ baked · 138.8 BPM · 808 onsets</div>
+    <button id="gameBtn">▶ START ROUND</button>
+    <label class="chk"><input id="ballChk" type="checkbox" checked> ball sandbox (grab · throw · spin)</label>
+  </div>
+</div>
+
+<div id="entry">
+  <div class="card">
+    <h2>HAND LAB</h2>
+    <p>Smooth procedural holo hands, forged in-browser from the tracking skeleton itself —
+       bone-rigged, One-Euro filtered, latency-compensated, with real hand physics:
+       grab the ball, spin it with your wrist, throw it, pick it up — or spawn the
+       <b style="color:var(--cy)">RUBIK'S CUBE</b> onto the holo table and handle it
+       for real (your fingers occlude it, it never hovers). Then hit
+       <b style="color:var(--cy)">BEAT RUSH</b> — a beat-synced punch game where orbs fly
+       out of the vanish point onto your fists, and walls make you lean.</p>
+    <button id="startBtn">▶ START</button>
+    <div style="margin-top:12px">
+      <button id="inspectBtn" style="padding:8px 22px;font-size:11.5px;letter-spacing:.12em;color:var(--cy);
+        background:transparent;border:1px solid var(--cy-dim);border-radius:8px;cursor:pointer">🔍 INSPECT MESH — no camera</button>
+    </div>
+    <div id="bootMsg"></div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// Dev safety net (non-module, runs even if the module graph dies): any
+// uncaught error — e.g. a stale-cached SDK module missing a new export —
+// otherwise kills EVERY listener silently and buttons just "do nothing".
+(function () {
+  function show(msg) {
+    var b = document.getElementById('errBanner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'errBanner';
+      b.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99;background:rgba(120,20,28,.94);' +
+        'color:#ffd9dc;font:12px/1.5 Consolas,monospace;padding:8px 14px;white-space:pre-wrap';
+      document.body.appendChild(b);
+    }
+    b.textContent = '⚠ ' + msg + '    — if this mentions a missing export or failed import, hard-refresh (Ctrl+Shift+R)';
+  }
+  addEventListener('error', function (e) { if (e.message) show(e.message); });
+  addEventListener('unhandledrejection', function (e) {
+    show((e.reason && (e.reason.message || String(e.reason))) || 'unhandled promise rejection');
+  });
+})();
+</script>
+<div id="hint">☝ raise your hands to the camera · grip or pinch 🤏 the ball — it spins with your wrist, throw it, pick it up
+  · 🧊 RUBIK'S CUBE: it rests on the table at the frame bottom — grab it, hold it, drop it
+  · 🥊 BEAT RUSH: punch the orbs on the beat, lean to dodge walls</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { initCamera, initTracking } from '/sdk/core/tracking.js';
+import { HandFilterBank } from '/sdk/core/filters.js';
+import { HoloHandRig } from '/sdk/core/hand-rig.js';
+import { HandViews } from '/sdk/core/hand-views.js';
+import { REST_R42, REST_L42 } from '/sdk/core/hands.js';
+import { HandBody, GrabbableSphere, GrabbableBox, BodyBody } from '/sdk/core/game-physics.js';
+import { buildRubiksCube, makeHoloTable, makeContactShadow } from '/sdk/core/rubiks-cube.js';
+import { BeatGame } from '/sdk/core/beat-game.js';
+import { HoloBodyRig, BodyPose, BODY_RADII } from '/sdk/core/body-rig.js';
+
+// ─────────────────────────── state ───────────────────────────
+const S = {
+  mode: 'mirror', style: 'smooth',
+  predMs: 40, conform: true, showRaw: false, swap: false,
+  body: true,
+  display: 'lab',   // 'lab' = everything · 'hands' = hand meshes only · 'handsBody' = hands + full body
+  running: false,
+};
+// Mesh isolation: strips props (ball/cube/beat env) to judge the substrate
+// meshes alone. 'lab' defers body visibility to the checkbox; the isolation
+// modes force it.
+const meshOnly = () => S.display !== 'lab';
+const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
+const els = Object.fromEntries(
+  ['bgVid','vid','c','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
+    .map(id => [id, document.getElementById(id)]));
+
+function toast(m, ms = 2200) {
+  els.toast.textContent = m; els.toast.style.opacity = 1;
+  clearTimeout(toast._t); toast._t = setTimeout(() => els.toast.style.opacity = 0, ms);
+}
+
+// ─────────────────────────── three ───────────────────────────
+const renderer = new THREE.WebGLRenderer({ canvas: els.c, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 0);   // mirror mode: video shows through
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.01, 200);
+
+// Environment for FP / TP modes is owned by BeatGame (scrolling grid,
+// aurora dome, rails, fly-by gates) — created below, toggled per mode.
+
+// Third-person avatar silhouette (a ghost capsule "you")
+const avatar = new THREE.Group();
+{
+  const mat = new THREE.MeshBasicMaterial({ color: 0x2a7ba0, transparent: true, opacity: 0.28 });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.95, 6, 14), mat);
+  body.position.y = 0.88;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 10), mat);
+  head.position.y = 1.62;
+  avatar.add(body, head);
+}
+scene.add(avatar);
+
+// ─────────────────────── hands stack ─────────────────────────
+const filters = new HandFilterBank({ minCutoff: 1.4, beta: 0.08 });                    // image landmarks
+const filtersW = new HandFilterBank({ minCutoff: 1.4, beta: 0.08, maxLead: 0.05 });    // world (metres)
+const views = new HandViews({ mode: S.mode });
+let rigR = null, rigL = null;      // mesh-chirality rigs
+let tracker = null;
+
+// Rest-pose packs + stage center for the no-camera Inspect view.
+const INSPECT = {
+  R: REST_R42.slice(0, 21).map(p => new THREE.Vector3(p[0], p[1], p[2])),
+  L: REST_L42.slice(0, 21).map(p => new THREE.Vector3(p[0], p[1], p[2])),
+  center: new THREE.Vector3(0, 0.17, -0.15),
+};
+function poseInspect() {
+  if (rigR) rigR.pose(INSPECT.R);
+  if (rigL) rigL.pose(INSPECT.L);
+}
+
+// Forge (or re-forge) both hand meshes — needs NO camera, runs at page load
+// so the mesh can be inspected and iterated on before tracking is involved.
+function forgeRigs(style) {
+  if (!rigR) rigR = new HoloHandRig(REST_R42, scene, { style });
+  if (!rigL) rigL = new HoloHandRig(REST_L42, scene, { style });
+  rigR.build(style); rigL.build(style);
+  if (S.mode === 'inspect') poseInspect();
+}
+setTimeout(() => {
+  try {
+    forgeRigs(S.style);
+    toast(`hands forged: ${rigR.stats.verts} verts · ${rigR.stats.ms}ms — 🔍 inspect available`);
+  } catch (e) { console.error(e); toast('forge failed: ' + e.message, 6000); }
+}, 80);
+
+// GLB A/B: holohand.glb (the old DEI-route asset) driven through the SAME
+// HoloHandRig + One-Euro stack — isolates mesh look from drive machinery.
+// The split halves are pre-aligned to REST_R42/L42, so geometryFit:false.
+let glbHalves = null;
+async function loadGlbHalves() {
+  if (glbHalves) return glbHalves;
+  const { splitHandModel } = await import('/sdk/assets/loader.js');
+  const d = await splitHandModel('/sdk/assets/holo_hands_model.glb');
+  const toGeo = (h) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(h.positions, 3));
+    if (h.normals) g.setAttribute('normal', new THREE.BufferAttribute(h.normals, 3));
+    if (h.indices && h.indices.length) g.setIndex(new THREE.BufferAttribute(h.indices, 1));
+    return g;
+  };
+  glbHalves = { right: toGeo(d.right), left: toGeo(d.left) };
+  return glbHalves;
+}
+
+// game colliders (plain objects — same shape as the SDK registry)
+const BALL_R = 0.13;
+const ballCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BALL_R, active: true };
+// Rubik's cube: 17cm edge — between a real cube (5.7cm) and the ball, big
+// enough for webcam-grade grab precision, small enough to read handheld.
+const CUBE_EDGE = 0.17, CUBE_HALF = CUBE_EDGE / 2;
+const cubeCollider = { type: 'box', center: new THREE.Vector3(), quat: new THREE.Quaternion(),
+                       half: new THREE.Vector3(CUBE_HALF, CUBE_HALF, CUBE_HALF), active: false };
+
+// Hand PHYSICS bodies — joint colliders + velocities + palm frame, fed the
+// SAME world packs the rigs render, so physics matches pixels exactly.
+const handBodies = { left: new HandBody('left'), right: new HandBody('right') };
+const handBodyArr = [handBodies.left, handBodies.right];
+
+// ── full-body stack: pose filters → view placement → rig + colliders ──
+// (rig is forged at boot; the mirror overlay reuses views.mirrorPoint — the
+// same ray-based projection the hands use, so body pixels match video pixels)
+let bodyRig = null;
+const bodyPose = new BodyPose();
+const bodyBody = new BodyBody(BODY_RADII);
+const poseFilters = new HandFilterBank({ count: 33, minCutoff: 1.0, beta: 0.06 });          // image
+const poseFiltersW = new HandFilterBank({ count: 33, minCutoff: 1.0, beta: 0.06, maxLead: 0.05 });  // world (m)
+const bodyPts = [];               // mirror-projection pool (extends to 37 in the rig)
+for (let i = 0; i < 33; i++) bodyPts.push(new THREE.Vector3());
+let seenPose = 0;
+const TP_ORIGIN = new THREE.Vector3(0, 0, 0);   // avatar spawn (feet) in third-person
+let _bodyRestPool = null;                        // rest-pose stand-in (pre-tracking)
+function bodyRestPose() {
+  if (!bodyRig) return null;
+  if (!_bodyRestPool) _bodyRestPool = bodyRig.rest.map(p => p.clone());
+  for (let i = 0; i < _bodyRestPool.length; i++) {
+    _bodyRestPool[i].copy(bodyRig.rest[i]).add(TP_ORIGIN);
+  }
+  return _bodyRestPool;
+}
+const ballColliders = [handBodies.left, handBodies.right, bodyBody];
+
+// Raw-landmark debug dots (alignment visual, mirror mode)
+const rawDots = new THREE.Points(
+  new THREE.BufferGeometry().setAttribute('position', new THREE.BufferAttribute(new Float32Array(42 * 3), 3)),
+  new THREE.PointsMaterial({ color: 0xffa04d, size: 0.022, transparent: true, opacity: 0.9, depthTest: false })
+);
+rawDots.visible = false; rawDots.renderOrder = 20; rawDots.frustumCulled = false;
+scene.add(rawDots);
+
+// ───────────────────────── view modes ─────────────────────────
+function applyMode(m) {
+  S.mode = m;
+  views.setMode(m === 'inspect' ? 'mirror' : m);
+  const isMirror = m === 'mirror';
+  els.bgVid.style.display = isMirror ? 'block' : 'none';
+  avatar.visible = m === 'thirdPerson' && !bodyOn() && !meshOnly();   // ghost capsule = fallback only
+  scene.background = isMirror ? null : new THREE.Color(m === 'inspect' ? 0x0b1119 : 0x050a12);
+  // far fog: the corridor vanish point must sit INSIDE the fog falloff so
+  // notes materialize out of the haze instead of popping
+  scene.fog = (isMirror || m === 'inspect') ? null : new THREE.Fog(0x050a12, 14, 62);
+  if (beatGame.running && m !== 'firstPerson' && m !== 'thirdPerson') beatGame.stop();
+  beatGame.setVisible(!isMirror && m !== 'inspect' && !meshOnly());
+  rawDots.visible = false;
+  // real-hand occlusion: depth prepass punches hand-shaped holes so the
+  // VIDEO fingers cover scene objects — only correct over the camera feed
+  rigR?.setOccluder(isMirror);
+  rigL?.setOccluder(isMirror);
+  cubeLab.syncVisible();
+  if (m === 'inspect') {
+    poseInspect();
+    camera.position.set(INSPECT.center.x, INSPECT.center.y + 0.3, INSPECT.center.z + 1.1);
+    camera.lookAt(INSPECT.center);
+    camera.updateMatrixWorld();
+    return;
+  }
+  if (isMirror) {
+    camera.position.set(0, 0, 0);
+    camera.rotation.set(0, 0, 0);
+  } else if (m === 'firstPerson') {
+    camera.position.set(0, 1.6, 2.2);
+    camera.lookAt(0, 1.25, -2);
+  } else {
+    avatar.position.set(0, 0, 0);
+    views.avatar.position.set(0, 0, 0);
+    views.avatar.yaw = 0;
+    camera.position.set(0, 2.05, 2.75);
+    camera.lookAt(0, 1.15, -0.4);
+  }
+  camera.updateMatrixWorld();
+  // Third-person = Kinect framing: the corridor anchors to the AVATAR —
+  // notes fly to its punch zone, the camera watches over its shoulder.
+  if (m === 'thirdPerson') beatGame.setFrameAt(TP_ORIGIN, 0, 1.52);
+  else beatGame.setFrame();
+  sandbox.recenter();
+  cubeLab.recenter();
+}
+
+// Cover-fit correction: video is object-fit:cover, landmarks span the full
+// frame — divide out the crop or everything sits a constant offset wrong.
+function updateCover() {
+  const vw = els.bgVid.videoWidth || 1280, vh = els.bgVid.videoHeight || 720;
+  const A = innerWidth / innerHeight, Av = vw / vh;
+  views.cfg.cover.x = Math.min(1, A / Av);
+  views.cfg.cover.y = Math.min(1, Av / A);
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  updateCover();
+});
+els.bgVid.addEventListener('loadedmetadata', updateCover);   // real video size known
+
+// ─────────────── sandbox ball + BEAT RUSH game ───────────────
+// Ball with a spin-visible shell: object-space colour bands read like a
+// beach ball, so hand-driven rotation (and thrown spin) is obvious.
+// OPAQUE + depthWrite → correct occlusion: fingers wrapping the far side
+// disappear behind it, fingers in front cover it.
+function makeBallMesh(r) {
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { uGlow: { value: 0 } },
+    vertexShader: `varying vec3 vN, vV, vO;
+      void main(){ vN = normalize(normalMatrix * normal); vO = position;
+        vec4 mv = modelViewMatrix * vec4(position,1.0); vV = normalize(-mv.xyz);
+        gl_Position = projectionMatrix * mv; }`,
+    fragmentShader: `uniform float uGlow; varying vec3 vN, vV, vO;
+      void main(){
+        vec3 N = normalize(vN), V = normalize(vV);
+        float ndv = abs(dot(N, V));
+        float fres = pow(1.0 - ndv, 1.8);
+        vec3 L = normalize(vec3(0.4, 0.8, 0.5));
+        float dif = 0.45 + 0.55 * max(dot(N, L), 0.0);
+        // object-space panels → visible spin
+        float bands = step(0.0, sin(atan(vO.x, vO.z) * 4.0)) * 0.5 + step(0.0, vO.y) * 0.22;
+        vec3 cA = vec3(0.10, 0.35, 0.52), cB = vec3(0.62, 0.88, 1.0);
+        vec3 c = mix(cA, cB, bands * 0.55 + 0.1) * dif;
+        c += vec3(0.55, 0.9, 1.0) * fres * 0.7 + vec3(0.95, 0.6, 0.3) * uGlow;
+        gl_FragColor = vec4(c, 1.0);
+      }`,
+    transparent: false, depthWrite: true,
+  });
+  return new THREE.Mesh(new THREE.SphereGeometry(r, 26, 18), mat);
+}
+
+const sandbox = {
+  ball: null, enabled: true,
+  sphere: new GrabbableSphere(BALL_R, { gravity: -5.2, restitution: 0.58 }),
+  center: new THREE.Vector3(0, 0, -2),
+  init() {
+    this.ball = makeBallMesh(BALL_R);
+    scene.add(this.ball);
+    this.recenter();
+  },
+  recenter() {
+    views.workspaceCenter(camera, this.center);
+    this.sphere.reset(this.center.clone().add(new THREE.Vector3(0.38, 0.05, 0)));
+  },
+  floorY() { return S.mode === 'mirror' ? this.center.y - 1.05 : 0; },
+  update(dt) {
+    if (!this.ball) return;
+    const show = this.enabled && S.mode !== 'inspect' && !meshOnly();
+    this.ball.visible = show;
+    ballCollider.active = show && S.conform;
+    if (!show) return;
+    // full loop: grab (grip or pinch) → stick to palm frame (rotates with
+    // the wrist) → release throws with spin → gravity/floor → pick back up.
+    // Colliders include the BODY — the ball bounces off your chest.
+    this.sphere.update(dt, ballColliders, this.floorY());
+    if (!this.sphere.grabbed() && this.sphere.pos.distanceTo(this.center) > 3.4) this.sphere.reset();
+    this.ball.position.copy(this.sphere.pos);
+    this.ball.quaternion.copy(this.sphere.quat);
+    this.ball.material.uniforms.uGlow.value +=
+      ((this.sphere.grabbed() ? 0.35 : 0) - this.ball.material.uniforms.uGlow.value) * 0.12;
+    ballCollider.center.copy(this.sphere.pos);
+  },
+};
+
+// ─────────────── RUBIK'S CUBE game (grab · hold · drop) ───────────────
+// The full object loop on a BOX: collision avoidance against every hand
+// (and body) collider with torque, grab → rigid palm-follow, throw/drop,
+// corner-tumble onto the TABLE — a holo shelf pinned to the BOTTOM OF THE
+// CAMERA FRAME in mirror mode. Occlusion is depth-real both ways: holo
+// fingers wrapping the far side hide behind the cube, and the mirror-mode
+// hand depth-prepass lets your REAL fingers cover the cube from the front.
+const _cubeMid = new THREE.Vector3();
+const cubeLab = {
+  on: false, group: null, table: null, shadow: null, lit: false,
+  box: new GrabbableBox(CUBE_HALF, { gravity: -5.2, restitution: 0.24 }),
+  center: new THREE.Vector3(0, 0, -2),
+  tableY: -1,
+  scale: 1,           // two-hand pinch resize (DEI basketball gesture)
+  iz: -2,             // interaction depth — follows the tracked hands
+  _scaling: null,
+  init() {
+    this.group = buildRubiksCube({ edge: CUBE_EDGE }).group;
+    this.table = makeHoloTable({ width: 3.6, depth: 1.9 });
+    this.shadow = makeContactShadow(CUBE_EDGE * 0.85);
+    scene.add(this.group, this.table, this.shadow);
+    if (!this.lit) {   // stickers/plastic are Standard materials — the lab's only lights
+      const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+      sun.position.set(1.4, 2.6, 2.2);
+      scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun);
+      this.lit = true;
+    }
+  },
+  recenter() {
+    if (!this.on) return;
+    views.workspaceCenter(camera, this.center);
+    if (S.mode === 'mirror') {
+      // the TABLE = the bottom edge of the camera frame at the cube's depth
+      // (+0.06 so the resting cube sits fully inside the frame)
+      const dist = camera.position.distanceTo(this.center);
+      this.tableY = this.center.y - Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * dist + 0.06;
+    } else this.tableY = 0;   // FP/TP: the world floor
+    this.iz = this.center.z;
+    this.table.position.set(this.center.x, this.tableY, this.iz + 0.2);
+    // spawn above the table so it visibly DROPS, tumbles, and settles
+    this.box.reset(new THREE.Vector3(this.center.x - 0.05, this.tableY + CUBE_HALF * this.scale + 0.5, this.iz));
+  },
+  setScale(f) {
+    this.scale = f;
+    this.box.setHalf(CUBE_HALF * f);
+    this.group.scale.setScalar(f);
+    cubeCollider.half.set(CUBE_HALF * f, CUBE_HALF * f, CUBE_HALF * f);
+  },
+  toggle(on) {
+    this.on = on;
+    if (on && !this.group) this.init();
+    els.cubeBtn.textContent = on ? '✕ REMOVE CUBE' : '🧊 SPAWN CUBE';
+    els.cubeBtn.classList.toggle('on', on);
+    if (on) {
+      // mesh-isolation hides all props — spawning the cube means you want
+      // to SEE it, so exit isolation first (same as START ROUND does)
+      if (meshOnly()) applyDisplay('lab');
+      if (sandbox.enabled) {   // keep the stage clear — re-check the box to bring the ball back
+        sandbox.enabled = false;
+        document.getElementById('ballChk').checked = false;
+      }
+      this.recenter();
+      toast('🧊 cube incoming — it drops to the table · grab ✊ or pinch 🤏 · carry, drop, pick it back up', 3800);
+    }
+    this.syncVisible();
+  },
+  syncVisible() {
+    const show = this.on && S.mode !== 'inspect' && !meshOnly();
+    if (this.group) this.group.visible = this.shadow.visible = show;
+    if (this.table) this.table.visible = show && S.mode === 'mirror';
+    cubeCollider.active = show && S.conform;
+  },
+  update(dt) {
+    this.syncVisible();
+    if (!this.on || !this.group || S.mode === 'inspect') return;
+    const L = handBodies.left, R = handBodies.right;
+
+    // ── two-hand pinch = SCALE (the DEI basketball gesture): pinch with
+    // both hands near the cube, pull apart / squeeze to resize ──
+    const twoPinch = !this.box.grabbed() &&
+      L.present && R.present && L.pinch > 0.7 && R.pinch > 0.7;
+    if (twoPinch) {
+      _cubeMid.copy(L.pinchPoint).add(R.pinchPoint).multiplyScalar(0.5);
+      if (this._scaling || this.box.surfaceDistance(_cubeMid) < 0.3) {
+        const d = L.pinchPoint.distanceTo(R.pinchPoint);
+        if (!this._scaling) this._scaling = { d0: Math.max(d, 1e-3), s0: this.scale };
+        this.setScale(Math.max(0.45, Math.min(2.6, this._scaling.s0 * d / this._scaling.d0)));
+        this.box.pos.lerp(_cubeMid, 0.4);            // held between the pinches
+        this.box.vel.set(0, 0, 0);
+        this.box.angVel.multiplyScalar(0.85);
+      }
+    } else this._scaling = null;
+
+    // ── depth follow: the cube's interaction plane tracks the hands'
+    // measured depth, so the cube is always WHERE YOUR HANDS ARE — no
+    // on-screen-overlap-but-metres-apart-in-z ghost contact ──
+    if (S.mode === 'mirror') {
+      let z = 0, n = 0;
+      if (L.present) { z += L.palm.z; n++; }
+      if (R.present) { z += R.palm.z; n++; }
+      if (n) {
+        z = Math.max(this.center.z - 0.7, Math.min(this.center.z + 0.7, z / n));
+        this.iz += (z - this.iz) * Math.min(1, dt * 1.6);
+      }
+      if (!this.box.grabbed() && !this._scaling && this.box.vel.lengthSq() < 0.5) {
+        this.box.pos.z += (this.iz - this.box.pos.z) * Math.min(1, dt * 2.5);
+      }
+      this.table.position.z = this.iz + 0.2;
+    }
+
+    if (!this._scaling) this.box.update(dt, ballColliders, this.tableY);   // hands + body
+    if (!this.box.grabbed() && this.box.pos.distanceTo(this.center) > 3.4) this.box.reset();
+    this.group.position.copy(this.box.pos);
+    this.group.quaternion.copy(this.box.quat);
+    cubeCollider.center.copy(this.box.pos);
+    cubeCollider.quat.copy(this.box.quat);
+    // contact shadow pins it to the table: tighter + darker when close
+    const h = Math.max(0, this.box.pos.y - CUBE_HALF * this.scale - this.tableY);
+    this.shadow.position.set(this.box.pos.x, this.tableY + 0.002, this.box.pos.z);
+    this.shadow.material.uniforms.uStrength.value = 0.12 + 0.5 * Math.max(0, 1 - h / 0.55);
+    const s = (1 + h * 1.1) * this.scale;
+    this.shadow.scale.set(s, s, 1);
+  },
+};
+
+const beatGame = new BeatGame(scene, camera, {
+  onStateChange(on) {
+    els.gameBtn.textContent = on ? '■ STOP' : '▶ START ROUND';
+    els.gameBtn.classList.toggle('on', on);
+  },
+  onRetry() { startRound(); },
+});
+
+// ─────────────── SHOW · mesh isolation ───────────────
+// 'hands'      → ONLY the hand meshes (body + all props hidden)
+// 'handsBody'  → hand meshes + the full-body rig, still no props
+// 'lab'        → everything back (body follows its checkbox, props their toggles)
+function applyDisplay(d) {
+  S.display = d;
+  document.querySelectorAll('#dispOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.disp === d));
+  if (meshOnly() && beatGame.running) beatGame.stop();
+  beatGame.setVisible(S.mode !== 'mirror' && S.mode !== 'inspect' && !meshOnly());
+  avatar.visible = S.mode === 'thirdPerson' && !bodyOn() && !meshOnly();
+  const bodyChk = document.getElementById('bodyChk');
+  if (!meshOnly()) S.body = bodyChk.checked;   // back to lab → checkbox rules again
+  else bodyChk.checked = bodyOn();             // isolation forces it → reflect that
+  if (bodyRig && !bodyOn()) bodyRig.pose(null);   // hide now, not next pose frame
+  cubeLab.syncVisible();   // ball follows on its next update tick
+  toast(d === 'hands' ? '🖐 hands only — mesh isolated' :
+        d === 'handsBody' ? '🖐+🧍 hands + full body — no props' :
+        'full lab — props back');
+}
+document.getElementById('dispOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  applyDisplay(b.dataset.disp);
+});
+
+const gameCfg = { difficulty: 'rush', trackMode: 'baked', file: null };
+async function startRound() {
+  if (meshOnly()) applyDisplay('lab');   // a round needs its props visible
+  // playable in First-P (through your eyes) AND Third-P (Kinect avatar view)
+  if (S.mode !== 'firstPerson' && S.mode !== 'thirdPerson') {
+    document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === 'firstPerson'));
+    applyMode('firstPerson');
+  }
+  try {
+    if (gameCfg.trackMode === 'mp3') {
+      if (!gameCfg.file) { toast('pick an MP3 first (📂 MP3…)'); return; }
+      toast('decoding + beat-mapping the track…', 4000);
+      const info = await beatGame.startFile(gameCfg.file, gameCfg.difficulty);
+      toast(`mapped: ${info.notes} notes · ${info.walls} walls · ~${info.bpm} BPM`, 3500);
+    } else if (gameCfg.trackMode === 'baked') {
+      // embedded track + offline-baked beat map — the sync ground truth
+      const info = await beatGame.startBaked(gameCfg.difficulty);
+      toast(`⭐ Beat It: ${info.notes} notes on baked onsets · ~${info.bpm} BPM`, 3000);
+    } else {
+      await beatGame.startSynth(gameCfg.difficulty);
+    }
+  } catch (e) {
+    console.error(e);
+    toast('track failed: ' + (e.message || e), 5000);
+  }
+}
+
+// Live spatial state — avatar/hand coordinates, ball, game — exposed as
+// plain numbers for external tooling and in-game scripting.
+const EXPO = { t: 0, mode: 'mirror', head: { x: 0.5, y: 0.5 }, floorY: 0,
+               hands: { left: {}, right: {} }, body: {}, ball: {}, cube: {}, game: {} };
+window.HOPEOS_STATE = EXPO;
+
+// ───────────────────────── main loop ─────────────────────────
+const M = { fps: 0, detect: 0, pose: 0, lastMet: 0 };
+const seen = { left: 0, right: 0 };
+const handsBySlot = { left: null, right: null };
+let lastT = performance.now();
+
+function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now();
+  const dt = Math.min((now - lastT) / 1000, 0.05);
+  lastT = now;
+  M.fps += (1000 / Math.max(now - (loop._p || now - 16), 1) - M.fps) * 0.06;
+  loop._p = now;
+
+  // ── INSPECT: orbit the rest-pose mesh, no tracking involved ──
+  if (S.mode === 'inspect') {
+    const t = now * 0.00042;
+    const zr = 1.05 * (+new URLSearchParams(location.search).get('zoom') || 1);   // ?zoom=0.5 → closeup
+    camera.position.set(
+      INSPECT.center.x + Math.sin(t) * zr,
+      INSPECT.center.y + 0.28 * (zr / 1.05) + Math.sin(t * 0.63) * 0.22 * (zr / 1.05),
+      INSPECT.center.z + Math.cos(t) * zr
+    );
+    camera.lookAt(INSPECT.center);
+    if (rigR) rigR.tick(now * 0.001);
+    if (rigL) rigL.tick(now * 0.001);
+    if (now - M.lastMet > 350) {
+      M.lastMet = now;
+      els.metrics.innerHTML =
+        `mesh <b>${rigR?.stats?.verts ?? '—'}</b> verts (${rigR?.stats?.style ?? 'forging…'})<br>` +
+        `forge <b>${rigR?.stats?.ms ?? '—'}ms</b> · fps <b>${M.fps.toFixed(0)}</b><br>` +
+        `view <b>inspect</b> — orbiting rest pose`;
+    }
+    renderer.render(scene, camera);
+    return;
+  }
+
+  // 1. detect (raw landmarks — One-Euro does the smoothing)
+  const t0 = performance.now();
+  const frame = tracker ? tracker.detect() : { hands: null, handedness: [], handCount: 0 };
+  M.detect += (performance.now() - t0 - M.detect) * 0.1;
+
+  // 2. gather hands (LABEL-FREE), key filters by SCREEN SLOT (left/right half —
+  //    stable while a hand stays on its side; MediaPipe labels are never used)
+  handsBySlot.left = handsBySlot.right = null;
+  if (frame.hands) {
+    const raw = [];
+    for (let h = 0; h < Math.min(frame.handCount, 2); h++) {
+      if (frame.hands[h]) raw.push({ img: frame.hands[h], world: (frame.handsWorld && frame.handsWorld[h]) || null });
+    }
+    raw.sort((a, b) => a.img[0].x - b.img[0].x);
+    for (let k = 0; k < raw.length; k++) {
+      // geometric slot for filter continuity (views applies swapSlots itself)
+      const slot = raw.length === 1 ? (raw[k].img[0].x >= 0.5 ? 'right' : 'left') : (k === 0 ? 'left' : 'right');
+      filters.apply(slot, raw[k].img, now);
+      let world = null;
+      if (raw[k].world) {
+        filtersW.apply(slot, raw[k].world, now);
+        world = filtersW.predicted(slot, S.predMs);
+      }
+      handsBySlot[slot] = { img: filters.predicted(slot, S.predMs), world };
+      seen[slot] = now;
+    }
+  }
+  for (const slot of ['left', 'right']) {
+    if (!handsBySlot[slot] && seen[slot] && now - seen[slot] > 400) {
+      filters.drop(slot); filtersW.drop(slot); views.dropSlot(slot); seen[slot] = 0;
+    }
+  }
+
+  // 3. view adapter → world packs keyed by MEASURED mesh chirality; slots
+  //    are preset anchors clamped to their half — hands can never cross.
+  const packs = views.resolve([handsBySlot.left, handsBySlot.right], camera);
+
+  // 4. pose rigs
+  const cols = S.conform ? [ballCollider, cubeCollider] : null;
+  const t1 = performance.now();
+  if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
+  if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
+  M.pose += (performance.now() - t1 - M.pose) * 0.1;
+
+  // 4b. FULL BODY: filter the pose (image + world), place per view mode —
+  //     mirror = ray-projected silhouette overlay on your video (exact same
+  //     projection as the hands); third-person = predictive avatar rebuilt
+  //     from worldLandmarks, seen from behind, feet on the floor (Kinect
+  //     framing). The posed points also drive the body colliders.
+  if (frame.pose) { poseFilters.apply('p', frame.pose, now); seenPose = now; }
+  if (frame.poseWorld) poseFiltersW.apply('p', frame.poseWorld, now);
+  if (seenPose && now - seenPose > 900) {
+    poseFilters.drop('p'); poseFiltersW.drop('p'); bodyPose.drop(); seenPose = 0;
+  }
+  let bodyPosed = null;
+  if (bodyOn() && bodyRig && seenPose) {
+    bodyRig.tick(now * 0.001);
+    if (S.mode === 'mirror') {
+      const img = poseFilters.predicted('p', S.predMs);
+      if (img) {
+        for (let i = 0; i < 33; i++) views.mirrorPoint(img[i], camera, bodyPts[i]);
+        bodyPosed = bodyRig.pose(bodyPts);
+      }
+    } else if (S.mode === 'thirdPerson') {
+      const world = poseFiltersW.predicted('p', S.predMs);
+      const img = poseFilters.predicted('p', 0);
+      const pts = world ? bodyPose.retarget(world, img, TP_ORIGIN, 0) : null;
+      if (pts) bodyPosed = bodyRig.pose(pts);
+      else bodyRig.pose(bodyRestPose());   // no pose yet → stand at spawn (rest)
+    } else {
+      bodyRig.pose(null);   // first-person: hands ARE the POV (avatar lives in Third-P)
+    }
+  } else if (bodyRig) {
+    // no live pose: Third-P still shows the avatar standing at its spawn
+    if (bodyOn() && S.mode === 'thirdPerson') bodyRig.pose(bodyRestPose());
+    else bodyRig.pose(null);
+  }
+  if (bodyPosed) bodyBody.update(bodyPosed, dt); else bodyBody.drop();
+
+  // 5. hand physics bodies (same packs the rigs render → physics matches
+  //    pixels), then the sandbox ball + BEAT RUSH game
+  for (const slot of ['left', 'right']) {
+    const hand = packs.hands.find(h => h.slot === slot);
+    if (hand) handBodies[slot].update(hand.points, dt, hand.img);
+    else handBodies[slot].drop();
+  }
+  sandbox.update(dt);
+  cubeLab.update(dt);
+  beatGame.update(dt, handBodyArr, frame.pose ? frame.pose[0].x : null);
+  // punch-hit feedback → contact-heat flash on the rig that landed it
+  for (const hand of packs.hands) {
+    const hb = handBodies[hand.slot];
+    if (hb._glowKick) {
+      const rig = hand.mesh === 'R' ? rigR : rigL;
+      if (rig) rig.uniforms.uGlow.value = Math.max(rig.uniforms.uGlow.value, 0.85);
+      hb._glowKick = 0;
+    }
+  }
+  // live spatial state — window.HOPEOS_STATE (plain numbers, allocated once)
+  EXPO.t = now * 0.001; EXPO.mode = S.mode; EXPO.floorY = sandbox.floorY();
+  if (frame.pose) { EXPO.head.x = frame.pose[0].x; EXPO.head.y = frame.pose[0].y; }
+  handBodies.left.snapshot(EXPO.hands.left);
+  handBodies.right.snapshot(EXPO.hands.right);
+  bodyBody.snapshot(EXPO.body);
+  sandbox.sphere.snapshot(EXPO.ball);
+  cubeLab.box.snapshot(EXPO.cube);
+  EXPO.cube.on = cubeLab.on; EXPO.cube.tableY = cubeLab.tableY;
+  beatGame.snapshot(EXPO.game);
+
+  // 6. raw-landmark alignment dots (mirror mode)
+  rawDots.visible = S.showRaw && S.mode === 'mirror' && !!frame.hands;
+  if (rawDots.visible) {
+    const attr = rawDots.geometry.getAttribute('position');
+    let n = 0;
+    const tmp = new THREE.Vector3();
+    for (let h = 0; h < Math.min(frame.handCount, 2); h++) {
+      const lm = frame.hands[h];
+      if (!lm) continue;
+      for (let i = 0; i < 21; i++) {
+        views.mirrorPoint(lm[i], camera, tmp);
+        attr.setXYZ(n++, tmp.x, tmp.y, tmp.z);
+      }
+    }
+    rawDots.geometry.setDrawRange(0, n);
+    attr.needsUpdate = true;
+  }
+
+  // 7. metrics HUD (throttled)
+  if (now - M.lastMet > 350) {
+    M.lastMet = now;
+    const frameMs = 1000 / Math.max(M.fps, 1);
+    const felt = Math.max(0, M.detect + frameMs + 35 - S.predMs);
+    els.metrics.innerHTML =
+      `fps <b>${M.fps.toFixed(0)}</b><br>` +
+      `track <b>${M.detect.toFixed(1)}ms</b> · pose <b>${M.pose.toFixed(1)}ms</b><br>` +
+      `mesh <b>${rigR?.stats?.verts ?? '—'}</b> verts (${rigR?.stats?.style ?? '—'})<br>` +
+      `body <b>${bodyOn() && bodyRig ? bodyRig.stats.verts + 'v' + (bodyBody.present ? ' ●' : ' ○') : 'off'}</b> · felt ≈ <b>${felt.toFixed(0)}ms</b><br>` +
+      `hands <b>${(handsBySlot.left ? '◐ ' : '') + (handsBySlot.right ? '◑' : '') || '—'}</b> · view <b>${S.mode}</b>`;
+  }
+
+  renderer.render(scene, camera);
+}
+
+// ───────────────────────── boot ──────────────────────────────
+async function boot() {
+  els.startBtn.disabled = true;
+  const say = (m) => { els.bootMsg.textContent = m; };
+  try {
+    say('▸ starting camera…');
+    await initCamera(els.bgVid, els.vid);
+    updateCover();
+    say('▸ loading hand + pose tracker…');
+    tracker = await initTracking(els.vid, { numHands: 2, raw: true, enableFace: false, poseEvery: 2 });
+    if (!rigR) { say('▸ forging hand meshes…'); await new Promise(r => setTimeout(r, 30)); forgeRigs(S.style); }
+    if (!bodyRig) {
+      say('▸ forging body mesh…');
+      await new Promise(r => setTimeout(r, 30));
+      bodyRig = new HoloBodyRig(scene, { alpha: 0.42 }).build('standard');
+      toast(`body forged: ${bodyRig.stats.verts} verts · ${bodyRig.stats.ms}ms`);
+    }
+    if (!sandbox.ball) sandbox.init();
+    applyMode(S.mode === 'inspect' ? 'mirror' : S.mode);
+    document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === S.mode));
+    els.entry.style.display = 'none';
+    S.running = true;
+    beatGame.prefetchBaked();   // warm the ⭐ track in the background
+    toast('tracking live — raise your hands');
+  } catch (e) {
+    console.error(e);
+    say('✕ ' + (e.message || e) + ' — check camera permissions & reload');
+    els.startBtn.disabled = false;
+  }
+}
+els.startBtn.addEventListener('click', boot);
+loop();   // render loop runs from the start (entry screen behind)
+
+// ───────────────────────── UI wiring ─────────────────────────
+document.getElementById('styleOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b || !rigR) return;
+  document.querySelectorAll('#styleOpts .opt').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel');
+  S.style = b.dataset.s;
+  if (S.style === 'glb') {
+    toast('loading holohand.glb…', 4000);
+    loadGlbHalves().then(({ right, left }) => {
+      rigR.opts.geometry = right; rigR.opts.geometryFit = false;
+      rigL.opts.geometry = left;  rigL.opts.geometryFit = false;
+      rigR.build(); rigL.build();
+      if (S.mode === 'inspect') poseInspect();
+      toast(`glb: R ${rigR.stats.verts} / L ${rigL.stats.verts} verts — same rig, same filters`);
+    }).catch(err => {
+      console.error(err);
+      toast('glb load failed: ' + (err.message || err), 5000);
+    });
+    return;
+  }
+  delete rigR.opts.geometry; delete rigL.opts.geometry;
+  toast(`forging ${S.style}…`, 4000);
+  setTimeout(() => {
+    rigR.build(S.style); rigL.build(S.style);
+    if (S.mode === 'inspect') poseInspect();
+    toast(`${S.style}: ${rigR.stats.verts} verts · ${rigR.stats.ms}ms`);
+  }, 40);
+});
+document.getElementById('viewOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel');
+  applyMode(b.dataset.v);
+  toast(b.dataset.v === 'mirror' ? 'mirror — your reflection' :
+        b.dataset.v === 'firstPerson' ? 'first-person — hands reach into the scene' :
+        'third-person — over your avatar\'s shoulder');
+});
+const bindSlider = (id, valId, fmt, fn) => {
+  const s = document.getElementById(id), v = document.getElementById(valId);
+  s.addEventListener('input', () => { v.textContent = fmt(+s.value); fn(+s.value); });
+};
+bindSlider('cutSld', 'cutVal', v => v.toFixed(2), v => filters.setParams({ minCutoff: v }));
+bindSlider('betaSld', 'betaVal', v => v.toFixed(3), v => filters.setParams({ beta: v }));
+bindSlider('predSld', 'predVal', v => v + 'ms', v => S.predMs = v);
+bindSlider('alphaSld', 'alphaVal', v => v.toFixed(2), v => { rigR?.setGhost({ alpha: v }); rigL?.setGhost({ alpha: v }); });
+document.getElementById('rawChk').addEventListener('change', (e) => S.showRaw = e.target.checked);
+document.getElementById('confChk').addEventListener('change', (e) => S.conform = e.target.checked);
+document.getElementById('swapChk').addEventListener('change', (e) => {
+  S.swap = e.target.checked;
+  views.swapSlots = S.swap;
+  views.dropSlot('left'); views.dropSlot('right');
+  filters.drop('left'); filters.drop('right'); filtersW.drop('left'); filtersW.drop('right');
+  toast(S.swap ? 'hand slots swapped' : 'hand slots natural');
+});
+document.getElementById('inspectBtn').addEventListener('click', () => {
+  els.entry.style.display = 'none';
+  document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === 'inspect'));
+  applyMode('inspect');
+  toast('inspecting the forged mesh — orbiting rest pose. START anytime for live tracking.', 4200);
+});
+els.gameBtn.addEventListener('click', () => {
+  if (beatGame.running) beatGame.stop();
+  else startRound();
+});
+document.getElementById('diffOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  document.querySelectorAll('#diffOpts .opt').forEach(x => x.classList.remove('sel'));
+  b.classList.add('sel');
+  gameCfg.difficulty = b.dataset.d;
+});
+document.getElementById('trackOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  if (b.dataset.t === 'mp3') { document.getElementById('mp3File').click(); return; }
+  gameCfg.trackMode = b.dataset.t;
+  document.querySelectorAll('#trackOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.t === b.dataset.t));
+  els.trackName.textContent = b.dataset.t === 'baked'
+    ? 'track: Beat It ⭐ baked · 138.8 BPM · 808 onsets'
+    : 'track: built-in synth · 139 BPM';
+});
+document.getElementById('mp3File').addEventListener('change', async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  gameCfg.file = f; gameCfg.trackMode = 'mp3';
+  document.querySelectorAll('#trackOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.t === 'mp3'));
+  els.trackName.textContent = '⏳ analyzing ' + f.name + '…';
+  toast('decoding + beat-mapping the track…', 6000);
+  try {
+    // analysis runs NOW, at pick time — START is instant and the round is
+    // generated from the song's own beats before it ever plays
+    const info = await beatGame.prepareFile(f);
+    els.trackName.textContent = `track: ${info.name} · ~${info.bpm} BPM · ${info.onsets} onsets · ${info.duration}s`;
+    toast(`beat-mapped: ~${info.bpm} BPM, ${info.onsets} onsets — START ROUND to play`, 4200);
+  } catch (err) {
+    console.error(err);
+    els.trackName.textContent = 'track: ' + f.name + ' (analysis failed)';
+    toast('audio decode failed: ' + (err.message || err), 5000);
+  }
+});
+document.getElementById('ballChk').addEventListener('change', (e) => {
+  sandbox.enabled = e.target.checked;
+});
+els.cubeBtn.addEventListener('click', () => {
+  try { cubeLab.toggle(!cubeLab.on); }
+  catch (e) { console.error(e); toast('🧊 cube failed: ' + (e.message || e), 6000); }
+});
+document.getElementById('bodyChk').addEventListener('change', (e) => {
+  S.body = e.target.checked;
+  // in an isolation mode the checkbox picks WHICH isolation you're in
+  if (meshOnly()) { applyDisplay(S.body ? 'handsBody' : 'hands'); return; }
+  avatar.visible = S.mode === 'thirdPerson' && !bodyOn() && !meshOnly();
+  toast(S.body ? 'body mesh on — 🪞 overlay · 🎥 avatar' : 'body mesh off');
+});
+bindSlider('bodyAlphaSld', 'bodyAlphaVal', v => v.toFixed(2), v => bodyRig?.setGhost({ alpha: v }));
+</script>
+</body>
+</html>

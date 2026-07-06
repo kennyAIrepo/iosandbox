@@ -73,10 +73,14 @@ export async function initTracking(videoEl, opts = {}) {
 
   let lastDetectTime = -1;
   let frameCount = 0;
+  // opts.raw = true → skip the legacy deadband stabilizer and return raw
+  // mirrored landmarks (for consumers doing their own One-Euro filtering —
+  // the deadband quantizes slow motion into stair-steps AND adds lag).
+  const useRaw = !!opts.raw;
 
   /** Detect hands + pose + face from current video frame. Call once per rAF. */
   function detect() {
-    const result = { hands: null, handedness: [], handCount: 0, pose: null, poseWorld: null, face: null };
+    const result = { hands: null, handsWorld: null, handedness: [], handCount: 0, pose: null, poseWorld: null, face: null };
     if (videoEl.readyState < 2) return result;
 
     const now = performance.now();
@@ -89,19 +93,24 @@ export async function initTracking(videoEl, opts = {}) {
     if (hr.landmarks && hr.landmarks.length) {
       result.handCount = hr.landmarks.length;
       result.hands = [];
+      result.handsWorld = [];
       result.handedness = [];
       for (let h = 0; h < result.handCount; h++) {
         // Mirror X for selfie camera
         const mirrored = hr.landmarks[h].map(p => ({ x: 1 - p.x, y: p.y, z: p.z }));
-        result.hands.push(stabilize(mirrored, h));
+        result.hands.push(useRaw ? mirrored : stabilize(mirrored, h));
+        // TRUE-3D pose (metres, origin at hand centre, camera-view axes) —
+        // raw and UNmirrored: viewpoint retargeting (first/third person)
+        // happens downstream in hand-views.js, never here.
+        result.handsWorld.push(hr.worldLandmarks?.[h] || null);
         // MediaPipe labels are mirrored for selfie — flip
         const label = hr.handednesses?.[h]?.[0]?.categoryName === 'Left' ? 'Right' : 'Left';
         result.handedness.push(label);
       }
     }
 
-    // Pose (every 4th frame for performance)
-    if (frameCount % 4 === 0) {
+    // Pose (every Nth frame for performance; body-mesh consumers want 2)
+    if (frameCount % (opts.poseEvery || 4) === 0) {
       const pr = poseLandmarker.detectForVideo(videoEl, now);
       if (pr.landmarks && pr.landmarks.length > 0) {
         result.pose = pr.landmarks[0].map(p => ({ x: 1 - p.x, y: p.y, z: p.z || 0 }));

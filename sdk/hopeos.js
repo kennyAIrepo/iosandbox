@@ -133,9 +133,12 @@ export class HopeOS {
     hope.physics = await PhysicsWorld.create();
     hope.physics.initBodyCapsules(BODY_SEGS);
 
-    // Hands — defaults to the SDK's bundled model; games can override via opts.handModelUrl
+    // Hands — defaults to the SDK's bundled model; games can override via opts.handModelUrl.
+    // opts.handModelUrl = 'procedural' (or a failed GLB load) forges smooth hands
+    // in-browser instead — zero download, exact landmark fit (see core/hand-forge.js).
     const handUrl = opts.handModelUrl || SDK_ASSETS + 'holo_hands_model.glb';
     try {
+      if (handUrl === 'procedural') throw new Error('procedural requested');
       const handData = await splitHandModel(handUrl);
       hope._rightHand = new RiggedHand(REST_R42, scene);
       hope._leftHand = new RiggedHand(REST_L42, scene);
@@ -144,7 +147,22 @@ export class HopeOS {
       hope.hands.right = hope._rightHand;
       hope.hands.left = hope._leftHand;
     } catch (e) {
-      console.warn('[hopeOS] Hand model not loaded — tracking works, no hand mesh:', e.message);
+      try {
+        const { forgeHand } = await import('./core/hand-forge.js');
+        const style = opts.handStyle || 'smooth';
+        for (const [restPose, slot] of [[REST_R42, '_rightHand'], [REST_L42, '_leftHand']]) {
+          const { geometry } = forgeHand({ rest: restPose, style });
+          const rh = new RiggedHand(restPose, scene);
+          const g = geometry;
+          rh.init(g.getAttribute('position').array, g.getAttribute('normal').array, null, g.index ? g.index.array : null);
+          hope[slot] = rh;
+        }
+        hope.hands.right = hope._rightHand;
+        hope.hands.left = hope._leftHand;
+        console.log('[hopeOS] procedural holo hands forged (no GLB)');
+      } catch (e2) {
+        console.warn('[hopeOS] Hand model not loaded — tracking works, no hand mesh:', e2.message);
+      }
     }
 
     // Fire effect
