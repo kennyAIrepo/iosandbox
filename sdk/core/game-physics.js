@@ -382,6 +382,8 @@ export class GrabbableSphere {
 const _bl = new THREE.Vector3(), _bc = new THREE.Vector3(), _br = new THREE.Vector3();
 const _bv = new THREE.Vector3(), _bq = new THREE.Quaternion(), _bn = new THREE.Vector3();
 const _corner = new THREE.Vector3(), _cn = new THREE.Vector3(), _tn = new THREE.Vector3();
+const _pn = new THREE.Vector3();
+const _sqN = []; for (let i = 0; i < 24; i++) _sqN.push(new THREE.Vector3());
 const _c8 = []; for (let i = 0; i < 8; i++) _c8.push(new THREE.Vector3());
 const _UP = new THREE.Vector3(0, 1, 0), _DOWN = new THREE.Vector3(0, -1, 0);
 const _grip = { n: 0, thumb: false, finger: false, opposing: false };
@@ -398,11 +400,66 @@ export class GrabbableBox extends GrabbableSphere {
    */
   constructor(half, opts = {}) {
     const h = half && half.isVector3 ? half.clone() : new THREE.Vector3(half, half, half);
-    super(h.length(), { restitution: 0.24, ...opts });   // .radius = bounding sphere
+    // restitution 0.05: a plastic cube is DEAD — it thuds and tumbles, it
+    // never bounces off the desk or the hand (the ball keeps its 0.58)
+    super(h.length(), { restitution: 0.05, ...opts });   // .radius = bounding sphere
     this.half = h;
     // unit-mass cuboid, scalar inertia (mean of the three axis inertias)
     this.invI = 4.5 / Math.max(h.x * h.x + h.y * h.y + h.z * h.z, 1e-8);
     this._lost = 0;            // frames since the grip was last confirmed
+    // set true while a TWIST gesture owns the second hand — its joints are
+    // intentionally pressed into the cube and must not shove it around
+    this.suppressOtherHand = false;
+    this._squeezed = false;    // contacts pressing from OPPOSING sides
+    this._clampSlot = null;    // two-hand clamp → this slot holds the cube
+    this._clampGrace = 0;      // frames the clamp survives tracking flicker
+    this._sqCounts = { left: 0, right: 0, body: 0 };
+  }
+
+  /**
+   * SQUEEZE detection — contacts pressing from OPPOSING sides. While
+   * squeezed: (a) support contacts stop converting to vertical lift (that
+   * conversion is exactly the watermelon-seed pump that ratchets the cube
+   * UP and out of a closing grip); opposing pushes then CANCEL and the
+   * cube stays pinned — the hard-surface resistance: hands closing past
+   * the faces can't inject motion, the fingers just stop at the mesh via
+   * the conform. (b) A TWO-HAND CLAMP counts as a grab — squeezing the
+   * cube between both hands IS holding it.
+   */
+  _updateSqueeze(hands) {
+    let n = 0;
+    const counts = this._sqCounts;
+    counts.left = counts.right = counts.body = 0;
+    _bq.copy(this.quat).invert();
+    for (const hand of hands) {
+      if (!hand || !hand.present) continue;
+      // scale-aware shell: cupping hands must LOCK from a natural hover,
+      // not only at millimetre-perfect contact (webcam z-noise makes that
+      // flicker) — opposition still keeps the clamp honest
+      const shell = 0.004 + 0.012 * hand.scale;
+      for (let i = 0; i < hand.joints.length && n < _sqN.length; i++) {
+        if (this._contactGap(hand.joints[i], hand.radii[i]) < shell) {
+          _sqN[n++].copy(_cn);
+          counts[hand.slot] = (counts[hand.slot] || 0) + 1;
+        }
+      }
+    }
+    this._squeezed = false;
+    for (let a = 0; a < n && !this._squeezed; a++) {
+      for (let b = a + 1; b < n; b++) {
+        if (_sqN[a].dot(_sqN[b]) < -0.35) { this._squeezed = true; break; }
+      }
+    }
+    // sticky clamp: once both hands hold it, a few dropped frames of
+    // tracking must not break the lock (crucial for the twist gesture)
+    if (this._squeezed && counts.left >= 2 && counts.right >= 2) {
+      this._clampSlot = counts.left >= counts.right ? 'left' : 'right';
+      this._clampGrace = 10;
+    } else if (this._clampGrace > 0) {
+      this._clampGrace--;                        // keep the last clamp slot
+    } else {
+      this._clampSlot = null;
+    }
   }
 
   /** Live resize (two-hand pinch scale). Mass stays 1; inertia follows. */
@@ -446,42 +503,53 @@ export class GrabbableBox extends GrabbableSphere {
   }
 
   /**
-   * Contact-based grip analysis. A real grip WRAPS the cube: a thumb
-   * contact and a finger contact must press on opposing faces (normals
-   * dot < -0.25, box space). `slop` widens the contact shell — grab
-   * tight, hold looser so a carried cube doesn't flicker out.
+   * Contact-based grip analysis. A real grip WRAPS the cube: a finger
+   * contact must press against an OPPOSING contact from the thumb OR the
+   * palm (normals dot < -0.15, box space) — palm-under + fingers-over is
+   * how a hand actually holds a cube. `slop` widens the contact shell —
+   * grab tight, hold looser so a carried cube doesn't flicker out.
    */
   _gripState(hand, slop, out) {
     out.n = 0; out.thumb = false; out.finger = false; out.opposing = false;
+    out.below = false;           // any contact BELOW the cube's midline?
     _bq.copy(this.quat).invert();
-    let tBest = Infinity;
+    const yGate = this.pos.y - 0.05 * Math.min(this.half.x, Math.min(this.half.y, this.half.z));
+    const mark = () => {         // contact point world height (uses _bc of the last gap test)
+      _bv.copy(_bc).applyQuaternion(this.quat).add(this.pos);
+      if (_bv.y < yGate) out.below = true;
+    };
+    let tBest = Infinity, pBest = Infinity, hasPalm = false;
     for (const i of THUMB_JOINTS) {
       const g = this._contactGap(hand.joints[i], hand.radii[i]);
-      if (g < slop) { out.n++; out.thumb = true; if (g < tBest) { tBest = g; _tn.copy(_cn); } }
+      if (g < slop) { out.n++; out.thumb = true; mark(); if (g < tBest) { tBest = g; _tn.copy(_cn); } }
+    }
+    for (const i of PALM_JOINTS) {
+      const g = this._contactGap(hand.joints[i], hand.radii[i]);
+      if (g < slop) { out.n++; mark(); if (g < pBest) { pBest = g; hasPalm = true; _pn.copy(_cn); } }
     }
     for (const i of FINGER_JOINTS) {
       const g = this._contactGap(hand.joints[i], hand.radii[i]);
       if (g < slop) {
-        out.n++; out.finger = true;
-        if (out.thumb && _tn.dot(_cn) < -0.25) out.opposing = true;
+        out.n++; out.finger = true; mark();
+        if ((out.thumb && _tn.dot(_cn) < -0.15) ||
+            (hasPalm && _pn.dot(_cn) < -0.15)) out.opposing = true;
       }
-    }
-    for (const i of PALM_JOINTS) {
-      if (this._contactGap(hand.joints[i], hand.radii[i]) < slop) out.n++;
     }
     return out;
   }
 
   update(dt, hands, floorY) {
+    this._updateSqueeze(hands);
     if (this.held) {
       const hand = this._hand(hands, this.held.slot);
       let gripped = false;
       if (hand && hand.present) {
         if (this.held.byPinch) gripped = hand.pinch > 0.45;
         else {
-          const g = this._gripState(hand, 0.05 * hand.scale, _grip);
+          const g = this._gripState(hand, 0.06 * hand.scale, _grip);
           gripped = (g.thumb && g.finger) || g.n >= 5;
         }
+        gripped = gripped || this._clampSlot !== null;   // a live clamp keeps it held
       }
       this._lost = gripped ? 0 : this._lost + 1;
       // pinch release is intentional → instant; grip gets a few grace
@@ -497,10 +565,17 @@ export class GrabbableBox extends GrabbableSphere {
         if (hand) this.angVel.copy(hand.angVel).multiplyScalar(0.85);
         this.held = null; this._velHist.length = 0;
       } else {
-        // SEAT the grab: decay any capture offset so the cube nestles
-        // into the grip instead of hovering at the catch distance
-        const L = this.held.posOff.length(), maxL = this.radius * 0.85;
-        if (L > maxL) this.held.posOff.multiplyScalar(Math.max(maxL / L, 1 - dt * 5));
+        // SEAT the grab: decay the capture offset until the palm skin
+        // MEETS the face (max half-extent + palm-skin radius) — the hand
+        // must visually touch the cube, and the conform then wraps the
+        // fingers onto it. No hover gap, ever. NOT while two hands CLAMP
+        // it: then it's pinned between the palms and stays put.
+        if (!this._clampSlot) {
+          const L = this.held.posOff.length();
+          const maxL = Math.max(this.half.x, Math.max(this.half.y, this.half.z))
+                     + 0.025 * hand.scale;
+          if (L > maxL) this.held.posOff.multiplyScalar(Math.max(maxL / L, 1 - dt * 5));
+        }
         // STICK to the palm frame (position + orientation offsets are
         // palm-local → the cube rotates 1:1 with the wrist)
         _v.copy(this.held.posOff).applyQuaternion(hand.palmQ).add(hand.palm);
@@ -511,9 +586,19 @@ export class GrabbableBox extends GrabbableSphere {
         _w.copy(this.pos).sub(_u).divideScalar(Math.max(dt, 1e-3));
         this._velHist.push(_w.clone());
         if (this._velHist.length > 6) this._velHist.shift();
-        // the OTHER hand still collides while carried (two-hand hold)
-        for (const other of hands) {
-          if (other && other.present && other.slot !== this.held.slot) this._pushOut(other, null, dt);
+        // HARD SURFACES: the HOLDING hand's colliders push the cube out
+        // too (capped, squeeze-aware), and the grab offset ADAPTS to the
+        // corrected pose — held means resting ON the palm and fingers,
+        // never interpenetrating them. Skin and cube stay mutually solid.
+        this._pushOut(hand, null, dt);
+        _v.copy(this.pos).sub(hand.palm).applyQuaternion(_q.copy(hand.palmQ).invert());
+        this.held.posOff.lerp(_v, 0.35);
+        // the OTHER hand still collides while carried (two-hand hold) —
+        // unless it's the twisting hand of an active layer-turn gesture
+        if (!this.suppressOtherHand) {
+          for (const other of hands) {
+            if (other && other.present && other.slot !== this.held.slot) this._pushOut(other, null, dt);
+          }
         }
         return;
       }
@@ -524,16 +609,36 @@ export class GrabbableBox extends GrabbableSphere {
     for (const hand of hands) {
       if (!hand || !hand.present) continue;
       let take = false, byPinch = false;
-      if (hand.pinch > 0.75 && this.surfaceDistance(hand.pinchPoint) < 0.03 * hand.scale) {
+      if (hand.pinch > 0.75 && this.surfaceDistance(hand.pinchPoint) < 0.04 * hand.scale) {
         take = true; byPinch = true;               // pinched ON the surface
-      } else if (hand.openness < 0.8) {
-        const g = this._gripState(hand, 0.012 * hand.scale, _grip);
-        take = g.opposing || (g.n >= 7 && hand.openness < 0.5);   // wrap or fist
+      } else if (hand.openness < 0.85) {
+        const g = this._gripState(hand, 0.035 * hand.scale, _grip);
+        // GRAVITY-AWARE LATCH: a grip only takes the cube if it reaches
+        // BELOW the midline — a real carrying grip wraps under the widest
+        // point, because that's what bears the weight. A hand draped over
+        // the TOP whose fingers straddle the upper edges must NOT latch:
+        // the cube stays governed by gravity and falls away.
+        take = (g.opposing || (g.n >= 6 && hand.openness < 0.55)) && g.below;
       }
       if (take) {
         this.held = {
           slot: hand.slot,
           byPinch,
+          posOff: _v.copy(this.pos).sub(hand.palm).applyQuaternion(_q.copy(hand.palmQ).invert()).clone(),
+          quatOff: _q.copy(hand.palmQ).invert().multiply(this.quat).clone(),
+        };
+        this._velHist.length = 0;
+        this._lost = 0;
+        return;
+      }
+    }
+    // two-hand CLAMP = a grab: both hands pressing opposing faces
+    if (this._clampSlot) {
+      const hand = this._hand(hands, this._clampSlot);
+      if (hand) {
+        this.held = {
+          slot: hand.slot,
+          byPinch: false,
           posOff: _v.copy(this.pos).sub(hand.palm).applyQuaternion(_q.copy(hand.palmQ).invert()).clone(),
           quatOff: _q.copy(hand.palmQ).invert().multiply(this.quat).clone(),
         };
@@ -601,12 +706,16 @@ export class GrabbableBox extends GrabbableSphere {
           _n.copy(_rel).applyQuaternion(this.quat);    // world normal: box → joint
           support = _n.y < -0.35;                      // joint UNDERNEATH the box
           if (d < jr) {                                // real penetration → resolve position
-            if (support) {
+            // corrections are CAPPED per frame: converging fingers closing
+            // on the cube must squeeze it, not rocket it out of the hand
+            if (support && !this._squeezed) {
               // support corrections lift STRAIGHT UP: a diagonal edge-contact
-              // push would walk the box sideways off the palm frame by frame
-              this.pos.y += Math.min((jr - d) / -_n.y, (jr - d) * 2.5);
+              // push would walk the box sideways off the palm frame by frame.
+              // NOT while squeezed — that lift is the watermelon-seed pump
+              // that ejects the cube out of a closing two-hand grip.
+              this.pos.y += Math.min((jr - d) / -_n.y, (jr - d) * 2.5, 0.012);
             } else {
-              this.pos.addScaledVector(_n, -(jr - d)); // exact push — never sink in
+              this.pos.addScaledVector(_n, -Math.min(jr - d, 0.01));
             }
           }
         } else {
@@ -628,7 +737,8 @@ export class GrabbableBox extends GrabbableSphere {
             d = -pen;
             _bc.copy(_bl).addScaledVector(_rel, pen);          // point on the face
             support = true;
-            this.pos.y += Math.min((jr - d) / -_n.y, (jr - d) * 2.5);
+            if (!this._squeezed) this.pos.y += Math.min((jr - d) / -_n.y, (jr - d) * 2.5, 0.012);
+            else this.pos.addScaledVector(_n, -Math.min(jr - d, 0.01));
           } else {
             // DEEP (spawn overlap / tracking jump). Per-joint nearest-face
             // exits FIGHT each other when joints sit on both sides of the
@@ -661,9 +771,10 @@ export class GrabbableBox extends GrabbableSphere {
           // it, and slides off when tilted. Other contacts bounce (e≈0.4).
           _axis.crossVectors(_br, _n);
           const k = 1 + this.invI * _axis.lengthSq();
-          // restitution threshold: micro-speed contacts don't bounce at all
-          // (standard practice — keeps a resting multi-contact set dead)
-          const e = vn > 0.25 ? (support ? 0.02 : 0.25) : 0;
+          // the cube NEVER bounces off a hand — contacts only STOP the
+          // approach (e≈0, with a tiny threshold residue on hard hits);
+          // repelled-while-grabbing was exactly this bounce
+          const e = vn > 0.4 ? 0.08 : 0;
           const j = -(1 + e) * vn / k;
           vel.addScaledVector(_n, j);
           this.angVel.addScaledVector(_axis, this.invI * j);
@@ -673,7 +784,7 @@ export class GrabbableBox extends GrabbableSphere {
           // comes from the friction impulse itself, momentum-consistent.
           _t.copy(vel).sub(hand.vel[i]);
           _t.addScaledVector(_n, -_t.dot(_n));           // tangential slip
-          _t.multiplyScalar(support ? -0.35 : -0.18);    // friction impulse
+          _t.multiplyScalar(support ? -0.35 : -0.10);    // friction impulse
           vel.add(_t);
           this.angVel.addScaledVector(_axis.crossVectors(_br, _t), this.invI * 0.5);
           this.angVel.multiplyScalar(support ? 0.94 : 0.975);   // contact spin drag

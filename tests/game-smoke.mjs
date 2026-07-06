@@ -253,6 +253,20 @@ console.log('\n[rubiks box]');
   ok(!box2.grabbed(), 'push-out never turned into a spurious grab');
 }
 
+// ── 8b. Dead bounce: a plastic cube THUDS, it never bounces ──
+console.log('\n[rubiks dead drop]');
+{
+  const dead = new GrabbableBox(0.085, {});
+  dead.reset(new THREE.Vector3(0, 0.8, 0));      // flat drop, no spin
+  let landed = false, apex = 0;
+  for (let f = 0; f < 300; f++) {
+    dead.update(DT, [], 0);
+    if (!landed && dead.pos.y <= 0.087) landed = true;
+    else if (landed) apex = Math.max(apex, dead.pos.y);
+  }
+  ok(landed && apex < 0.11, `no desk bounce: post-impact apex ${apex.toFixed(3)} (rest = 0.085)`);
+}
+
 // ── 9. GrabbableBox grip physicality: no sticky proximity, palm = tray ──
 console.log('\n[rubiks grip physicality]');
 {
@@ -298,6 +312,53 @@ console.log('\n[rubiks grip physicality]');
   ok(minY > hb3.palm.y - 0.06, `stays ON the palm under gravity: lowest y-palm.y=${(minY - hb3.palm.y).toFixed(3)}`);
   ok(maxDrift < 0.3, `doesn't slide off a level palm: drift=${maxDrift.toFixed(3)}m`);
 
+  // GRAVITY-AWARE LATCH: a hand draped OVER the cube whose fingers
+  // oppose across the UPPER edges must NOT latch — nothing is under the
+  // cube to carry its weight, so it falls (no hanging beneath the hand)
+  {
+    const hbT = new HandBody('right');
+    const ptsT = baseHand();
+    const ov = new GrabbableBox(0.085, {});
+    ov.reset(new THREE.Vector3(0, 1.3, 0));
+    for (const p of ptsT) p.y += 0.4;              // hand parked ABOVE
+    hbT.update(ptsT, DT, openImg());
+    for (const i of [2, 3, 4]) {                   // thumb → -x face, UPPER half
+      ptsT[i].copy(ov.pos).add(new THREE.Vector3(-(0.085 + hbT.radii[i] * 0.4), 0.05, 0));
+    }
+    for (const i of [6, 7, 8, 10, 11, 12]) {       // fingers → +x face, UPPER half
+      ptsT[i].copy(ov.pos).add(new THREE.Vector3(0.085 + hbT.radii[i] * 0.4, 0.03 + (i % 4) * 0.008, 0.01));
+    }
+    for (let s = 0; s < 12; s++) hbT.update(ptsT, DT, openImg());
+    for (let f = 0; f < 60; f++) ov.update(DT, [hbT], 0);
+    ok(!ov.grabbed(), 'top-side opposition does NOT latch (nothing bears the weight)');
+    ok(ov.pos.y < 1.0, `gravity wins — the cube falls away: y=${ov.pos.y.toFixed(2)} (from 1.30)`);
+  }
+
+  // SQUEEZE: two hands close on the cube from OPPOSITE sides → it must
+  // NOT pop up out of the grip (watermelon-seed ejection) — a two-hand
+  // clamp IS a grab, and the cube stays pinned between the palms
+  {
+    const hbL = new HandBody('left'), hbR = new HandBody('right');
+    const ptsL = baseHand(), ptsR = baseHand();
+    const sq = new GrabbableBox(0.085, {});
+    sq.reset(new THREE.Vector3(0, 1.3, 0));
+    // hands parked to the sides; fingertip chains pressed onto the ±x faces
+    for (const p of ptsL) p.x -= 0.45;
+    for (const p of ptsR) p.x += 0.45;
+    hbL.update(ptsL, DT, openImg()); hbR.update(ptsR, DT, openImg());
+    for (const i of [4, 8, 12, 16]) {
+      ptsL[i].copy(sq.pos).add(new THREE.Vector3(-(0.085 + hbL.radii[i] * 0.4), (i % 8) * 0.015 - 0.03, 0.01));
+      ptsR[i].copy(sq.pos).add(new THREE.Vector3(0.085 + hbR.radii[i] * 0.4, (i % 8) * 0.015 - 0.03, -0.01));
+    }
+    for (let s = 0; s < 12; s++) { hbL.update(ptsL, DT, openImg()); hbR.update(ptsR, DT, openImg()); }
+    const y0 = sq.pos.y;
+    for (let f = 0; f < 90; f++) sq.update(DT, [hbL, hbR], -5);
+    ok(sq.grabbed(), 'two-hand squeeze CLAMPS the cube (counts as a grab)');
+    ok(sq.pos.y - y0 < 0.06, `not ejected upward: Δy=${(sq.pos.y - y0).toFixed(3)}m`);
+    ok(Math.abs(sq.pos.x) < 0.12 && Math.abs(sq.pos.z) < 0.12,
+      `stays pinned between the palms: |x|=${Math.abs(sq.pos.x).toFixed(3)} |z|=${Math.abs(sq.pos.z).toFixed(3)}`);
+  }
+
   // GRIP: curl fingers AROUND the cube (thumb one side, fingers opposite)
   // → wraps → grabbed; carried when the hand moves
   const hb4 = new HandBody('right');
@@ -324,6 +385,21 @@ console.log('\n[rubiks grip physicality]');
     grip.update(DT, [hb4], -5);
   }
   ok(grip.grabbed() && grip.pos.x - startX > 0.3, `carried with the moving hand: Δx=${(grip.pos.x - startX).toFixed(2)}m`);
+
+  // HARD SURFACES while held: shove the cube INTO the palm — the holding
+  // hand's colliders must push it back out (and the grab offset adapts),
+  // so hand mesh and cube surface never stay interpenetrated
+  grip.pos.copy(hb4.palm);
+  for (let f = 0; f < 90; f++) {
+    hb4.update(pts4, DT, openImg());
+    grip.update(DT, [hb4], -5);
+  }
+  ok(grip.grabbed(), 'still held after the overlap shove');
+  let worstIn = Infinity;
+  for (let i = 0; i < 21; i++) {
+    worstIn = Math.min(worstIn, grip.surfaceDistance(hb4.joints[i]) - hb4.radii[i]);
+  }
+  ok(worstIn > -0.02, `holding hand resolves out of the cube: worst overlap ${(worstIn * 1000).toFixed(1)}mm`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

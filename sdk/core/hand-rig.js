@@ -387,18 +387,24 @@ export class HoloHandRig {
             moved = true; cc++;
           }
         } else if (col.type === 'box') {
-          // OBB { center, quat, half } (the Rubik's cube): vertices inside
-          // exit through the NEAREST face, +3mm epsilon like the sphere.
+          // OBB { center, quat, half } (the Rubik's cube): SHALLOW vertices
+          // wrap onto the nearest face (+3mm epsilon) — that's the touch.
+          // DEEP vertices stay put: snapping them too smears the whole palm
+          // across the faces; left inside, the opaque depth-writing cube
+          // swallows them cleanly, so the skin never visibly pierces.
           _lv.copy(_v).sub(col.center).applyQuaternion(_wq.copy(col.quat).invert());
           const px = col.half.x - Math.abs(_lv.x);
           if (px > 0) {
             const py = col.half.y - Math.abs(_lv.y), pz = col.half.z - Math.abs(_lv.z);
             if (py > 0 && pz > 0) {
-              if (px <= py && px <= pz)  _lv.x = (_lv.x >= 0 ? 1 : -1) * (col.half.x + 0.003);
-              else if (py <= pz)         _lv.y = (_lv.y >= 0 ? 1 : -1) * (col.half.y + 0.003);
-              else                       _lv.z = (_lv.z >= 0 ? 1 : -1) * (col.half.z + 0.003);
-              _v.copy(_lv).applyQuaternion(col.quat).add(col.center);
-              moved = true; cc++;
+              const band = 0.3 * Math.min(col.half.x, Math.min(col.half.y, col.half.z));
+              if (Math.min(px, Math.min(py, pz)) < band) {
+                if (px <= py && px <= pz)  _lv.x = (_lv.x >= 0 ? 1 : -1) * (col.half.x + 0.003);
+                else if (py <= pz)         _lv.y = (_lv.y >= 0 ? 1 : -1) * (col.half.y + 0.003);
+                else                       _lv.z = (_lv.z >= 0 ? 1 : -1) * (col.half.z + 0.003);
+                _v.copy(_lv).applyQuaternion(col.quat).add(col.center);
+                moved = true; cc++;
+              }
             }
           }
         } else if (col.type === 'mesh' && col.bvh) {

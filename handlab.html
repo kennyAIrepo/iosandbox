@@ -146,7 +146,8 @@
     <div class="lbl">GAME · RUBIK'S CUBE</div>
     <button id="cubeBtn">🧊 SPAWN CUBE</button>
     <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">drops onto the table at the frame bottom
-      · grab ✊ / pinch 🤏 · carry it, drop it, pick it back up · layer twisting: next</div>
+      · grab ✊ / pinch 🤏 · carry, drop, pick it back up · 🔄 hold with one hand,
+      grip a layer with the other and TWIST like a cap — clicks every 90°</div>
   </div>
   <div class="sec">
     <div class="lbl">GAME · BEAT RUSH</div>
@@ -224,7 +225,7 @@ import { HoloHandRig } from './sdk/core/hand-rig.js';
 import { HandViews } from './sdk/core/hand-views.js';
 import { REST_R42, REST_L42 } from './sdk/core/hands.js';
 import { HandBody, GrabbableSphere, GrabbableBox, BodyBody } from './sdk/core/game-physics.js';
-import { buildRubiksCube, makeHoloTable, makeContactShadow } from './sdk/core/rubiks-cube.js';
+import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdk/core/rubiks-cube.js';
 import { BeatGame } from './sdk/core/beat-game.js';
 import { HoloBodyRig, BodyPose, BODY_RADII } from './sdk/core/body-rig.js';
 
@@ -509,8 +510,11 @@ const sandbox = {
 // fingers wrapping the far side hide behind the cube, and the mirror-mode
 // hand depth-prepass lets your REAL fingers cover the cube from the front.
 const _cubeMid = new THREE.Vector3();
+const _twAxis = new THREE.Vector3(), _twQ = new THREE.Quaternion(), _twQ2 = new THREE.Quaternion();
+const _twistGrip = { n: 0, thumb: false, finger: false, opposing: false };
 const cubeLab = {
   on: false, group: null, table: null, shadow: null, lit: false,
+  model: null, twistG: null,
   box: new GrabbableBox(CUBE_HALF, { gravity: -5.2, restitution: 0.24 }),
   center: new THREE.Vector3(0, 0, -2),
   tableY: -1,
@@ -518,7 +522,9 @@ const cubeLab = {
   iz: -2,             // interaction depth — follows the tracked hands
   _scaling: null,
   init() {
-    this.group = buildRubiksCube({ edge: CUBE_EDGE }).group;
+    const built = buildRubiksCube({ edge: CUBE_EDGE });
+    this.group = built.group;
+    this.model = new RubiksModel(built);
     this.table = makeHoloTable({ width: 3.6, depth: 1.9 });
     this.shadow = makeContactShadow(CUBE_EDGE * 0.85);
     scene.add(this.group, this.table, this.shadow);
@@ -548,6 +554,86 @@ const cubeLab = {
     this.box.setHalf(CUBE_HALF * f);
     this.group.scale.setScalar(f);
     cubeCollider.half.set(CUBE_HALF * f, CUBE_HALF * f, CUBE_HALF * f);
+  },
+  /** How strongly a hand claims each layer (-1|0|1) along a cube axis —
+   *  contact count weighted by penetration depth. Mirror-scale hands are
+   *  BIG relative to the cube: raw touched-layer sets smear across all
+   *  three layers for both hands, so ownership must be decided by VOTE
+   *  (who presses a layer harder), never by set subtraction. */
+  _layerWeights(hb, axisIdx, inv, out) {
+    const pitchW = (CUBE_EDGE / 3) * this.scale;
+    for (let i = 0; i < 21; i++) {
+      const gap = this.box.surfaceDistance(hb.joints[i]) - hb.radii[i];
+      if (gap > 0.05 * hb.scale) continue;
+      _cubeMid.copy(hb.joints[i]).sub(this.box.pos).applyQuaternion(inv);
+      const u = Math.max(-1, Math.min(1, Math.round(_cubeMid.getComponent(axisIdx) / pitchW)));
+      out[u + 1] += 1 + Math.max(0, -gap) * 30;      // deeper touch = stronger claim
+    }
+    return out;
+  },
+  // ── TWO-HAND LAYER TWIST — like twisting a cap: one hand HOLDS the
+  // cube (the reference frame), the other hand GRIPS a layer; the slice
+  // follows the RELATIVE rotation of the two palms about the slice axis
+  // (swing-twist decomposition), detents at every 90°, and on release
+  // eases to the nearest quarter turn and BAKES into the grid. ──
+  updateTwist() {
+    const held = this.box.held;
+    const A = held ? handBodies[held.slot] : null;                       // holding hand
+    const B = held ? handBodies[held.slot === 'left' ? 'right' : 'left'] : null;
+    if (this.twistG) {
+      const g = this.twistG;
+      const okB = B && B.present && this.box._gripState(B, 0.08 * B.scale, _twistGrip).n >= 1;
+      g.lost = okB ? 0 : g.lost + 1;
+      if (!held || held.slot !== g.holdSlot || g.lost > 10) {            // grip gone → snap + bake
+        this.model.releaseTwist();
+        this.twistG = null;
+      } else if (okB) {
+        _twAxis.copy(g.axisLocal).applyQuaternion(this.box.quat);        // live slice axis (world)
+        const a = twistAngleAbout(_twQ.copy(A.palmQ).multiply(g.refA), _twAxis);
+        const b = twistAngleAbout(_twQ2.copy(B.palmQ).multiply(g.refB), _twAxis);
+        this.model.setTwistAngle(b - a);                                 // relative palm twist
+      }
+      return;
+    }
+    // engage: cube held by A, B touching it too, no snap still settling.
+    // CUPPING hands are nearly open — no openness gate; contact does the
+    // gating, and the scale-aware reach makes the lock easy to initiate.
+    if (!held || !B || !B.present || this.model.twisting()) return;
+    const gB = this.box._gripState(B, 0.05 * B.scale, _twistGrip);
+    if (gB.n < 2) return;
+    const inv = _twQ.copy(this.box.quat).invert();
+    // slice axis = dominant cube-local component of the palm-to-palm line
+    _cubeMid.copy(A.palm).sub(B.palm).applyQuaternion(inv);
+    const ax = Math.abs(_cubeMid.x) >= Math.abs(_cubeMid.y)
+      ? (Math.abs(_cubeMid.x) >= Math.abs(_cubeMid.z) ? 0 : 2)
+      : (Math.abs(_cubeMid.y) >= Math.abs(_cubeMid.z) ? 1 : 2);
+    // layer VOTE: each layer goes to the hand pressing it harder; B's
+    // slice is what it wins — with a fallback to its single strongest
+    // claim, and middle-alone shifted outward (the core cross stays)
+    const wA = this._layerWeights(A, ax, inv, [0, 0, 0]);
+    const wB = this._layerWeights(B, ax, inv, [0, 0, 0]);
+    let layers = [-1, 0, 1].filter(u => wB[u + 1] > 0 && wB[u + 1] > wA[u + 1]);
+    if (!layers.length || layers.length === 3) {
+      let bestU = 1, bestW = -Infinity;
+      for (const u of [-1, 0, 1]) {
+        const w = wB[u + 1] - wA[u + 1];
+        if (w > bestW) { bestW = w; bestU = u; }
+      }
+      layers = [bestU];
+    }
+    if (layers.length === 1 && layers[0] === 0) {
+      layers = [wB[0] >= wB[2] ? -1 : 1];              // core stays → nearest outer
+    }
+    if (this.model.beginTwist(ax, layers)) {
+      this.twistG = {
+        holdSlot: held.slot,
+        axisLocal: new THREE.Vector3(ax === 0 ? 1 : 0, ax === 1 ? 1 : 0, ax === 2 ? 1 : 0),
+        refA: A.palmQ.clone().invert(),
+        refB: B.palmQ.clone().invert(),
+        lost: 0,
+      };
+      toast('🔄 layer gripped — twist like a cap, it clicks every 90°');
+    }
   },
   toggle(on) {
     this.on = on;
@@ -594,24 +680,36 @@ const cubeLab = {
       }
     } else this._scaling = null;
 
-    // ── depth follow: the cube's interaction plane tracks the hands'
-    // measured depth, so the cube is always WHERE YOUR HANDS ARE — no
-    // on-screen-overlap-but-metres-apart-in-z ghost contact ──
+    // ── Z-BIAS: the cube's depth actively SEEKS the nearest palm's depth,
+    // so a hand reaching for it can ALWAYS touch it by construction —
+    // never "overlapping on screen but metres apart in z". The table
+    // re-pins to the frame bottom at that same depth: contact, finger
+    // conform and occlusion all happen in one shared interaction plane. ──
     if (S.mode === 'mirror') {
-      let z = 0, n = 0;
-      if (L.present) { z += L.palm.z; n++; }
-      if (R.present) { z += R.palm.z; n++; }
-      if (n) {
-        z = Math.max(this.center.z - 0.7, Math.min(this.center.z + 0.7, z / n));
-        this.iz += (z - this.iz) * Math.min(1, dt * 1.6);
+      let zt = null, best = Infinity;
+      for (const hb of [L, R]) {
+        if (!hb.present) continue;
+        const dxy = Math.hypot(hb.palm.x - this.box.pos.x, hb.palm.y - this.box.pos.y);
+        if (dxy < best) { best = dxy; zt = hb.palm.z; }
       }
-      if (!this.box.grabbed() && !this._scaling && this.box.vel.lengthSq() < 0.5) {
-        this.box.pos.z += (this.iz - this.box.pos.z) * Math.min(1, dt * 2.5);
+      if (zt !== null) {
+        zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, zt));
+        this.iz += (zt - this.iz) * Math.min(1, dt * 5);
       }
-      this.table.position.z = this.iz + 0.2;
+      if (!this.box.grabbed() && !this._scaling) {
+        this.box.pos.z += (this.iz - this.box.pos.z) * Math.min(1, dt * 8);
+      }
+      const dist = camera.position.distanceTo(_cubeMid.set(this.center.x, this.center.y, this.iz));
+      this.tableY = this.center.y - Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * dist + 0.06;
+      this.table.position.set(this.center.x, this.tableY, this.iz + 0.2);
     }
 
+    // layer-twist gesture (needs the pre-step held state), then physics —
+    // the twisting hand is exempted from push-out while it owns a slice
+    this.updateTwist();
+    this.box.suppressOtherHand = !!this.twistG;
     if (!this._scaling) this.box.update(dt, ballColliders, this.tableY);   // hands + body
+    this.model.update(dt);                                                 // release-snap animation
     if (!this.box.grabbed() && this.box.pos.distanceTo(this.center) > 3.4) this.box.reset();
     this.group.position.copy(this.box.pos);
     this.group.quaternion.copy(this.box.quat);
@@ -851,6 +949,8 @@ function loop() {
   sandbox.sphere.snapshot(EXPO.ball);
   cubeLab.box.snapshot(EXPO.cube);
   EXPO.cube.on = cubeLab.on; EXPO.cube.tableY = cubeLab.tableY;
+  EXPO.cube.twisting = !!(cubeLab.model && cubeLab.model.twisting());
+  EXPO.cube.squeezed = cubeLab.box._squeezed;
   beatGame.snapshot(EXPO.game);
 
   // 6. raw-landmark alignment dots (mirror mode)
