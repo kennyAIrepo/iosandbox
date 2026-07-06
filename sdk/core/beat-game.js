@@ -518,7 +518,12 @@ export class BeatGame {
    * offline (tests/_bake-audio.mjs) and shipped as JSON. Ground truth for
    * the sync system: no runtime DSP at all, the map IS the baked onsets.
    */
-  _loadBaked(urls = { audio: '/assets/audio/beat-it.mp3', map: '/assets/audio/beat-it.map.json' }) {
+  _loadBaked(urls = {
+    // resolved against THIS MODULE, not the page — works from any host
+    // subpath (GitHub Pages project sites) and any page location
+    audio: new URL('../../assets/audio/beat-it.mp3', import.meta.url).href,
+    map: new URL('../../assets/audio/beat-it.map.json', import.meta.url).href,
+  }) {
     if (!this._bakedP) {
       this._bakedP = (async () => {
         const [ab, meta] = await Promise.all([

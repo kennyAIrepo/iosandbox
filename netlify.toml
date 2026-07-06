@@ -1,0 +1,7 @@
+# Netlify: pure static hosting, no build step — the repo root is the site.
+# Connect the repo (or `netlify deploy --dir .`) and the lab is live at
+# https://<site>.netlify.app/handlab.html
+# NOTE: the /api/* world-publishing endpoints are Vercel functions and do
+# NOT run here — the Hand Lab suite doesn't use them.
+[build]
+  publish = "."

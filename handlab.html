@@ -205,15 +205,17 @@
 
 <script type="module">
 import * as THREE from 'three';
-import { initCamera, initTracking } from '/sdk/core/tracking.js';
-import { HandFilterBank } from '/sdk/core/filters.js';
-import { HoloHandRig } from '/sdk/core/hand-rig.js';
-import { HandViews } from '/sdk/core/hand-views.js';
-import { REST_R42, REST_L42 } from '/sdk/core/hands.js';
-import { HandBody, GrabbableSphere, GrabbableBox, BodyBody } from '/sdk/core/game-physics.js';
-import { buildRubiksCube, makeHoloTable, makeContactShadow } from '/sdk/core/rubiks-cube.js';
-import { BeatGame } from '/sdk/core/beat-game.js';
-import { HoloBodyRig, BodyPose, BODY_RADII } from '/sdk/core/body-rig.js';
+// RELATIVE paths (./sdk/...) — the lab must host from a subpath too
+// (GitHub Pages project sites live at user.github.io/<repo>/).
+import { initCamera, initTracking } from './sdk/core/tracking.js';
+import { HandFilterBank } from './sdk/core/filters.js';
+import { HoloHandRig } from './sdk/core/hand-rig.js';
+import { HandViews } from './sdk/core/hand-views.js';
+import { REST_R42, REST_L42 } from './sdk/core/hands.js';
+import { HandBody, GrabbableSphere, GrabbableBox, BodyBody } from './sdk/core/game-physics.js';
+import { buildRubiksCube, makeHoloTable, makeContactShadow } from './sdk/core/rubiks-cube.js';
+import { BeatGame } from './sdk/core/beat-game.js';
+import { HoloBodyRig, BodyPose, BODY_RADII } from './sdk/core/body-rig.js';
 
 // ─────────────────────────── state ───────────────────────────
 const S = {
@@ -300,8 +302,8 @@ setTimeout(() => {
 let glbHalves = null;
 async function loadGlbHalves() {
   if (glbHalves) return glbHalves;
-  const { splitHandModel } = await import('/sdk/assets/loader.js');
-  const d = await splitHandModel('/sdk/assets/holo_hands_model.glb');
+  const { splitHandModel } = await import('./sdk/assets/loader.js');
+  const d = await splitHandModel('./sdk/assets/holo_hands_model.glb');
   const toGeo = (h) => {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(h.positions, 3));
@@ -644,6 +646,22 @@ document.getElementById('dispOpts').addEventListener('click', (e) => {
 });
 
 const gameCfg = { difficulty: 'rush', trackMode: 'baked', file: null };
+
+// The baked MP3 is COPYRIGHTED and gitignored — hosted builds (GitHub
+// Pages / Netlify) don't ship it. Probe once; if absent, grey the ⭐
+// button out and make the synth track the default so START always works.
+fetch('./assets/audio/beat-it.mp3', { method: 'HEAD' })
+  .then(r => { if (!r.ok) throw new Error(); })
+  .catch(() => {
+    const b = document.querySelector('#trackOpts .opt[data-t="baked"]');
+    if (b) { b.disabled = true; b.style.opacity = 0.35; b.title = 'beat-it.mp3 is not bundled on this host (copyrighted) — use Synth or load your own MP3'; }
+    if (gameCfg.trackMode === 'baked') {
+      gameCfg.trackMode = 'synth';
+      document.querySelectorAll('#trackOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.t === 'synth'));
+      els.trackName.textContent = 'track: built-in synth · 139 BPM (⭐ Beat It not bundled here)';
+    }
+  });
+
 async function startRound() {
   if (meshOnly()) applyDisplay('lab');   // a round needs its props visible
   // playable in First-P (through your eyes) AND Third-P (Kinect avatar view)

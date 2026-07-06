@@ -1,6 +1,13 @@
 # Hand Lab — the holo-hand substrate, v2
 
-Open **`/handlab.html`** (any static server). This is the product-dev / presentation
+Open **`handlab.html`** (any static server — or hosted: the repo deploys to
+**GitHub Pages** via `.github/workflows/pages.yml` (Settings → Pages → Source =
+"GitHub Actions", then `https://<user>.github.io/<repo>/handlab.html`) and to
+**Netlify** via `netlify.toml` (publish dir = repo root, no build step). All lab
+paths are RELATIVE and three.js/MediaPipe come from CDNs, so subpath hosting
+works; the copyrighted baked MP3 is gitignored and never ships — hosted builds
+grey out ⭐ Beat It and default to the synth track. The `/api/*` world-publish
+endpoints are Vercel-only and unused by the lab.) This is the product-dev / presentation
 surface for the hand interaction system AND the reference implementation of the fixes
 to the three process problems: **misalignment, latency, flip/twist on camera-mode
 switch**. Holo hands remain the reliable fallback representation for the collision +
