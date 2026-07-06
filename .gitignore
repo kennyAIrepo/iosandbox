@@ -17,5 +17,7 @@ node_modules/
 config.local.js
 dei_config.local.js
 
-# copyrighted local audio — never commit
+# local audio — ignore stray mp3s, but the baked Beat It track SHIPS
+# (opted in for the hosted music-sync demo)
 assets/audio/*.mp3
+!assets/audio/beat-it.mp3
