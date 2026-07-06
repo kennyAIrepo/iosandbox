@@ -246,6 +246,11 @@ export class BeatGame {
     this._loPrev = 0;       // runtime transient detector state
     this._sinceKick = 9;
     this._freq = new Uint8Array(128);
+    this._yOff = 0;             // hand-height offset (m): notes arrive where the
+                                // lifted hands sit (see setHeightOffset + handlab)
+    this._vol = 1;             // master audio level 0..1
+    this._muted = false;       // mute-all
+    this._master = null;       // master GainNode (created lazily with the ctx)
     this._handPts = [[], []];   // root-local punch points per hand slot
     for (let h = 0; h < 2; h++) for (let i = 0; i < 10; i++) this._handPts[h].push(new THREE.Vector3());
     this._handMeta = [{ speed: 0, present: false, slot: 'left' }, { speed: 0, present: false, slot: 'right' }];
@@ -473,7 +478,7 @@ export class BeatGame {
   }
 
   laneWorld(lane, row, out) {
-    out.set(LANES_X[lane], this._camY + ROWS_DY[row], HIT_Z);
+    out.set(LANES_X[lane], this._camY + ROWS_DY[row] + this._yOff, HIT_Z);
     return this.root.localToWorld(out);
   }
 
@@ -554,12 +559,50 @@ export class BeatGame {
   _ensureCtx() {
     if (!this.ctx) this.ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (this.ctx.state === 'suspended') this.ctx.resume();
+    // Master gain — EVERY track routes through this, so one knob (and mute)
+    // controls all audio. Created once, persists across tracks.
+    if (!this._master) {
+      this._master = this.ctx.createGain();
+      this._master.gain.value = this._muted ? 0 : this._vol;
+      this._master.connect(this.ctx.destination);
+    }
   }
+
+  /** Master audio level, 0..1. Persists across tracks; mute overrides. */
+  setVolume(v) {
+    this._vol = Math.max(0, Math.min(1, v));
+    this._applyGain();
+  }
+
+  /** Mute / unmute all audio (remembers the volume underneath). */
+  setMuted(b) {
+    this._muted = !!b;
+    this._applyGain();
+  }
+
+  _applyGain() {
+    if (!this._master) return;
+    const g = this._muted ? 0 : this._vol;
+    // short ramp avoids a click on toggle
+    this._master.gain.setTargetAtTime(g, this.ctx.currentTime, 0.02);
+  }
+
+  /** Vertical offset (m) of the note punch-plane — kept equal to the hand
+   *  height offset so notes always arrive where the hands are drawn. */
+  setHeightOffset(y) { this._yOff = y || 0; }
 
   _begin(track, map, difficulty) {
     this.stopClean();
     this.track = track; this.map = map; this.difficulty = difficulty;
     this._lastName = track.name;
+    // Route this track's output through the master gain (volume + mute-all).
+    // Tracks connect their analyser straight to ctx.destination on build; we
+    // re-point that one hop. The analyser still reads the signal (it's driven
+    // by its upstream gain), so the beat visuals are unaffected.
+    if (this._master && track.analyser) {
+      try { track.analyser.disconnect(); } catch (e) {}
+      track.analyser.connect(this._master);
+    }
     // BEAT CONDUCTOR — the musical grid as a clock. Every visual pulse
     // (world, grid, notes, telegraphs) fires off THIS, not off an
     // analyser that lags the transient. spb = seconds per beat; gridOff =
@@ -748,7 +791,7 @@ export class BeatGame {
       const err = t - n.time;                                  // + = late
       if (s.state === 'fly') {
         const z = HIT_Z - (n.time - t) * this.speed;
-        s.mesh.position.set(LANES_X[n.lane], this._camY + ROWS_DY[n.row], z);
+        s.mesh.position.set(LANES_X[n.lane], this._camY + ROWS_DY[n.row] + this._yOff, z);
         // GROW on approach: tiny at the vanish point → a fist-sized ball at
         // the hit plane, with a heartbeat bump on every conductor beat
         const flight = Math.min(1, Math.max(0, (z - SPAWN_Z) / (HIT_Z - SPAWN_Z)));

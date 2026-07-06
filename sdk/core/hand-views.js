@@ -102,6 +102,15 @@ const VIEW_DEFAULTS = {
   // y = min(1, videoAspect/screenAspect).
   cover: { x: 1, y: 1 },
 
+  // Vertical hand-height offset (metres) for POV modes — raise/lower where
+  // the hands sit on screen so any screen+camera setup can be tuned to a
+  // comfortable level (see handlab HAND HEIGHT slider). Applied to the POV
+  // anchor's vertical axis (screen-up in first-person, world-up in third),
+  // and the BEAT RUSH note plane is shifted by the SAME amount so notes keep
+  // arriving exactly where the hands are drawn. Mirror mode ignores it (there
+  // the mesh must stay glued to your real hand in the video).
+  yOffset: 0,
+
   // first-person anchoring (camera-local metres, −Z forward). PRESET slots:
   // each hand lives in its own half of the view and can never cross over.
   fpForward: -0.50,
@@ -283,10 +292,13 @@ export class HandViews {
     const [lo, hi] = S.fpClamp;
     ax = sign > 0 ? Math.min(hi, Math.max(lo, ax)) : Math.max(-hi, Math.min(-lo, ax));
     if (first) {
-      this._a.set(ax, S.fpDown - (w.y - 0.5) * follow * 0.85, S.fpForward);
+      // yOffset in camera-local Y == straight up the screen (screen-vertical
+      // IS the camera's local up), independent of the camera's pitch.
+      this._a.set(ax, S.fpDown + S.yOffset - (w.y - 0.5) * follow * 0.85, S.fpForward);
     } else {
       this._q.setFromAxisAngle(_Y_AXIS, avatar.yaw);
-      this._a.set(ax, S.tpUp - (w.y - 0.5) * follow * 0.8, S.tpForward)
+      // yaw is about Y, so the vertical component survives the rotation.
+      this._a.set(ax, S.tpUp + S.yOffset - (w.y - 0.5) * follow * 0.8, S.tpForward)
         .applyQuaternion(this._q).add(avatar.position);
     }
     // Reach tilt applies ONLY to the image-space fallback (which has no real

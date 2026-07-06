@@ -107,6 +107,11 @@
     </div>
   </div>
   <div class="sec">
+    <div class="lbl">HAND HEIGHT · fit any screen</div>
+    <div class="sld"><input id="handYSld" type="range" min="-0.2" max="0.8" step="0.02" value="0"><span id="handYVal">0cm</span></div>
+    <div class="sname">raise / lower where hands sit (first- &amp; third-person + BEAT RUSH). Tune per camera &amp; screen so hands land at a comfortable level — notes follow.</div>
+  </div>
+  <div class="sec">
     <div class="lbl">TRACKING FILTER (One-Euro)</div>
     <div class="sname">min cutoff <i style="color:var(--mut);font-size:9px">— lower = calmer</i></div>
     <div class="sld"><input id="cutSld" type="range" min="0.1" max="3" step="0.05" value="1.4"><span id="cutVal">1.40</span></div>
@@ -123,6 +128,12 @@
     <label class="chk"><input id="bodyChk" type="checkbox" checked> body mesh (pose-tracked)</label>
     <div class="sld"><input id="bodyAlphaSld" type="range" min="0.1" max="0.8" step="0.02" value="0.42"><span id="bodyAlphaVal">0.42</span></div>
     <div class="sname">body opacity · 🪞 mirror = silhouette overlay · 🎥 third-p = your avatar (kinect-style)</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">AUDIO</div>
+    <div class="sld"><input id="volSld" type="range" min="0" max="1" step="0.05" value="1"><span id="volVal">100%</span></div>
+    <div class="sname">master volume — all game audio</div>
+    <label class="chk"><input id="muteChk" type="checkbox"> 🔇 mute all audio</label>
   </div>
 </div>
 
@@ -223,6 +234,8 @@ const S = {
   predMs: 40, conform: true, showRaw: false, swap: false,
   body: true,
   display: 'lab',   // 'lab' = everything · 'hands' = hand meshes only · 'handsBody' = hands + full body
+  handY: 0,         // hand-height offset (m) — raise/lower hands for any screen+camera
+  vol: 1, muted: false,   // master audio level + mute-all
   running: false,
 };
 // Mesh isolation: strips props (ball/cube/beat env) to judge the substrate
@@ -952,6 +965,18 @@ bindSlider('cutSld', 'cutVal', v => v.toFixed(2), v => filters.setParams({ minCu
 bindSlider('betaSld', 'betaVal', v => v.toFixed(3), v => filters.setParams({ beta: v }));
 bindSlider('predSld', 'predVal', v => v + 'ms', v => S.predMs = v);
 bindSlider('alphaSld', 'alphaVal', v => v.toFixed(2), v => { rigR?.setGhost({ alpha: v }); rigL?.setGhost({ alpha: v }); });
+// HAND HEIGHT — lift the POV hands AND the BEAT RUSH note plane together so
+// notes always arrive where the hands are drawn (no game desync).
+bindSlider('handYSld', 'handYVal', v => (v > 0 ? '+' : '') + Math.round(v * 100) + 'cm',
+  v => { S.handY = v; views.cfg.yOffset = v; beatGame.setHeightOffset(v); });
+// AUDIO — master volume + mute-all (routes every track through one gain node)
+bindSlider('volSld', 'volVal', v => Math.round(v * 100) + '%',
+  v => { S.vol = v; beatGame.setVolume(v); });
+document.getElementById('muteChk').addEventListener('change', (e) => {
+  S.muted = e.target.checked;
+  beatGame.setMuted(S.muted);
+  toast(S.muted ? '🔇 audio muted' : '🔊 audio on');
+});
 document.getElementById('rawChk').addEventListener('change', (e) => S.showRaw = e.target.checked);
 document.getElementById('confChk').addEventListener('change', (e) => S.conform = e.target.checked);
 document.getElementById('swapChk').addEventListener('change', (e) => {

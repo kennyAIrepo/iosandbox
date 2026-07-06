@@ -46,6 +46,16 @@ the mirror by smearing vertices — that smear *was* the twist.
   hidden) / **🖐+🧍 Body** (hands + the full-body rig, still no props). For judging
   the substrate meshes clean; starting a BEAT RUSH round drops you back to Full lab,
   and the body checkbox inside an isolation mode switches between the two isolations.
+- **Hand height (fit any screen)** — `views.cfg.yOffset` (m): raises/lowers where
+  the POV hands sit on screen, for any screen+camera where they'd otherwise land
+  too low. Camera-local vertical in first-person (= straight up the screen at any
+  camera pitch), world-vertical in third-person; mirror mode ignores it (the mesh
+  must stay glued to your real hand). BEAT RUSH's note punch-plane is shifted by
+  the SAME value (`beatGame.setHeightOffset`) so notes keep arriving exactly where
+  the hands are drawn — hands + physics colliders + notes move as one, no desync.
+- **Audio** — master volume + **🔇 mute all**. Every track routes through one
+  master `GainNode` (`beatGame.setVolume`/`setMuted`, applied even if set before a
+  round starts), so the control is truly global and click-free (short gain ramp).
 - **Filter** — min-cutoff (lower = calmer at rest), beta (higher = less lag at speed),
   prediction ms. "Show raw landmarks" overlays orange dots = unfiltered input, so you
   can SEE jitter removed and the predicted mesh leading the raw signal.
