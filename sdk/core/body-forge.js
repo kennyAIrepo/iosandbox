@@ -121,8 +121,11 @@ export const BODY_RADII = (() => {
 })();
 
 const STYLES = {
-  standard: { res: 128, radius: 1.0, blend: 1.0, taubin: 4 },
-  lite:     { res: 88,  radius: 1.0, blend: 1.0, taubin: 3 },
+  // res 152 + taubin 6: the silhouette look draws a bright contour line
+  // right on the mesh edge, so faceting reads as "jagged linework" — the
+  // extra resolution + smoothing passes are what make the outline clean.
+  standard: { res: 152, radius: 1.0, blend: 1.0, taubin: 6 },
+  lite:     { res: 100, radius: 1.0, blend: 1.0, taubin: 4 },
 };
 
 function smin(a, b, k) {
@@ -175,17 +178,19 @@ export function buildBodySDF(lm, style = STYLES.standard) {
   // Groups: 0 trunk/head · 1 arm L · 2 arm R · 3 leg L · 4 leg R
   const FLAT_T = 1.35;   // torso slab: wider than deep
 
-  // ── PELVIS + TORSO (group 0) ──
-  prim(lm[23], lm[24], R(0.235 * H), R(0.235 * H), FLAT_T, 0);                       // pelvis bar
-  prim(mid(lm[23], lm[24], 0.5), mid(lm[11], lm[12], 0.5), R(0.255 * H), R(0.23 * H), 1.42, 0);  // trunk core (waist taper via smaller mid prim below)
-  prim(off(mid(lm[23], lm[24], 0.5), [0, 0.16 * H, 0.01]), off(mid(lm[11], lm[12], 0.5), [0, -0.30 * H, 0.012]), R(0.215 * H), R(0.21 * H), 1.5, 0);  // waist (slimmer)
-  prim(off(lm[11], [0.02, -0.06 * H, 0.012]), off(lm[12], [-0.02, -0.06 * H, 0.012]), R(0.20 * H), R(0.20 * H), 1.55, 0);  // chest plate
-  prim(lm[11], lm[12], R(0.155 * H), R(0.155 * H), 1.35, 0);                          // shoulder bar
+  // ── PELVIS + TORSO (group 0) — natural proportions, not superhero:
+  // reference is a plain standing human silhouette (slim taper, hips
+  // narrower than shoulders, no exaggerated chest V) ──
+  prim(lm[23], lm[24], R(0.215 * H), R(0.215 * H), FLAT_T, 0);                       // pelvis bar
+  prim(mid(lm[23], lm[24], 0.5), mid(lm[11], lm[12], 0.5), R(0.235 * H), R(0.215 * H), 1.42, 0);  // trunk core (waist taper via smaller mid prim below)
+  prim(off(mid(lm[23], lm[24], 0.5), [0, 0.16 * H, 0.01]), off(mid(lm[11], lm[12], 0.5), [0, -0.30 * H, 0.012]), R(0.20 * H), R(0.195 * H), 1.5, 0);  // waist
+  prim(off(lm[11], [0.02, -0.06 * H, 0.012]), off(lm[12], [-0.02, -0.06 * H, 0.012]), R(0.185 * H), R(0.185 * H), 1.55, 0);  // chest plate
+  prim(lm[11], lm[12], R(0.145 * H), R(0.145 * H), 1.35, 0);                          // shoulder bar
   // glutes (behind pelvis)
-  prim(off(lm[23], [0.01, -0.02, -0.055]), off(lm[24], [-0.01, -0.02, -0.055]), R(0.16 * H), R(0.16 * H), 1.1, 0);
+  prim(off(lm[23], [0.01, -0.02, -0.055]), off(lm[24], [-0.01, -0.02, -0.055]), R(0.15 * H), R(0.15 * H), 1.1, 0);
   // deltoid caps
-  prim(lm[11], lm[11], R(0.150 * H), R(0.150 * H), 1.05, 0);
-  prim(lm[12], lm[12], R(0.150 * H), R(0.150 * H), 1.05, 0);
+  prim(lm[11], lm[11], R(0.135 * H), R(0.135 * H), 1.05, 0);
+  prim(lm[12], lm[12], R(0.135 * H), R(0.135 * H), 1.05, 0);
 
   // ── NECK + HEAD (group 0) ──
   prim(mid(lm[11], lm[12], 0.5), off(lm[HEAD_C], [0, -0.05, 0.005]), R(0.115 * H), R(0.105 * H), 1.1, 0);
@@ -193,34 +198,44 @@ export function buildBodySDF(lm, style = STYLES.standard) {
   prim(off(lm[HEAD_C], [0, -0.015, 0.045]), off(lm[HEAD_C], [0, -0.075, 0.052]), R(0.155 * H), R(0.115 * H), 1.15, 0);  // face/jaw wedge
   prim(off(lm[0], [0, -0.006, -0.035]), off(lm[0], [0, -0.006, -0.035]), R(0.075 * H), R(0.075 * H), 1.0, 0);           // nose mound
 
-  // ── ARMS (groups 1/2): shoulder → elbow → wrist → mitt ──
+  // ── ARMS (groups 1/2): shoulder → elbow → wrist stub ──
+  // The hand itself is NOT sculpted here: real forged hand meshes (the
+  // same forge the interactive hands use) attach at the wrist in the rig,
+  // frame-mapped to the hand-paddle bone. Individual fingers are thinner
+  // than the body voxel grid (~1 voxel — they'd shred; hand-forge lesson:
+  // nothing under ~3 voxels), so the mitt is gone and the arm just ends
+  // in a clean stub the hand mesh overlaps.
   for (const [S, E, W, PK, IX, g] of [[11, 13, 15, 17, 19, 1], [12, 14, 16, 18, 20, 2]]) {
-    prim(lm[S], lm[E], R(0.115 * H), R(0.092 * H), 1.06, g);                          // upper arm
-    prim(lm[E], lm[W], R(0.088 * H), R(0.066 * H), 1.06, g);                          // forearm
-    // hand mitt: wrist → mid(pinky,index), flat like a palm
-    prim(lm[W], mid(lm[PK], lm[IX], 0.55), R(0.085 * H), R(0.072 * H), 1.5, g);
-    prim(mid(lm[PK], lm[IX], 0.5), mid(lm[PK], lm[IX], 0.9), R(0.068 * H), R(0.05 * H), 1.55, g);  // finger mass
+    prim(lm[S], lm[E], R(0.105 * H), R(0.085 * H), 1.06, g);                          // upper arm
+    prim(lm[E], lm[W], R(0.08 * H), R(0.062 * H), 1.06, g);                           // forearm
+    prim(lm[W], mid(lm[W], mid(lm[PK], lm[IX], 0.5), 0.35), R(0.058 * H), R(0.052 * H), 1.25, g);  // wrist stub
   }
 
   // ── LEGS (groups 3/4): hip → knee → ankle → foot ──
   for (const [Hp, K, A, HE, T, g] of [[23, 25, 27, 29, 31, 3], [24, 26, 28, 30, 32, 4]]) {
-    prim(lm[Hp], lm[K], R(0.185 * H), R(0.125 * H), 1.05, g);                         // thigh
-    prim(lm[K], lm[A], R(0.115 * H), R(0.075 * H), 1.0, g);                           // shin
-    prim(mid(lm[K], lm[A], 0.28), mid(lm[K], lm[A], 0.55), R(0.125 * H), R(0.105 * H), 1.0, g);  // calf bulge
-    prim(lm[HE], lm[T], R(0.085 * H), R(0.075 * H), 1.35, g, [0, 1, 0]);              // foot slab (flat vertically)
-    prim(lm[A], lm[HE], R(0.075 * H), R(0.07 * H), 1.0, g);                           // heel
+    prim(lm[Hp], lm[K], R(0.165 * H), R(0.115 * H), 1.05, g);                         // thigh
+    prim(lm[K], lm[A], R(0.105 * H), R(0.07 * H), 1.0, g);                            // shin
+    prim(mid(lm[K], lm[A], 0.28), mid(lm[K], lm[A], 0.55), R(0.115 * H), R(0.098 * H), 1.0, g);  // calf bulge
+    // FOOT — a real wedge, not a nub: heel block → instep ramp → wide
+    // ball pad → toe cap slightly past the toe landmark. All chunky
+    // (≥3 voxels) so nothing shreds at body grid resolution.
+    prim(lm[A], lm[HE], R(0.078 * H), R(0.072 * H), 1.0, g);                          // heel block
+    prim(lm[HE], mid(lm[HE], lm[T], 1.08), R(0.082 * H), R(0.058 * H), 1.6, g, [0, 1, 0]);  // sole wedge (flat, tapers to toe)
+    prim(mid(lm[A], mid(lm[HE], lm[T], 0.45), 0.35), mid(lm[HE], lm[T], 0.5), R(0.075 * H), R(0.068 * H), 1.3, g, [0, 1, 0]);  // instep ramp
+    prim(mid(lm[HE], lm[T], 0.68), mid(lm[HE], lm[T], 0.92), R(0.072 * H), R(0.062 * H), 1.45, g, [0, 1, 0]);  // ball of the foot (widest)
+    prim(mid(lm[HE], lm[T], 0.96), mid(lm[HE], lm[T], 1.12), R(0.055 * H), R(0.042 * H), 1.5, g, [0, 1, 0]);   // toe cap
   }
 
   // Blend radii
   const kTrunk = 0.16 * H * style.blend;    // trunk masses fuse into one body
   const kChain = 0.085 * H * style.blend;   // within a limb
-  const kJoin = 0.075 * H * style.blend;    // limb → trunk
+  const kJoin = 0.065 * H * style.blend;    // limb → trunk (tight: no waist-to-forearm webbing)
 
   const NG = 5;
   const gd = new Float64Array(NG);
 
-  return function sdf(x, y, z) {
-    for (let g = 0; g < NG; g++) gd[g] = 1e9;
+  function groupDist(x, y, z, out) {
+    for (let g = 0; g < NG; g++) out[g] = 1e9;
     for (let i = 0; i < prims.length; i++) {
       const P = prims[i];
       if (x < P.minx || x > P.maxx || y < P.miny || y > P.maxy || z < P.minz || z > P.maxz) continue;
@@ -233,13 +248,40 @@ export function buildBodySDF(lm, style = STYLES.standard) {
       const dy = ly - t * P.len;
       const d = Math.sqrt(lx * lx + dy * dy + lz * lz) - (P.ra + (P.rb - P.ra) * t);
       const g = P.group;
-      gd[g] = smin(gd[g], d, g === 0 ? kTrunk : kChain);
+      out[g] = smin(out[g], d, g === 0 ? kTrunk : kChain);
     }
+    return out;
+  }
+
+  const sdf = function (x, y, z) {
+    groupDist(x, y, z, gd);
     let d = gd[0];
     for (let g = 1; g < NG; g++) d = smin(d, gd[g], kJoin);
     return d;
   };
+  sdf.groups = groupDist;   // per-part distances — drives skin-weight region masking
+  return sdf;
 }
+
+// Which SDF group each BODY_BONES entry animates (0 trunk/head · 1 arm L ·
+// 2 arm R · 3 leg L · 4 leg R) — must match buildBodySDF's prim groups.
+const BONE_GROUP = [0, 0, 0, 0, 0, 1, 2, 1, 2, 1, 2, 0, 0, 3, 4, 3, 4, 3, 4];
+
+// Per-bone capture radius (metres) for radius-normalized weight
+// competition: thick trunk bones out-pull thin limb bones passing close.
+const BONE_CAPTURE_R = new Float32Array([
+  0.14,          // 0 trunk core
+  0.09,          // 1 neck
+  0.11,          // 2 head
+  0.09, 0.09,    // 3/4 clavicles
+  0.065, 0.065,  // 5/6 upper arms
+  0.05, 0.05,    // 7/8 forearms
+  0.045, 0.045,  // 9/10 hand paddles
+  0.12, 0.12,    // 11/12 pelvis wings
+  0.085, 0.085,  // 13/14 thighs
+  0.06, 0.06,    // 15/16 shins
+  0.05, 0.05,    // 17/18 feet
+]);
 
 /**
  * Forge the body mesh from a rest skeleton (defaults to REST_BODY).
@@ -256,7 +298,27 @@ export function forgeBody({ rest = REST_BODY, style = 'standard' } = {}) {
   const H = lm[CHEST][1] - lm[HIP_MID][1];
   const geo = polygonizeSDF(sdf, { min, max, margin: 0.45 * H, res: st.res, taubin: st.taubin, label: 'body-forge' });
 
-  const skin = computeBoneWeights(geo, lm, BODY_BONES);
+  // Region mask from the SDF's own part groups: each vertex may only bind
+  // to bones of the part(s) whose surface it actually belongs to. A waist
+  // vertex is trunk-only even though the A-pose forearm passes 15cm away;
+  // only the true junction bands (|gd_a − gd_b| < margin: deltoid, armpit,
+  // hip crease) blend across parts.
+  const pos = geo.getAttribute('position');
+  const vc = pos.count;
+  const allow = new Uint32Array(vc);
+  const gdV = new Float64Array(5);
+  const JOIN_MARGIN = 0.13 * H;   // ≈ 6cm — the anatomical blend band
+  for (let v = 0; v < vc; v++) {
+    sdf.groups(pos.getX(v), pos.getY(v), pos.getZ(v), gdV);
+    let g0 = 0;
+    for (let g = 1; g < 5; g++) if (gdV[g] < gdV[g0]) g0 = g;
+    let mask = 0;
+    for (let b = 0; b < BODY_BONES.length; b++) {
+      if (gdV[BONE_GROUP[b]] < gdV[g0] + JOIN_MARGIN) mask |= (1 << b);
+    }
+    allow[v] = mask;
+  }
+  const skin = computeBoneWeights(geo, lm, BODY_BONES, { radii: BONE_CAPTURE_R, allow });
   const stats = {
     verts: geo.getAttribute('position').count,
     tris: geo.index.count / 3,

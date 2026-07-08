@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>body view — visual harness</title>
+<style>html,body{margin:0;height:100%;background:#0a0f18;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+// Visual harness for the body rig (no camera, no tracking): pose the rig
+// from URL params and render it — driven by tests/_bodyprobe-view.mjs for
+// screenshot regression, handy in a normal browser too.
+//   ?pose=rest|up|retarget|retarget-up   ?look=shadow|ghost   ?style=standard|lite
+//   ?cam=full|hand|foot|head
+// pose=retarget* runs BodyPose.retarget() on synthetic worldLandmarks —
+// the EXACT live first/third-person code path, no camera needed.
+import * as THREE from 'three';
+import { HoloBodyRig, BodyPose, REST_BODY } from '../sdk/core/body-rig.js';
+
+const q = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(1);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a1020);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 50);
+const CAMS = {
+  full: [[0, 1.05, 3.4], [0, 0.95, 0]],
+  hand: [[-0.55, 0.82, 0.85], [-0.37, 0.8, 0]],
+  foot: [[-0.05, 0.35, 1.2], [-0.14, 0.06, 0]],
+  head: [[0, 1.66, 1.1], [0, 1.62, 0]],
+};
+const [cp, ct] = CAMS[q.get('cam') || 'full'] || CAMS.full;
+camera.position.set(...cp); camera.lookAt(...ct);
+
+const pose = q.get('pose') || 'rest';
+// retarget poses are the POV path → the BACK bind (reflected skeleton)
+const rig = new HoloBodyRig(scene, { look: q.get('look') || 'shadow', back: pose.startsWith('retarget') })
+  .build(q.get('style') || 'standard');
+const pts = REST_BODY.map(p => new THREE.Vector3(p[0], p[1], p[2]));
+const Y_POSE = [   // arms overhead, trunk untouched (scene coords)
+  [13, -0.32, 1.62, 0.01], [14, 0.32, 1.62, 0.01],
+  [15, -0.36, 1.88, 0.02], [16, 0.36, 1.88, 0.02],
+  [17, -0.375, 1.985, 0.018], [18, 0.375, 1.985, 0.018],
+  [19, -0.355, 1.99, 0.05], [20, 0.355, 1.99, 0.05],
+  [21, -0.325, 1.96, 0.05], [22, 0.325, 1.96, 0.05],
+];
+if (pose === 'up') for (const [i, x, y, z] of Y_POSE) pts[i].set(x, y, z);
+
+let getPts = () => pts.map(p => p.clone());
+if (pose.startsWith('retarget')) {
+  // scene rest → MediaPipe world convention: (x,y,z) → (−x, −(y−hipY), −z)
+  const world = REST_BODY.slice(0, 33).map(p => ({ x: -p[0], y: -(p[1] - 0.95), z: -p[2] }));
+  if (pose === 'retarget-up') for (const [i, x, y, z] of Y_POSE) { world[i] = { x: -x, y: -(y - 0.95), z: -z }; }
+  const img = REST_BODY.slice(0, 33).map(p => ({ x: 0.5 + p[0] * 0.3, y: 0.9 - p[1] * 0.45, z: 0 }));
+  const bp = new BodyPose();
+  const spawn = new THREE.Vector3(0, 0, 0);
+  let tt = 0;
+  getPts = () => { tt += 1 / 60; return bp.retarget(world, img, spawn, 0, null, tt); };
+}
+function loop(t) {
+  requestAnimationFrame(loop);
+  rig.tick(t * 0.001);
+  rig.pose(getPts());
+  renderer.render(scene, camera);
+  window.__ready = true;
+}
+loop(0);
+</script>
+</body>
+</html>

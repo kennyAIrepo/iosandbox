@@ -344,22 +344,41 @@ function taubinSmooth(geometry, passes = 4, lambda = 0.5, mu = -0.53) {
  * bases): with two, a membrane binds to e.g. thumb + palm-ray only and
  * crumples into straight creases the moment the splay changes.
  * Works for ANY landmark skeleton — pass `bones` (defaults to the hand).
+ *
+ * opts (both essential at BODY scale — raw inverse-d² is fine for a hand
+ * where all bones are similar thickness, but on a body the A-pose wrists
+ * hang right beside the hips, and raw distance lets thin forearm/hand
+ * bones capture waist/chest skin — raise the arms and the torso grows
+ * triangular shards that ride up with them):
+ *   radii: per-bone capture radius; distances compete NORMALIZED (d/r),
+ *          so a thick trunk bone out-pulls a thin arm bone passing at
+ *          the same absolute distance.
+ *   allow: Uint32Array(vc) — per-vertex bone bitmask (bit b = bone b may
+ *          influence this vertex). Built from the SDF's own body-part
+ *          groups: torso skin can NEVER bind to an arm bone; only the
+ *          real junction bands (deltoid/armpit/hip crease) blend.
+ *
  * Returns { index: Uint8Array(vc*3), weight: Float32Array(vc*3), stride: 3 }.
  */
-export function computeBoneWeights(geometry, lm, bones = HAND_BONES) {
+export function computeBoneWeights(geometry, lm, bones = HAND_BONES, opts = {}) {
   const pos = geometry.getAttribute('position');
   const vc = pos.count;
   const index = new Uint8Array(vc * 3);
   const weight = new Float32Array(vc * 3);
   const nb = bones.length;
   const segs = bones.map(([a, b]) => [lm[a][0], lm[a][1], lm[a][2], lm[b][0], lm[b][1], lm[b][2]]);
+  const radii = opts.radii || null;
+  const allow = opts.allow || null;
 
   for (let v = 0; v < vc; v++) {
     const x = pos.getX(v), y = pos.getY(v), z = pos.getZ(v);
+    const mask = allow ? allow[v] : 0xffffffff;
     let b0 = 0, d0 = 1e9, b1 = 0, d1 = 1e9, b2 = 0, d2 = 1e9;
     for (let b = 0; b < nb; b++) {
+      if (!((mask >>> b) & 1)) continue;
       const s = segs[b];
-      const d = sdSeg(x, y, z, s[0], s[1], s[2], s[3], s[4], s[5], 0, 0);
+      let d = sdSeg(x, y, z, s[0], s[1], s[2], s[3], s[4], s[5], 0, 0);
+      if (radii) d /= radii[b];
       if (d < d0) { b2 = b1; d2 = d1; b1 = b0; d1 = d0; b0 = b; d0 = d; }
       else if (d < d1) { b2 = b1; d2 = d1; b1 = b; d1 = d; }
       else if (d < d2) { b2 = b; d2 = d; }

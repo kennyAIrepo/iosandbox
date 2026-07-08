@@ -113,7 +113,9 @@ export async function initTracking(videoEl, opts = {}) {
     if (frameCount % (opts.poseEvery || 4) === 0) {
       const pr = poseLandmarker.detectForVideo(videoEl, now);
       if (pr.landmarks && pr.landmarks.length > 0) {
-        result.pose = pr.landmarks[0].map(p => ({ x: 1 - p.x, y: p.y, z: p.z || 0 }));
+        // v = per-landmark visibility (0..1) — partial-body inference gates
+        // on it (out-of-frame legs, occluded arms). Filters ignore it.
+        result.pose = pr.landmarks[0].map(p => ({ x: 1 - p.x, y: p.y, z: p.z || 0, v: p.visibility ?? 1 }));
       }
       if (pr.worldLandmarks && pr.worldLandmarks.length > 0) {
         result.poseWorld = pr.worldLandmarks[0];

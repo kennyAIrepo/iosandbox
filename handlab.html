@@ -124,10 +124,18 @@
     <label class="chk"><input id="swapChk" type="checkbox"> swap L/R (device quirk fix)</label>
   </div>
   <div class="sec">
-    <div class="lbl">BODY · full-body substrate</div>
-    <label class="chk"><input id="bodyChk" type="checkbox" checked> body mesh (pose-tracked)</label>
+    <div class="lbl">BODY · full-body silhouette</div>
+    <label class="chk"><input id="bodyChk" type="checkbox" checked> body tracking · 🪞 mirror + 🎮 first-p + 🎥 third-p</label>
+    <div class="row" id="bodyLookOpts">
+      <button class="opt sel" data-l="shadow">🌑 Shadow</button>
+      <button class="opt" data-l="ghost">👻 Holo</button>
+    </div>
     <div class="sld"><input id="bodyAlphaSld" type="range" min="0.1" max="0.8" step="0.02" value="0.42"><span id="bodyAlphaVal">0.42</span></div>
-    <div class="sname">body opacity · 🪞 mirror = silhouette overlay · 🎥 third-p = your avatar (kinect-style)</div>
+    <div class="sname">silhouette opacity</div>
+    <div class="sld"><input id="bodyYSld" type="range" min="-0.6" max="0.6" step="0.02" value="0"><span id="bodyYVal">0cm</span></div>
+    <div class="sname">body height — raise / lower the silhouette on screen</div>
+    <div class="sld"><input id="bodySizeSld" type="range" min="0.5" max="1.6" step="0.02" value="1"><span id="bodySizeVal">1.00×</span></div>
+    <div class="sname">silhouette size · predictive: a hip LAUNCH lifts the body (jump inference), out-of-frame limbs settle to rest instead of flailing</div>
   </div>
   <div class="sec">
     <div class="lbl">AUDIO</div>
@@ -177,7 +185,10 @@
        <b style="color:var(--cy)">RUBIK'S CUBE</b> onto the holo table and handle it
        for real (your fingers occlude it, it never hovers). Then hit
        <b style="color:var(--cy)">BEAT RUSH</b> — a beat-synced punch game where orbs fly
-       out of the vanish point onto your fists, and walls make you lean.</p>
+       out of the vanish point onto your fists, and walls make you lean.
+       Your full body rides along as a <b style="color:var(--cy)">KINECT-STYLE SHADOW</b> —
+       a dark silhouette with an electric aura, pose-tracked in every view,
+       that jumps when you jump.</p>
     <button id="startBtn">▶ START</button>
     <div style="margin-top:12px">
       <button id="inspectBtn" style="padding:8px 22px;font-size:11.5px;letter-spacing:.12em;color:var(--cy);
@@ -234,6 +245,9 @@ const S = {
   mode: 'mirror', style: 'smooth',
   predMs: 40, conform: true, showRaw: false, swap: false,
   body: true,
+  bodyLook: 'shadow',   // 'shadow' = Kinect dark silhouette · 'ghost' = holo substrate
+  bodyY: 0,             // body height offset (m) — raise/lower the silhouette on screen
+  bodySize: 1,          // silhouette scale
   display: 'lab',   // 'lab' = everything · 'hands' = hand meshes only · 'handsBody' = hands + full body
   handY: 0,         // hand-height offset (m) — raise/lower hands for any screen+camera
   vol: 1, muted: false,   // master audio level + mute-all
@@ -346,21 +360,47 @@ const handBodyArr = [handBodies.left, handBodies.right];
 // ── full-body stack: pose filters → view placement → rig + colliders ──
 // (rig is forged at boot; the mirror overlay reuses views.mirrorPoint — the
 // same ray-based projection the hands use, so body pixels match video pixels)
-let bodyRig = null;
+// TWO body rigs, one per viewing side (same fix as the hands' chirality
+// meshes): 🪞 mirror overlay drives the FRONT bind; 🎮/🎥 POV shows the
+// person from BEHIND — a z-reflected skeleton that a front-bound LBS
+// cannot follow (horizontal bones roll 180° → pinched bowtie torso) —
+// so the avatar gets its own BACK bind.
+let bodyRig = null;      // front bind — mirror overlay
+let bodyRigB = null;     // back bind — first/third-person avatar
+const activeBodyRig = () => (S.mode === 'mirror' ? bodyRig : bodyRigB);
+const eachBodyRig = (fn) => { if (bodyRig) fn(bodyRig); if (bodyRigB) fn(bodyRigB); };
 const bodyPose = new BodyPose();
 const bodyBody = new BodyBody(BODY_RADII);
-const poseFilters = new HandFilterBank({ count: 33, minCutoff: 1.0, beta: 0.06 });          // image
-const poseFiltersW = new HandFilterBank({ count: 33, minCutoff: 1.0, beta: 0.06, maxLead: 0.05 });  // world (m)
+// Pose One-Euro params = what MediaPipe itself ships for pose landmark
+// smoothing (pose_landmark_filtering.pbtxt): world 0.1/40 (metres), image
+// ≈0.08/30 (their 0.05/80 is value-scaled by person size — this is the
+// unscaled equivalent for a person filling most of the frame). Far lower
+// cutoff at rest + far higher beta at speed than the hand tuning: a body
+// is big and slow, so rest jitter shows more and fast moves must not lag.
+const poseFilters = new HandFilterBank({ count: 33, minCutoff: 0.08, beta: 30 });                    // image
+const poseFiltersW = new HandFilterBank({ count: 33, minCutoff: 0.1, beta: 40, maxLead: 0.05 });     // world (m)
+const poseVis = new Float32Array(33);   // per-landmark visibility, EMA'd (gates the inference)
 const bodyPts = [];               // mirror-projection pool (extends to 37 in the rig)
 for (let i = 0; i < 33; i++) bodyPts.push(new THREE.Vector3());
 let seenPose = 0;
 const TP_ORIGIN = new THREE.Vector3(0, 0, 0);   // avatar spawn (feet) in third-person
+const _bodySpawn = new THREE.Vector3(), _bodyFwd = new THREE.Vector3(), _bodyHip = new THREE.Vector3();
+// First-person body spawn: 2.6m ahead of the camera on the floor — the
+// Fruit-Ninja-on-Kinect framing (your shadow stands IN the game, the full
+// figure fits the view with headroom at fov 50).
+function fpBodySpawn() {
+  _bodyFwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _bodyFwd.y = 0;
+  if (_bodyFwd.lengthSq() < 1e-4) _bodyFwd.set(0, 0, -1); else _bodyFwd.normalize();
+  return _bodySpawn.copy(camera.position).addScaledVector(_bodyFwd, 2.6).setY(S.bodyY);
+}
+function tpBodySpawn() { return _bodySpawn.copy(TP_ORIGIN).setY(TP_ORIGIN.y + S.bodyY); }
 let _bodyRestPool = null;                        // rest-pose stand-in (pre-tracking)
-function bodyRestPose() {
-  if (!bodyRig) return null;
-  if (!_bodyRestPool) _bodyRestPool = bodyRig.rest.map(p => p.clone());
+function bodyRestPose(spawn) {
+  if (!bodyRigB) return null;                    // stand-in is a POV feature → back bind
+  if (!_bodyRestPool) _bodyRestPool = bodyRigB.rest.map(p => p.clone());
   for (let i = 0; i < _bodyRestPool.length; i++) {
-    _bodyRestPool[i].copy(bodyRig.rest[i]).add(TP_ORIGIN);
+    _bodyRestPool[i].copy(bodyRigB.rest[i]).multiplyScalar(S.bodySize).add(spawn);
   }
   return _bodyRestPool;
 }
@@ -745,7 +785,7 @@ function applyDisplay(d) {
   const bodyChk = document.getElementById('bodyChk');
   if (!meshOnly()) S.body = bodyChk.checked;   // back to lab → checkbox rules again
   else bodyChk.checked = bodyOn();             // isolation forces it → reflect that
-  if (bodyRig && !bodyOn()) bodyRig.pose(null);   // hide now, not next pose frame
+  if (!bodyOn()) eachBodyRig(r => r.pose(null));   // hide now, not next pose frame
   cubeLab.syncVisible();   // ball follows on its next update tick
   toast(d === 'hands' ? '🖐 hands only — mesh isolated' :
         d === 'handsBody' ? '🖐+🧍 hands + full body — no props' :
@@ -888,36 +928,58 @@ function loop() {
 
   // 4b. FULL BODY: filter the pose (image + world), place per view mode —
   //     mirror = ray-projected silhouette overlay on your video (exact same
-  //     projection as the hands); third-person = predictive avatar rebuilt
-  //     from worldLandmarks, seen from behind, feet on the floor (Kinect
-  //     framing). The posed points also drive the body colliders.
-  if (frame.pose) { poseFilters.apply('p', frame.pose, now); seenPose = now; }
+  //     projection as the hands), partial-body stabilized (out-of-frame
+  //     limbs settle to rest instead of flailing on hallucinated points);
+  //     first-person = your shadow standing IN the scene (Fruit-Ninja-on-
+  //     Kinect framing); third-person = the same predictive avatar at the
+  //     stage spawn. Jump inference lifts the avatar when the image hips
+  //     LAUNCH. The posed points also drive the body colliders.
+  if (frame.pose) {
+    poseFilters.apply('p', frame.pose, now); seenPose = now;
+    for (let i = 0; i < 33; i++) poseVis[i] += ((frame.pose[i].v ?? 1) - poseVis[i]) * 0.3;
+  }
   if (frame.poseWorld) poseFiltersW.apply('p', frame.poseWorld, now);
   if (seenPose && now - seenPose > 900) {
     poseFilters.drop('p'); poseFiltersW.drop('p'); bodyPose.drop(); seenPose = 0;
   }
   let bodyPosed = null;
   if (bodyOn() && bodyRig && seenPose) {
-    bodyRig.tick(now * 0.001);
+    activeBodyRig()?.tick(now * 0.001);
+    bodyPose.size = S.bodySize;
     if (S.mode === 'mirror') {
+      bodyRigB?.pose(null);
       const img = poseFilters.predicted('p', S.predMs);
       if (img) {
         for (let i = 0; i < 33; i++) views.mirrorPoint(img[i], camera, bodyPts[i]);
+        bodyPose.stabilizeMirror(bodyPts, poseVis, dt);
+        if (S.bodySize !== 1 || S.bodyY !== 0) {
+          // fit controls: scale about the hips, then lift — the overlay can
+          // be tuned off the video when the user prefers framing over glue
+          _bodyHip.copy(bodyPts[23]).add(bodyPts[24]).multiplyScalar(0.5);
+          for (let i = 0; i < 33; i++) {
+            bodyPts[i].sub(_bodyHip).multiplyScalar(S.bodySize).add(_bodyHip);
+            bodyPts[i].y += S.bodyY;
+          }
+        }
         bodyPosed = bodyRig.pose(bodyPts);
       }
-    } else if (S.mode === 'thirdPerson') {
+    } else if (S.mode === 'firstPerson' || S.mode === 'thirdPerson') {
+      bodyRig.pose(null);
       const world = poseFiltersW.predicted('p', S.predMs);
       const img = poseFilters.predicted('p', 0);
-      const pts = world ? bodyPose.retarget(world, img, TP_ORIGIN, 0) : null;
-      if (pts) bodyPosed = bodyRig.pose(pts);
-      else bodyRig.pose(bodyRestPose());   // no pose yet → stand at spawn (rest)
+      const spawn = S.mode === 'firstPerson' ? fpBodySpawn() : tpBodySpawn();
+      const pts = world ? bodyPose.retarget(world, img, spawn, 0, poseVis, now * 0.001) : null;
+      if (pts) bodyPosed = bodyRigB.pose(pts);
+      else bodyRigB.pose(bodyRestPose(spawn));   // no pose yet → stand at spawn (rest)
     } else {
-      bodyRig.pose(null);   // first-person: hands ARE the POV (avatar lives in Third-P)
+      bodyRig.pose(null); bodyRigB?.pose(null);   // inspect: no body
     }
   } else if (bodyRig) {
-    // no live pose: Third-P still shows the avatar standing at its spawn
-    if (bodyOn() && S.mode === 'thirdPerson') bodyRig.pose(bodyRestPose());
-    else bodyRig.pose(null);
+    // no live pose: FP/TP still show the silhouette standing at its spawn
+    bodyRig.pose(null);
+    if (bodyOn() && S.mode === 'thirdPerson') bodyRigB?.pose(bodyRestPose(tpBodySpawn()));
+    else if (bodyOn() && S.mode === 'firstPerson' && S.running) bodyRigB?.pose(bodyRestPose(fpBodySpawn()));
+    else bodyRigB?.pose(null);
   }
   if (bodyPosed) bodyBody.update(bodyPosed, dt); else bodyBody.drop();
 
@@ -946,6 +1008,7 @@ function loop() {
   handBodies.left.snapshot(EXPO.hands.left);
   handBodies.right.snapshot(EXPO.hands.right);
   bodyBody.snapshot(EXPO.body);
+  EXPO.body.airY = bodyPose.airY;   // inferred jump height (m)
   sandbox.sphere.snapshot(EXPO.ball);
   cubeLab.box.snapshot(EXPO.cube);
   EXPO.cube.on = cubeLab.on; EXPO.cube.tableY = cubeLab.tableY;
@@ -980,7 +1043,7 @@ function loop() {
       `fps <b>${M.fps.toFixed(0)}</b><br>` +
       `track <b>${M.detect.toFixed(1)}ms</b> · pose <b>${M.pose.toFixed(1)}ms</b><br>` +
       `mesh <b>${rigR?.stats?.verts ?? '—'}</b> verts (${rigR?.stats?.style ?? '—'})<br>` +
-      `body <b>${bodyOn() && bodyRig ? bodyRig.stats.verts + 'v' + (bodyBody.present ? ' ●' : ' ○') : 'off'}</b> · felt ≈ <b>${felt.toFixed(0)}ms</b><br>` +
+      `body <b>${bodyOn() && activeBodyRig() ? (S.bodyLook === 'shadow' ? '🌑' : '👻') + activeBodyRig().stats.verts + 'v' + (bodyBody.present ? ' ●' : ' ○') + (bodyPose.airY > 0.05 ? ' ▲' : '') : 'off'}</b> · felt ≈ <b>${felt.toFixed(0)}ms</b><br>` +
       `hands <b>${(handsBySlot.left ? '◐ ' : '') + (handsBySlot.right ? '◑' : '') || '—'}</b> · view <b>${S.mode}</b>`;
   }
 
@@ -1001,8 +1064,11 @@ async function boot() {
     if (!bodyRig) {
       say('▸ forging body mesh…');
       await new Promise(r => setTimeout(r, 30));
-      bodyRig = new HoloBodyRig(scene, { alpha: 0.42 }).build('standard');
-      toast(`body forged: ${bodyRig.stats.verts} verts · ${bodyRig.stats.ms}ms`);
+      bodyRig = new HoloBodyRig(scene, { alpha: 0.42, look: S.bodyLook }).build('standard');
+      say('▸ forging back-view body…');
+      await new Promise(r => setTimeout(r, 30));
+      bodyRigB = new HoloBodyRig(scene, { alpha: 0.42, look: S.bodyLook, back: true }).build('standard');
+      toast(`body forged ×2 (front + back bind): ${bodyRig.stats.verts} verts · ${bodyRig.stats.ms}ms — 🌑 shadow silhouette`);
     }
     if (!sandbox.ball) sandbox.init();
     applyMode(S.mode === 'inspect' ? 'mirror' : S.mode);
@@ -1142,9 +1208,19 @@ document.getElementById('bodyChk').addEventListener('change', (e) => {
   // in an isolation mode the checkbox picks WHICH isolation you're in
   if (meshOnly()) { applyDisplay(S.body ? 'handsBody' : 'hands'); return; }
   avatar.visible = S.mode === 'thirdPerson' && !bodyOn() && !meshOnly();
-  toast(S.body ? 'body mesh on — 🪞 overlay · 🎥 avatar' : 'body mesh off');
+  toast(S.body ? 'body on — 🪞 overlay · 🎮 shadow in the scene · 🎥 avatar' : 'body off');
 });
-bindSlider('bodyAlphaSld', 'bodyAlphaVal', v => v.toFixed(2), v => bodyRig?.setGhost({ alpha: v }));
+document.getElementById('bodyLookOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  document.querySelectorAll('#bodyLookOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.l === b.dataset.l));
+  S.bodyLook = b.dataset.l;
+  eachBodyRig(r => r.setLook(S.bodyLook));
+  toast(S.bodyLook === 'shadow' ? '🌑 shadow silhouette — dark body, electric aura (kinect read)'
+                                : '👻 holo body — the same substrate as the hands');
+});
+bindSlider('bodyAlphaSld', 'bodyAlphaVal', v => v.toFixed(2), v => eachBodyRig(r => r.setGhost({ alpha: v })));
+bindSlider('bodyYSld', 'bodyYVal', v => (v > 0 ? '+' : '') + Math.round(v * 100) + 'cm', v => S.bodyY = v);
+bindSlider('bodySizeSld', 'bodySizeVal', v => v.toFixed(2) + '×', v => S.bodySize = v);
 </script>
 </body>
 </html>
