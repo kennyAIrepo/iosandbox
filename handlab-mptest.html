@@ -15,6 +15,7 @@
   html,body { margin:0; height:100%; background:#05080d; color:#dfe6f0; font:12px/1.5 ui-monospace,Menlo,Consolas,monospace; overflow:hidden; }
   #bgVid, video#vid { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
   video#vid { opacity:0; pointer-events:none; }      /* detection feed hidden; bg is the mirror */
+  #ov { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }
   #c { position:fixed; inset:0; width:100%; height:100%; }
 
   #panel { position:fixed; left:12px; top:12px; z-index:6; width:430px; max-height:calc(100vh - 24px);
@@ -44,6 +45,7 @@
 <body>
   <video id="bgVid" playsinline muted></video>
   <video id="vid" playsinline muted></video>
+  <canvas id="ov"></canvas>
   <canvas id="c"></canvas>
 
   <div id="panel">
@@ -54,6 +56,9 @@
     </div>
     <div class="grp"><span>mode:</span>
       <button id="mAuto" class="on">auto</button><button id="mA">force A</button><button id="mB">force B</button>
+    </div>
+    <div class="grp"><span>overlay:</span>
+      <button id="bodyBtn" class="on">body skeleton</button>
     </div>
     <div class="grp"><span>bench:</span>
       <button id="cap">capture row</button><button id="clr">clear</button><button id="csv">copy CSV</button>
@@ -76,9 +81,21 @@ import { HandViews } from './sdk/core/hand-views.js';
 import { REST_R42, REST_L42 } from './sdk/core/hands.js';
 import { initMultiplayerTracking } from './sdk/core/multiplayer.js';
 
-const els = Object.fromEntries(['bgVid','vid','c','live','entry','startBtn','boot'].map(id => [id, document.getElementById(id)]));
+const els = Object.fromEntries(['bgVid','vid','c','ov','live','entry','startBtn','boot'].map(id => [id, document.getElementById(id)]));
 const tbody = document.querySelector('#tbl tbody');
 const MAXP = 4, STYLE = 'smooth';
+
+// ── body-skeleton overlay (from _mpcrop) — BODY ONLY; hands stay on HoloHandRig ──
+const octx = els.ov.getContext('2d');
+const BODY_EDGES = [[5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+const BODY_COL = ['#ff5d73','#5dd6ff','#a6ff5d','#ffd15d','#c98bff','#5dffd0'];
+let showBody = true;
+function sizeOverlay() {
+  const dpr = Math.min(devicePixelRatio, 2);
+  els.ov.width = innerWidth * dpr; els.ov.height = innerHeight * dpr;
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+sizeOverlay();
 
 // ── three (mirror-mode setup, copied from handlab) ──
 const renderer = new THREE.WebGLRenderer({ canvas: els.c, antialias: true, alpha: true });
@@ -120,6 +137,7 @@ function release(id) {
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  sizeOverlay();
   for (const s of slots) cover(s.views);
 });
 
@@ -155,6 +173,10 @@ document.getElementById('clr').onclick = () => { rows = []; tbody.innerHTML = ''
 document.getElementById('csv').onclick = () => {
   const csv = 'players,mode,moveNet_ms,mediapipe_ms,total_ms,fps\n' + rows.map(r => `${r.players},${r.mode},${r.moveNet},${r.mediapipe},${r.total},${r.fps}`).join('\n');
   navigator.clipboard?.writeText(csv);
+};
+document.getElementById('bodyBtn').onclick = (e) => {
+  showBody = !showBody; e.target.classList.toggle('on', showBody);
+  if (!showBody) octx.clearRect(0, 0, innerWidth, innerHeight);
 };
 
 async function boot() {
@@ -194,6 +216,27 @@ function loop() {
       s.R.tick(t); s.R.pose(packs.R, null);
       s.L.tick(t); s.L.pose(packs.L, null);
     }
+
+    // ── body-skeleton overlay (MoveNet 2D body, from _mpcrop) — hands stay HoloHand ──
+    // cover-corrected projection so the skeleton lines up with the object-fit:cover
+    // video AND the 3D hands (which are cover-corrected via views.cfg.cover).
+    octx.clearRect(0, 0, innerWidth, innerHeight);
+    if (showBody) {
+      const vw = els.bgVid.videoWidth || 1280, vh = els.bgVid.videoHeight || 720;
+      const W = innerWidth, H = innerHeight, sc = Math.max(W / vw, H / vh);
+      const dw = vw * sc, dh = vh * sc, ox = (W - dw) / 2, oy = (H - dh) / 2;
+      for (const p of f.players) {
+        const c = BODY_COL[p.id % BODY_COL.length];
+        octx.strokeStyle = c; octx.fillStyle = c; octx.lineWidth = 3;
+        for (const [a, b] of BODY_EDGES) {
+          const ka = p.body2D[a], kb = p.body2D[b];
+          if (!ka || !kb || ka.score < 0.3 || kb.score < 0.3) continue;
+          octx.beginPath(); octx.moveTo(ox + ka.x * dw, oy + ka.y * dh); octx.lineTo(ox + kb.x * dw, oy + kb.y * dh); octx.stroke();
+        }
+        for (const k of p.body2D) { if (!k || k.score < 0.3) continue; octx.beginPath(); octx.arc(ox + k.x * dw, oy + k.y * dh, 4, 0, 7); octx.fill(); }
+      }
+    }
+
     if (now - lastHud > 200) {
       lastHud = now;
       const st = mt.stats();
