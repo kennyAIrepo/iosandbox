@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shakti — 2D character rig</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#12100f;font-family:system-ui,sans-serif}
+  canvas{display:block}
+  #hud{position:fixed;left:12px;top:12px;color:#e8dcc8;font-size:12px;line-height:1.5;
+       background:rgba(20,16,14,.55);padding:8px 11px;border-radius:8px;backdrop-filter:blur(6px);user-select:none}
+  #hud b{color:#e8b45f}
+  #hud button{background:#2f8f6d;border:0;color:#fff;padding:3px 8px;border-radius:5px;cursor:pointer;font-size:11px;margin-top:4px}
+  #hud button.off{background:#5a4636}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div><b>Shakti</b> — 2D skeletal rig</div>
+  <div id="stat">building…</div>
+  <button id="bWire">show mesh</button>
+  <button id="bBones">show bones</button>
+  <button id="bIdle" class="">idle: on</button>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { Char2D } from './sdk/core/char2d.js';
+import { BODY_BONES } from './sdk/core/body-forge.js';
+
+// ── scene: a warm dusk backdrop like the reference panel ──
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+// vertical dusk gradient backdrop
+const bg = new THREE.Mesh(
+  new THREE.PlaneGeometry(40, 40),
+  new THREE.ShaderMaterial({
+    depthWrite: false,
+    uniforms: { uT: { value: 0 } },
+    vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.999,1.0); }`,
+    fragmentShader: `varying vec2 vUv; uniform float uT;
+      void main(){
+        vec3 top = vec3(0.25,0.34,0.46);
+        vec3 mid = vec3(0.92,0.62,0.34);
+        vec3 bot = vec3(0.78,0.48,0.30);
+        float y = vUv.y;
+        vec3 c = mix(bot, mid, smoothstep(0.0,0.55,y));
+        c = mix(c, top, smoothstep(0.5,1.0,y));
+        // soft sun glow upper-right
+        float g = smoothstep(0.6,0.0,distance(vUv, vec2(0.72,0.72)));
+        c += vec3(1.0,0.8,0.5)*g*0.35;
+        gl_FragColor = vec4(c,1.0);
+      }`,
+  })
+);
+bg.frustumCulled = false; bg.renderOrder = -1000; scene.add(bg);
+
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 50);
+function frameCamera() {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+// look at the character (feet y=0, head y~1.85) → centre ~0.95
+camera.position.set(0, 0.98, 3.15);
+camera.lookAt(0, 0.98, 0);
+frameCamera();
+
+// ── contact shadow on the ground ──
+const shadow = new THREE.Mesh(
+  new THREE.CircleGeometry(0.28, 32),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false })
+);
+shadow.rotation.x = -Math.PI / 2;
+shadow.position.set(0, 0.005, 0.05);
+shadow.scale.set(1, 0.5, 1);
+shadow.renderOrder = -10;
+scene.add(shadow);
+
+// ── the character ──
+const char = new Char2D(scene, { ppm: 1024 }).build();
+document.getElementById('stat').innerHTML =
+  char.parts.reduce((a, p) => a + p.nv, 0) + ' verts · ' + char.parts.length + ' parts';
+
+// ── debug overlays ──
+let wire = false, bones = false, idle = true;
+const wires = char.parts.map(p => {
+  const w = new THREE.LineSegments(
+    new THREE.WireframeGeometry(p.geo),
+    new THREE.LineBasicMaterial({ color: 0x00ffcc, transparent: true, opacity: 0.35 })
+  );
+  w.visible = false; w.renderOrder = 500; char.grp.add(w);
+  // share the deforming position buffer so the wireframe tracks the mesh
+  return { w, src: p.geo };
+});
+const boneGrp = new THREE.Group(); boneGrp.visible = false; scene.add(boneGrp);
+const boneLine = new THREE.LineSegments(
+  new THREE.BufferGeometry(),
+  new THREE.LineBasicMaterial({ color: 0xffdd44, depthTest: false })
+);
+boneLine.renderOrder = 900; boneGrp.add(boneLine);
+
+document.getElementById('bWire').onclick = e => {
+  wire = !wire; e.target.classList.toggle('off', !wire);
+};
+document.getElementById('bBones').onclick = e => {
+  bones = !bones; boneGrp.visible = bones; e.target.classList.toggle('off', !bones);
+};
+document.getElementById('bIdle').onclick = e => {
+  idle = !idle; e.target.textContent = 'idle: ' + (idle ? 'on' : 'off');
+  e.target.classList.toggle('off', !idle);
+};
+
+function rebuildWire() {
+  for (const { w, src } of wires) {
+    w.visible = wire;
+    if (!wire) continue;
+    w.geometry.dispose();
+    w.geometry = new THREE.WireframeGeometry(src);
+  }
+}
+function updateBones() {
+  if (!bones) return;
+  const lm = char._lastPose;
+  if (!lm) return;
+  const pos = [];
+  for (const [i, j] of BODY_BONES) { pos.push(lm[i].x, lm[i].y, 0.2, lm[j].x, lm[j].y, 0.2); }
+  boneLine.geometry.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  boneLine.geometry.attributes.position.needsUpdate = true;
+}
+
+// keep _lastPose for the bone overlay
+const _pose = char.pose.bind(char);
+char.pose = function (lm) { char._lastPose = lm; return _pose(lm); };
+
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); frameCamera(); });
+
+let last = -1;
+function loop(t) {
+  requestAnimationFrame(loop);
+  const sec = t * 0.001;
+  if (idle) char.tick(sec);
+  if (wire && wire !== last) rebuildWire();
+  last = wire;
+  if (wire) rebuildWire();
+  updateBones();
+  renderer.render(scene, camera);
+  window.__ready = true;
+}
+loop(0);
+</script>
+</body>
+</html>
