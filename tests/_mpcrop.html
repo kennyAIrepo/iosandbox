@@ -1,0 +1,76 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>_mpcrop — per-player crops + hands (stage 2/3)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0b0e13; color:#dfe6f0; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; }
+  #wrap { position:relative; width:100vw; height:100vh; overflow:hidden; }
+  video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+  canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #hud { position:absolute; left:12px; top:12px; z-index:5; background:#0009; padding:10px 13px;
+         border:1px solid #2a3550; border-radius:8px; white-space:pre; backdrop-filter:blur(6px); }
+  #hud b { color:#7fd1ff; } .A{color:#ffd15d} .B{color:#a6ff5d}
+  button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e; border-radius:6px; padding:6px 12px; cursor:pointer; margin-top:6px; }
+</style>
+<div id="wrap">
+  <video id="vid" playsinline muted></video>
+  <canvas id="cv"></canvas>
+  <div id="hud">per-player crops + hands<br><button id="go">start camera</button><div id="stat"></div></div>
+</div>
+<script type="module">
+import { initMultiplayerTracking } from '../sdk/core/multiplayer.js';
+
+const vid = document.getElementById('vid'), cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const stat = document.getElementById('stat');
+const COL = ['#ff5d73','#5dd6ff','#a6ff5d','#ffd15d','#c98bff','#5dffd0'];
+const BODY_EDGES = [[5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+const HAND_EDGES = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[0,9],[9,10],[10,11],[11,12],[0,13],[13,14],[14,15],[15,16],[0,17],[17,18],[18,19],[19,20],[5,9],[9,13],[13,17]];
+
+let mt = null;
+document.getElementById('go').onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:{ideal:1280}, height:{ideal:720} } });
+  vid.srcObject = stream; await vid.play();
+  stat.textContent = 'loading models…';
+  mt = await initMultiplayerTracking(vid, { maxPlayers: 4, predMs: 24 });
+  requestAnimationFrame(draw);
+};
+
+function dot(p,W,H,r=4){ ctx.beginPath(); ctx.arc(p.x*W,p.y*H,r,0,7); ctx.fill(); }
+function line(a,b,W,H){ ctx.beginPath(); ctx.moveTo(a.x*W,a.y*H); ctx.lineTo(b.x*W,b.y*H); ctx.stroke(); }
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (!mt) return;
+  const W = cv.width = vid.videoWidth, H = cv.height = vid.videoHeight;
+  ctx.clearRect(0,0,W,H);
+  // emitted coords are already selfie-mirrored, video is CSS-mirrored → draw straight (no canvas flip)
+  const f = mt.detect(performance.now());
+  for (const p of f.players) {
+    const c = COL[p.id % COL.length];
+    // crop box
+    ctx.strokeStyle = c; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+    ctx.strokeRect(p.bbox.x*W, p.bbox.y*H, p.bbox.w*W, p.bbox.h*H); ctx.setLineDash([]);
+    // body
+    ctx.strokeStyle = c+'88'; ctx.lineWidth = 3; ctx.fillStyle = c+'88';
+    for (const [a,b] of BODY_EDGES){ if(p.body2D[a].score<0.3||p.body2D[b].score<0.3)continue; line(p.body2D[a],p.body2D[b],W,H); }
+    // hands
+    ctx.lineWidth = 2.5;
+    for (const slot of ['left','right']){
+      const hnd = p.hands[slot]; if(!hnd||!hnd.img)continue;
+      ctx.strokeStyle = c; ctx.fillStyle = c;
+      for (const [a,b] of HAND_EDGES) line(hnd.img[a],hnd.img[b],W,H);
+      for (const q of hnd.img) dot(q,W,H,3);
+    }
+    // label
+    ctx.fillStyle = c; ctx.font='bold 20px ui-monospace,monospace';
+    ctx.fillText('P'+p.id, p.bbox.x*W+4, p.bbox.y*H-6);
+  }
+  const s = mt.stats();
+  stat.innerHTML =
+    `mode <b class="${f.mode}">${f.mode}</b>  (${f.mode==='B'?'3D body+hands':'2D body, 3D hands'})\n` +
+    `players: <b>${f.count}</b>   ids: [${f.players.map(p=>p.id).join(', ')}]\n` +
+    `MoveNet: <b>${s.moveNet.toFixed(1)}</b>ms   MediaPipe/frame: <b>${s.mediapipe.toFixed(1)}</b>ms\n` +
+    `detect total: <b>${s.total.toFixed(1)}</b>ms  (~${(1000/Math.max(s.total,1)).toFixed(0)} fps)`;
+}
+</script>

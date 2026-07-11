@@ -1,0 +1,103 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>_mpbench — multiplayer latency benchmark (stage 6)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0b0e13; color:#dfe6f0; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; }
+  #wrap { position:relative; width:100vw; height:100vh; overflow:hidden; }
+  video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:.5; }
+  #panel { position:absolute; left:12px; top:12px; z-index:5; background:#0b0e13dd; padding:14px 16px;
+           border:1px solid #2a3550; border-radius:10px; min-width:420px; backdrop-filter:blur(6px); }
+  h1 { font-size:14px; margin:0 0 8px; color:#7fd1ff; }
+  .row { white-space:pre; }
+  button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e; border-radius:6px; padding:5px 10px; cursor:pointer; margin:3px 4px 3px 0; }
+  button.on { background:#2f66c8; border-color:#7fb0ff; color:#fff; }
+  table { border-collapse:collapse; margin-top:10px; width:100%; }
+  th,td { border:1px solid #2a3550; padding:3px 8px; text-align:right; }
+  th:first-child,td:first-child { text-align:left; }
+  .big { font-size:22px; color:#a6ff5d; }
+  .A{color:#ffd15d} .B{color:#a6ff5d}
+</style>
+<div id="wrap">
+  <video id="vid" playsinline muted></video>
+  <div id="panel">
+    <h1>multiplayer latency benchmark</h1>
+    <div id="live" class="row">click start · position N players · pick a mode · capture rows</div>
+    <div style="margin-top:8px">
+      <button id="go">start</button>
+      <button id="mAuto" class="on">auto</button>
+      <button id="mA">force A</button>
+      <button id="mB">force B</button>
+      <button id="cap">capture row</button>
+      <button id="clr">clear table</button>
+      <button id="csv">copy CSV</button>
+    </div>
+    <div style="margin-top:4px">
+      <span style="color:#7f96b8">clones (1 person → N):</span>
+      <button id="s1" class="on">1×</button>
+      <button id="s2">2×</button>
+      <button id="s2o">2× overlap</button>
+      <button id="s4">4×</button>
+    </div>
+    <table id="tbl"><thead><tr><th>players</th><th>mode</th><th>MoveNet ms</th><th>MediaPipe ms</th><th>total ms</th><th>fps</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+<script type="module">
+import { initMultiplayerTracking } from '../sdk/core/multiplayer.js';
+import { CompositeCam } from '../sdk/core/test-source.js';
+
+const vid = document.getElementById('vid'), live = document.getElementById('live');
+const tbody = document.querySelector('#tbl tbody');
+let mt = null, cam = null, rows = [];
+
+// clone-count buttons: retile the composite live (no re-init — stream identity holds)
+const simBtns = { s1: [1, 0], s2: [2, 0], s2o: [2, 0.12], s4: [4, 0] };
+for (const [id, [n, ov]] of Object.entries(simBtns)) {
+  document.getElementById(id).onclick = () => {
+    if (!cam) return;
+    cam.setCount(n); cam.setOverlap(ov);
+    for (const k of Object.keys(simBtns)) document.getElementById(k).classList.toggle('on', k === id);
+  };
+}
+
+const btns = { auto:mAuto, A:mA, B:mB };
+function setMode(m){ mt?.setForceMode(m); for(const k in btns) btns[k].classList.toggle('on', (m||'auto')===k || (m===null&&k==='auto')); }
+mAuto.onclick=()=>setMode(null); mA.onclick=()=>setMode('A'); mB.onclick=()=>setMode('B');
+
+document.getElementById('go').onclick = async () => {
+  cam = new CompositeCam({ count: 1 });
+  await cam.useWebcam();
+  await cam.attach(vid);
+  live.textContent = 'loading models…';
+  mt = await initMultiplayerTracking(vid, { maxPlayers: 4, predMs: 24 });
+  requestAnimationFrame(loop);
+};
+
+document.getElementById('cap').onclick = () => {
+  if (!mt) return;
+  const s = mt.stats();
+  const row = { players:s.players, mode:s.mode, moveNet:+s.moveNet.toFixed(1), mediapipe:+s.mediapipe.toFixed(1), total:+s.total.toFixed(1), fps:+(1000/Math.max(s.total,1)).toFixed(0) };
+  rows.push(row);
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${row.players}</td><td class="${row.mode}">${row.mode}</td><td>${row.moveNet}</td><td>${row.mediapipe}</td><td>${row.total}</td><td>${row.fps}</td>`;
+  tbody.appendChild(tr);
+};
+document.getElementById('clr').onclick = () => { rows=[]; tbody.innerHTML=''; };
+document.getElementById('csv').onclick = () => {
+  const csv = 'players,mode,moveNet_ms,mediapipe_ms,total_ms,fps\n' + rows.map(r=>`${r.players},${r.mode},${r.moveNet},${r.mediapipe},${r.total},${r.fps}`).join('\n');
+  navigator.clipboard?.writeText(csv); live.dataset.csv='1';
+};
+
+function loop(){
+  requestAnimationFrame(loop);
+  if (!mt) return;
+  mt.detect(performance.now());
+  const s = mt.stats();
+  live.innerHTML =
+    `players <span class="big">${s.players}</span>   mode <b class="${s.mode}">${s.mode}</b>\n` +
+    `MoveNet <b>${s.moveNet.toFixed(1)}</b>ms   MediaPipe/frame <b>${s.mediapipe.toFixed(1)}</b>ms\n` +
+    `detect total <b>${s.total.toFixed(1)}</b>ms   → <span class="big">${(1000/Math.max(s.total,1)).toFixed(0)}</span> fps\n` +
+    `(MoveNet runs async off-thread of detect; total ≈ MediaPipe + overhead)`;
+}
+</script>

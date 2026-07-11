@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hand Lab — Multiplayer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#05080d; color:#dfe6f0; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; overflow:hidden; }
+  #bgVid, video#vid { position:fixed; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+  video#vid { opacity:0; pointer-events:none; }      /* detection feed hidden; bg is the mirror */
+  #c { position:fixed; inset:0; width:100%; height:100%; }
+  #hud { position:fixed; left:14px; top:14px; z-index:6; background:#05080dcc; padding:11px 14px;
+         border:1px solid #24304c; border-radius:9px; white-space:pre; backdrop-filter:blur(6px); }
+  #hud b { color:#7fd1ff; } .A{color:#ffd15d} .B{color:#a6ff5d}
+  #entry { position:fixed; inset:0; z-index:10; display:grid; place-content:center; gap:14px; text-align:center;
+           background:radial-gradient(60% 60% at 50% 40%,#0b1424,#05080d); }
+  #entry h1 { font-size:20px; margin:0; color:#cfe6ff; letter-spacing:.04em; }
+  #entry p { margin:0; color:#8ea3c4; max-width:32ch; }
+  #startBtn { font:inherit; font-size:15px; background:#2f66c8; color:#fff; border:0; border-radius:9px; padding:11px 22px; cursor:pointer; }
+  #boot { color:#7f96b8; min-height:1.2em; }
+</style>
+</head>
+<body>
+  <video id="bgVid" playsinline muted></video>
+  <video id="vid" playsinline muted></video>
+  <canvas id="c"></canvas>
+  <div id="hud">multiplayer hand lab — press start</div>
+  <div id="entry">
+    <h1>HAND LAB · MULTIPLAYER</h1>
+    <p>Up to 4 people, one webcam. Each player drives their own hand meshes. ≤2 players run full 3D (Mode B); 3–4 shed body-3D for latency (Mode A).</p>
+    <button id="startBtn">start camera</button>
+    <div id="boot"></div>
+  </div>
+
+<script type="module">
+import * as THREE from 'three';
+import { initCamera } from './sdk/core/tracking.js';
+import { CompositeCam } from './sdk/core/test-source.js';
+import { HoloHandRig } from './sdk/core/hand-rig.js';
+import { HandViews } from './sdk/core/hand-views.js';
+import { REST_R42, REST_L42 } from './sdk/core/hands.js';
+import { initMultiplayerTracking } from './sdk/core/multiplayer.js';
+
+const els = Object.fromEntries(['bgVid','vid','c','hud','entry','startBtn','boot'].map(id => [id, document.getElementById(id)]));
+const MAXP = 4, STYLE = 'smooth';
+
+// ── three (mirror-mode setup, copied from handlab) ──
+const renderer = new THREE.WebGLRenderer({ canvas: els.c, antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.setClearColor(0x000000, 0);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.01, 200);
+camera.position.set(0, 0, 0); camera.rotation.set(0, 0, 0); camera.updateMatrixWorld();
+
+function cover(v) {
+  const vw = els.bgVid.videoWidth || 1280, vh = els.bgVid.videoHeight || 720;
+  const A = innerWidth / innerHeight, Av = vw / vh;
+  v.cfg.cover.x = Math.min(1, A / Av);
+  v.cfg.cover.y = Math.min(1, Av / A);
+}
+
+// ── per-player rig-pair pool (slot = one player's {R,L,views}) ──
+const slots = [];
+function forgeSlot() {
+  const R = new HoloHandRig(REST_R42, scene, { style: STYLE }); R.build(STYLE); R.setOccluder(true);
+  const L = new HoloHandRig(REST_L42, scene, { style: STYLE }); L.build(STYLE); L.setOccluder(true);
+  const views = new HandViews({ mode: 'mirror' }); cover(views);
+  const s = { R, L, views, id: null }; slots.push(s); return s;
+}
+function acquire(id) {
+  for (const s of slots) if (s.id === id) return s;
+  let s = slots.find(s => s.id === null);
+  if (!s) { if (slots.length < MAXP) s = forgeSlot(); else return null; }
+  s.id = id; return s;
+}
+function release(id) {
+  const s = slots.find(s => s.id === id); if (!s) return;
+  s.id = null; s.R.pose(null); s.L.pose(null);
+  s.views.dropSlot?.('left'); s.views.dropSlot?.('right');
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  for (const s of slots) cover(s.views);
+});
+
+let mt = null, cam = null, lastHud = 0;
+const ID_TAG = ['P0','P1','P2','P3','P4','P5'];
+// ?sim=N → test N players with one person (self-clone composite; sim=2..4)
+const SIM = +(new URLSearchParams(location.search).get('sim')) || 1;
+
+async function boot() {
+  els.startBtn.disabled = true;
+  const say = (m) => els.boot.textContent = m;
+  try {
+    if (SIM > 1) {
+      say(`▸ starting camera (sim ${SIM}× self-clones)…`);
+      cam = new CompositeCam({ count: SIM });
+      await cam.useWebcam();
+      await cam.attach(els.vid);
+      els.bgVid.srcObject = cam.stream; els.bgVid.play().catch(() => {});
+    } else {
+      say('▸ starting camera…');
+      await initCamera(els.bgVid, els.vid);
+    }
+    say('▸ loading MoveNet + MediaPipe…');
+    mt = await initMultiplayerTracking(els.vid, { maxPlayers: MAXP, predMs: 40 });
+    forgeSlot(); forgeSlot();                    // prewarm 2 rig pairs
+    for (const s of slots) cover(s.views);
+    els.entry.style.display = 'none';
+  } catch (e) {
+    console.error(e); say('✕ ' + (e.message || e) + ' — check camera permission & reload');
+    els.startBtn.disabled = false;
+  }
+}
+els.startBtn.addEventListener('click', boot);
+
+function loop() {
+  requestAnimationFrame(loop);
+  const now = performance.now();
+  if (mt) {
+    const f = mt.detect(now);
+    const active = new Set(f.players.map(p => p.id));
+    for (const s of slots) if (s.id !== null && !active.has(s.id)) release(s.id);
+    for (const p of f.players) {
+      const s = acquire(p.id); if (!s) continue;
+      const packs = s.views.resolve([p.hands.left, p.hands.right], camera);
+      const t = now * 0.001;
+      s.R.tick(t); s.R.pose(packs.R, null);
+      s.L.tick(t); s.L.pose(packs.L, null);
+    }
+    if (now - lastHud > 250) {
+      lastHud = now;
+      const st = mt.stats();
+      const tags = f.players.map(p => ID_TAG[p.id % ID_TAG.length] + (p.bodyWorld ? '·3D' : '')).join(' ');
+      els.hud.innerHTML =
+        `players <b>${f.count}</b>   mode <b class="${f.mode}">${f.mode}</b>  ${f.mode === 'B' ? '(3D body+hands)' : '(2D body · 3D hands)'}\n` +
+        `${tags || '— raise hands into frame —'}\n` +
+        `MoveNet <b>${st.moveNet.toFixed(1)}</b>ms · MediaPipe <b>${st.mediapipe.toFixed(1)}</b>ms · total <b>${st.total.toFixed(1)}</b>ms (~${(1000/Math.max(st.total,1)).toFixed(0)}fps) · pose 1/${st.poseEvery}`;
+    }
+  }
+  renderer.render(scene, camera);
+}
+loop();
+</script>
+</body>
+</html>

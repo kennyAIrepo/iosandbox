@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>_multipose — MoveNet MultiPose stage-1 harness</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; background:#0b0e13; color:#dfe6f0; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; }
+  #wrap { position:relative; width:100vw; height:100vh; overflow:hidden; }
+  video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+  canvas { position:absolute; inset:0; width:100%; height:100%; }
+  #hud { position:absolute; left:12px; top:12px; z-index:5; background:#0009; padding:10px 13px;
+         border:1px solid #2a3550; border-radius:8px; white-space:pre; backdrop-filter:blur(6px); }
+  #hud b { color:#7fd1ff; }
+  button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e; border-radius:6px;
+           padding:6px 12px; cursor:pointer; margin-top:6px; }
+</style>
+<div id="wrap">
+  <video id="vid" playsinline muted></video>
+  <canvas id="cv"></canvas>
+  <div id="hud">click <b>start</b> · move 2+ people through frame<br><button id="go">start camera</button><div id="stat"></div></div>
+</div>
+<script type="module">
+import { initMultiPose } from '../sdk/core/multipose.js';
+
+const vid = document.getElementById('vid');
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const stat = document.getElementById('stat');
+const ID_COLORS = ['#ff5d73','#5dd6ff','#a6ff5d','#ffd15d','#c98bff','#5dffd0'];
+
+// COCO-17 skeleton edges
+const EDGES = [[5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]];
+
+let mp = null;
+
+document.getElementById('go').onclick = async () => {
+  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'user', width:{ideal:1280}, height:{ideal:720} } });
+  vid.srcObject = stream; await vid.play();
+  cv.width = vid.videoWidth; cv.height = vid.videoHeight;
+  stat.textContent = 'loading MoveNet…';
+  mp = await initMultiPose({ maxDim: 256, fpsCap: 30 });
+  mp.start(vid);
+  requestAnimationFrame(draw);
+};
+
+const seenIds = new Map();   // id -> firstSeen ms (to show id longevity)
+
+function draw() {
+  requestAnimationFrame(draw);
+  if (!mp) return;
+  cv.width = vid.videoWidth; cv.height = vid.videoHeight;
+  const W = cv.width, H = cv.height;
+  ctx.clearRect(0,0,W,H);
+  // canvas is drawn in RAW space then CSS-mirrors the whole element to match video
+  ctx.save(); ctx.scale(-1,1); ctx.translate(-W,0);
+
+  const poses = mp.latest();
+  const now = performance.now();
+  for (const p of poses) {
+    if (!seenIds.has(p.id)) seenIds.set(p.id, now);
+    const col = ID_COLORS[p.id % ID_COLORS.length];
+    const kp = p.keypoints;
+    ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.fillStyle = col;
+    for (const [a,b] of EDGES) {
+      if (kp[a].score < 0.3 || kp[b].score < 0.3) continue;
+      ctx.beginPath(); ctx.moveTo(kp[a].x*W, kp[a].y*H); ctx.lineTo(kp[b].x*W, kp[b].y*H); ctx.stroke();
+    }
+    for (const k of kp) { if (k.score < 0.3) continue; ctx.beginPath(); ctx.arc(k.x*W,k.y*H,4,0,7); ctx.fill(); }
+    // bbox from shoulders..wrists..hips + label
+    let x0=1,y0=1,x1=0,y1=0;
+    for (const i of [0,5,6,7,8,9,10,11,12]) { const k=kp[i]; if (k.score<0.3) continue; x0=Math.min(x0,k.x);y0=Math.min(y0,k.y);x1=Math.max(x1,k.x);y1=Math.max(y1,k.y); }
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.setLineDash([6,4]);
+    ctx.strokeRect(x0*W,y0*H,(x1-x0)*W,(y1-y0)*H); ctx.setLineDash([]);
+    // label (un-mirror the text so it reads normally)
+    ctx.save(); ctx.scale(-1,1);
+    ctx.fillStyle = col; ctx.font = 'bold 22px ui-monospace,monospace';
+    ctx.fillText('P'+p.id, -(x1*W), y0*H - 8);
+    ctx.restore();
+  }
+  ctx.restore();
+
+  stat.textContent =
+    `players: ${poses.length}   ids: [${poses.map(p=>p.id).join(', ')}]\n` +
+    `distinct ids ever: ${seenIds.size}\n` +
+    `MoveNet pass: ${mp.lastCostMs().toFixed(1)} ms   (${(1000/Math.max(mp.lastCostMs(),1)).toFixed(0)} fps cap 30)\n` +
+    `video: ${vid.videoWidth}×${vid.videoHeight}`;
+}
+</script>

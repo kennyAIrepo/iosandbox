@@ -6,6 +6,11 @@
  * Game integration:
  *   const tracker = await initTracking(videoEl, { numHands: 2 });
  *   const frame = tracker.detect();  // { hands, handedness, pose }
+ *
+ * Multi-person integration (sdk/core/multiplayer.js):
+ *   The landmarker constructors below are exported as standalone factories
+ *   (createHandLandmarker / createPoseLandmarker) so per-player pipelines can
+ *   spin up their own instances that share ONE memoized vision fileset.
  */
 
 const NOISE = 0.003;
@@ -21,50 +26,89 @@ function stabilize(raw, idx) {
   return stH[idx];
 }
 
-export async function initTracking(videoEl, opts = {}) {
-  const V = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/+esm');
-  const fs = await V.FilesetResolver.forVisionTasks(
-    'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm'
-  );
+// ── Shared vision runtime (memoized) ──────────────────────────────────────
+// One dynamic import + one FilesetResolver for the whole page, reused by
+// initTracking AND every per-player pipeline. Loading the WASM twice would
+// waste memory and warmup; these promises guarantee a single instance.
+const VISION_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/+esm';
+const WASM_URL   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm';
+const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
+const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
-  const handLandmarker = await V.HandLandmarker.createFromOptions(fs, {
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
-      delegate: 'GPU'
-    },
-    runningMode: 'VIDEO',
+let _visionP = null;
+let _filesetP = null;
+
+/** The @mediapipe/tasks-vision ESM module (memoized). */
+export function getVision() {
+  if (!_visionP) _visionP = import(VISION_URL);
+  return _visionP;
+}
+
+/** The shared FilesetResolver (memoized) — one WASM fileset per page. */
+export async function getFileset() {
+  if (!_filesetP) {
+    const V = await getVision();
+    _filesetP = V.FilesetResolver.forVisionTasks(WASM_URL);
+  }
+  return _filesetP;
+}
+
+/** Create a HandLandmarker (GPU, VIDEO). Same config initTracking has always used. */
+export async function createHandLandmarker(opts = {}) {
+  const V = await getVision();
+  const fs = await getFileset();
+  return V.HandLandmarker.createFromOptions(fs, {
+    baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' },
+    runningMode: opts.runningMode || 'VIDEO',
     numHands: opts.numHands || 2,
     minHandDetectionConfidence: opts.handConfidence || 0.5,
     minTrackingConfidence: opts.trackingConfidence || 0.5
   });
+}
 
-  const poseLandmarker = await V.PoseLandmarker.createFromOptions(fs, {
-    baseOptions: {
-      modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
-      delegate: 'GPU'
-    },
-    runningMode: 'VIDEO',
-    numPoses: 1,
-    minPoseDetectionConfidence: 0.5,
-    minTrackingConfidence: 0.5
+/** Create a PoseLandmarker (GPU, VIDEO). numPoses defaults to 1 (per-crop use). */
+export async function createPoseLandmarker(opts = {}) {
+  const V = await getVision();
+  const fs = await getFileset();
+  return V.PoseLandmarker.createFromOptions(fs, {
+    baseOptions: { modelAssetPath: opts.model || POSE_MODEL, delegate: 'GPU' },
+    runningMode: opts.runningMode || 'VIDEO',
+    numPoses: opts.numPoses || 1,
+    minPoseDetectionConfidence: opts.poseConfidence || 0.5,
+    minTrackingConfidence: opts.trackingConfidence || 0.5
   });
+}
+
+/** Create a FaceLandmarker (GPU, VIDEO, 478 pts + 52 blendshapes). */
+export async function createFaceLandmarker(opts = {}) {
+  const V = await getVision();
+  const fs = await getFileset();
+  return V.FaceLandmarker.createFromOptions(fs, {
+    baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' },
+    runningMode: opts.runningMode || 'VIDEO',
+    numFaces: opts.numFaces || 1,
+    minFaceDetectionConfidence: 0.5,
+    minTrackingConfidence: 0.5,
+    outputFaceBlendshapes: true,
+    outputFacialTransformationMatrixes: false
+  });
+}
+
+export async function initTracking(videoEl, opts = {}) {
+  const handLandmarker = await createHandLandmarker({
+    numHands: opts.numHands || 2,
+    handConfidence: opts.handConfidence,
+    trackingConfidence: opts.trackingConfidence
+  });
+
+  const poseLandmarker = await createPoseLandmarker({ numPoses: 1 });
 
   // Face Landmarker (optional — 478 landmarks + 52 blendshapes)
   let faceLandmarker = null;
   if (opts.enableFace !== false) {
     try {
-      faceLandmarker = await V.FaceLandmarker.createFromOptions(fs, {
-        baseOptions: {
-          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-          delegate: 'GPU'
-        },
-        runningMode: 'VIDEO',
-        numFaces: 1,
-        minFaceDetectionConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-        outputFaceBlendshapes: true,
-        outputFacialTransformationMatrixes: false
-      });
+      faceLandmarker = await createFaceLandmarker({ numFaces: 1 });
       console.log('[tracking] FaceLandmarker loaded (478 pts + 52 blendshapes)');
     } catch (e) {
       console.warn('[tracking] FaceLandmarker not available:', e);
