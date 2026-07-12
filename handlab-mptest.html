@@ -207,7 +207,7 @@ async function boot() {
     await cam.useWebcam();
     await cam.attach(els.vid);
     els.bgVid.srcObject = cam.stream; els.bgVid.play().catch(() => {});
-    say('▸ loading MoveNet + MediaPipe…');
+    say('▸ loading models…');
     mt = await initMultiplayerTracking(els.vid, { maxPlayers: MAXP, predMs: 40 });
     forgeSlot(); forgeSlot();                    // prewarm 2 rig pairs
     for (const s of slots) cover(s.views);
