@@ -7,8 +7,12 @@
   body { margin:0; background:#0b0e13; color:#dfe6f0; font:13px/1.5 ui-monospace,Menlo,Consolas,monospace; }
   #wrap { position:relative; width:100vw; height:100vh; overflow:hidden; }
   video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; transform:scaleX(-1); opacity:.5; }
-  #panel { position:absolute; left:12px; top:12px; z-index:5; background:#0b0e13dd; padding:14px 16px;
-           border:1px solid #2a3550; border-radius:10px; min-width:420px; backdrop-filter:blur(6px); }
+  #panel { position:fixed; left:12px; top:12px; z-index:5; background:#0b0e13dd; padding:14px 16px;
+           border:1px solid #2a3550; border-radius:10px; width:min(440px, calc(100vw - 74px));
+           max-height:calc(100vh - 24px); overflow:auto; backdrop-filter:blur(6px); }
+  #panel.hidden { display:none; }
+  #ptgl { position:fixed; top:10px; right:10px; z-index:9; width:42px; height:42px; padding:0; border-radius:10px;
+          background:#1b2740d9; border:1px solid #4a6aa0; color:#dfe; font-size:18px; cursor:pointer; }
   h1 { font-size:14px; margin:0 0 8px; color:#7fd1ff; }
   .row { white-space:pre; }
   button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e; border-radius:6px; padding:5px 10px; cursor:pointer; margin:3px 4px 3px 0; }
@@ -42,12 +46,15 @@
     </div>
     <table id="tbl"><thead><tr><th>players</th><th>mode</th><th>MoveNet ms</th><th>MediaPipe ms</th><th>total ms</th><th>fps</th></tr></thead><tbody></tbody></table>
   </div>
+  <button id="ptgl" title="show / hide panel">✕</button>
 </div>
 <script type="module">
 import { initMultiplayerTracking } from '../sdk/core/multiplayer.js';
 import { CompositeCam } from '../sdk/core/test-source.js';
 
 const vid = document.getElementById('vid'), live = document.getElementById('live');
+{ const ptgl = document.getElementById('ptgl'), panelEl = document.getElementById('panel');
+  ptgl.onclick = () => { const h = panelEl.classList.toggle('hidden'); ptgl.textContent = h ? '☰' : '✕'; }; }
 const tbody = document.querySelector('#tbl tbody');
 let mt = null, cam = null, rows = [];
 

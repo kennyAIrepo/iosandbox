@@ -11,6 +11,9 @@
   #hud { position:absolute; left:12px; top:12px; z-index:5; background:#0009; padding:10px 13px;
          border:1px solid #2a3550; border-radius:8px; white-space:pre; backdrop-filter:blur(6px); }
   #hud b { color:#7fd1ff; }
+  #hud.hidden { display:none; }
+  #ptgl { position:fixed; top:10px; right:10px; z-index:9; width:42px; height:42px; padding:0; border-radius:10px;
+          background:#1b2740d9; border:1px solid #4a6aa0; color:#dfe; font-size:18px; cursor:pointer; }
   button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e; border-radius:6px;
            padding:6px 12px; cursor:pointer; margin-top:6px; }
 </style>
@@ -18,11 +21,14 @@
   <video id="vid" playsinline muted></video>
   <canvas id="cv"></canvas>
   <div id="hud">click <b>start</b> · move 2+ people through frame<br><button id="go">start camera</button><div id="stat"></div></div>
+  <button id="ptgl" title="show / hide panel">✕</button>
 </div>
 <script type="module">
 import { initMultiPose } from '../sdk/core/multipose.js';
 
 const vid = document.getElementById('vid');
+{ const ptgl = document.getElementById('ptgl'), hudEl = document.getElementById('hud');
+  ptgl.onclick = () => { const h = hudEl.classList.toggle('hidden'); ptgl.textContent = h ? '☰' : '✕'; }; }
 const cv = document.getElementById('cv');
 const ctx = cv.getContext('2d');
 const stat = document.getElementById('stat');

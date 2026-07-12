@@ -18,9 +18,15 @@
   #ov { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }
   #c { position:fixed; inset:0; width:100%; height:100%; }
 
-  #panel { position:fixed; left:12px; top:12px; z-index:6; width:430px; max-height:calc(100vh - 24px);
+  #panel { position:fixed; left:12px; top:12px; z-index:6; width:min(430px, calc(100vw - 74px));
+           max-height:calc(100vh - 24px);
            overflow:auto; background:#05080de6; padding:12px 14px; border:1px solid #24304c;
            border-radius:10px; backdrop-filter:blur(7px); }
+  #panel.hidden { display:none; }
+  /* always-visible pin/unpin toggle — tap to reclaim a full undisturbed view */
+  #panelToggle { position:fixed; top:12px; right:12px; z-index:9; width:44px; height:44px; padding:0;
+                 border-radius:11px; background:#1b2740d9; border:1px solid #4a6aa0; color:#dfe6f0;
+                 font-size:19px; line-height:42px; text-align:center; cursor:pointer; backdrop-filter:blur(7px); }
   #panel h1 { font-size:13px; margin:0 0 6px; color:#ff9d5d; letter-spacing:.03em; }
   #panel h1 small { color:#6f86a8; font-weight:normal; }
   #live { white-space:pre; margin-bottom:8px; }
@@ -65,6 +71,8 @@
     </div>
     <table id="tbl"><thead><tr><th>players</th><th>mode</th><th>MoveNet</th><th>MediaPipe</th><th>total</th><th>fps</th></tr></thead><tbody></tbody></table>
   </div>
+
+  <button id="panelToggle" title="pin / unpin panel (full view)">✕</button>
 
   <div id="entry">
     <h1>HAND LAB · MP TEST SANDBOX</h1>
@@ -177,6 +185,15 @@ document.getElementById('csv').onclick = () => {
 document.getElementById('bodyBtn').onclick = (e) => {
   showBody = !showBody; e.target.classList.toggle('on', showBody);
   if (!showBody) octx.clearRect(0, 0, innerWidth, innerHeight);
+};
+// pin/unpin the whole control panel — tap the corner button for an unobstructed
+// full-screen view (essential on small phone screens), tap again to bring it back.
+const els_panel = document.getElementById('panel');
+const panelToggle = document.getElementById('panelToggle');
+panelToggle.onclick = () => {
+  const hidden = els_panel.classList.toggle('hidden');
+  panelToggle.textContent = hidden ? '☰' : '✕';
+  panelToggle.title = hidden ? 'show panel' : 'hide panel (full view)';
 };
 
 async function boot() {
