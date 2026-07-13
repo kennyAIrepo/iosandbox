@@ -1222,5 +1222,6 @@ bindSlider('bodyAlphaSld', 'bodyAlphaVal', v => v.toFixed(2), v => eachBodyRig(r
 bindSlider('bodyYSld', 'bodyYVal', v => (v > 0 ? '+' : '') + Math.round(v * 100) + 'cm', v => S.bodyY = v);
 bindSlider('bodySizeSld', 'bodySizeVal', v => v.toFixed(2) + '×', v => S.bodySize = v);
 </script>
+<script src="./sdk/ui/panel-toggle.js" defer></script>
 </body>
 </html>

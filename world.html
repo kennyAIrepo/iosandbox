@@ -2263,5 +2263,6 @@ else if (DRAFT_NAME) openDraftByName(DRAFT_NAME);
 else if (BUILD_MODE) startBuilder();
 else boot().catch(e => { console.error(e); dbg('X boot failed: ' + e.message); els.play.textContent = 'ERROR: ' + e.message; });
 </script>
+<script src="./sdk/ui/panel-toggle.js" defer></script>
 </body>
 </html>
