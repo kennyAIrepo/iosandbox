@@ -72,6 +72,13 @@ export class CompositeCam {
     await this.src.play(); this._start();
   }
 
+  /** Feed an EXISTING MediaStream (e.g. a clone of the page's camera stream —
+   *  avoids a second getUserMedia, which fails on single-camera devices). */
+  async useStream(stream) {
+    this.src.srcObject = stream; this.src.src = '';
+    await this.src.play(); this._start();
+  }
+
   /** Feed a recorded clip (best for repeatable benchmarks — record 2-4 real people once). */
   async useFile(url) {
     this.src.srcObject = null; this.src.src = url; this.src.loop = true;

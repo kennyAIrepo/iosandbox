@@ -78,7 +78,7 @@ export async function initMultiPose(opts = {}) {
 
   const maxPoses = opts.maxPoses || 6;
   const minScore = opts.minPoseScore ?? 0.2;
-  const minIntervalMs = 1000 / (opts.fpsCap || 30);
+  let minIntervalMs = 1000 / (opts.fpsCap || 30);
 
   let latest = [];
   let latestT = -1;
@@ -139,6 +139,8 @@ export async function initMultiPose(opts = {}) {
     latestTime: () => latestT,
     /** Last single-pass inference cost (ms). */
     lastCostMs: () => lastMs,
+    /** Retune the pump rate live (skeleton-only mode runs MoveNet hotter). */
+    setFps(f) { minIntervalMs = 1000 / Math.max(5, Math.min(60, f)); },
     /** Source video dimensions once known. */
     videoSize: () => ({ w: vw, h: vh }),
     /** One-shot estimate (test harnesses / benchmarks). */

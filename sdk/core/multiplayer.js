@@ -52,8 +52,11 @@ export async function initMultiplayerTracking(video, opts = {}) {
   const lastOut = new Map();    // player id -> last {hands,bodyImg,bodyWorld} (round-robin reuse)
   let creating = false;
 
-  async function makePipe() { const p = new PlayerPipeline(pipeOpts); await p.init(); return p; }
-  for (let i = 0; i < prewarm; i++) free.push(await makePipe());
+  // prewarmed pipes carry an EAGER pose model (they serve Mode B, ≤2 players);
+  // growth pipes lazy-load pose — at >2 players Mode A never asks for it, and
+  // skipping it keeps us clear of the browser's WebGL-context ceiling.
+  async function makePipe(eager) { const p = new PlayerPipeline({ ...pipeOpts, eagerPose: !!eager }); await p.init(); return p; }
+  for (let i = 0; i < prewarm; i++) free.push(await makePipe(true));
 
   function acquire(id) {
     let pipe = busy.get(id);
@@ -63,7 +66,7 @@ export async function initMultiplayerTracking(video, opts = {}) {
     // none warm — grow lazily (async); this player is body-only until it lands
     if (!creating && busy.size < maxPlayers) {
       creating = true;
-      makePipe().then(p => { free.push(p); creating = false; }).catch(() => { creating = false; });
+      makePipe(false).then(p => { free.push(p); creating = false; }).catch(() => { creating = false; });
     }
     return null;
   }
@@ -78,6 +81,7 @@ export async function initMultiplayerTracking(video, opts = {}) {
   let frameCount = 0;
   let running = true;
   let forceMode = null;   // benchmark override: 'A' | 'B' | null (auto)
+  let handsEnabled = true;   // skeleton-only mode: bodies for up to 6 people, zero MediaPipe
 
   // ── pose-cadence governor ────────────────────────────────────────
   // Hand latency is the product; body-3D is the luxury. When the frame
@@ -102,8 +106,37 @@ export async function initMultiplayerTracking(video, opts = {}) {
     const activeIds = new Set(players.map(p => p.id));
     for (const id of [...busy.keys()]) if (!activeIds.has(id)) release(id);
 
-    const many = players.length > 2 && roundRobin;
+    // ── SKELETON-ONLY FAST PATH: bodies + ids for EVERYONE MoveNet sees
+    // (up to 6), no per-player pipelines at all — the lowest-latency mode.
+    if (!handsEnabled) {
+      const outS = [];
+      for (const pl of players) {
+        outS.push({ id: pl.id, bbox: pl.bbox, body2D: pl.body2D, wrists: pl.wrists,
+                    hands: { left: null, right: null }, bodyImg: null, bodyWorld: null });
+      }
+      stats.moveNet = mp.lastCostMs();
+      stats.mediapipe += (0 - stats.mediapipe) * 0.15;
+      stats.total += ((performance.now() - t0) - stats.total) * 0.15;
+      stats.players = players.length;
+      stats.mode = mode;
+      return { mode, count: players.length, players: outS };
+    }
+
     const solo = players.length === 1;   // 1 player → full-frame path (old-stack fidelity)
+
+    // ── ACTIVITY-BASED SCHEDULER (replaces blind round-robin) ──────────
+    // Players with LIVE hands get detection every frame (≤2 live) or every
+    // 2nd frame (3-4 live, staggered); players with no hands up get PROBED
+    // every 4th frame — a raised hand is discovered within ~130ms. Skipped
+    // frames are bridged by predictOnly() (velocity extrapolation, no GPU),
+    // so scheduling gaps never read as frozen hands.
+    let liveRankNext = 0, liveCount = 0;
+    for (const pl of players) {
+      const pipe = busy.get(pl.id);
+      pl._live = !!(pipe && pipe.ready && pipe.handsLive(now));
+      if (pl._live) { pl._rank = liveRankNext++; liveCount++; }
+    }
+
     let mpMs = 0;
     const out = [];
     for (let i = 0; i < players.length; i++) {
@@ -122,9 +155,13 @@ export async function initMultiplayerTracking(video, opts = {}) {
         }
       }
 
-      // round-robin: with >2 players, refresh each player's hands every OTHER
-      // frame (still 30Hz on a 60Hz loop; prediction bridges the gap).
-      const skip = many && ((frameCount + i) % 2 !== 0) && lastOut.has(pl.id);
+      // cadence: live hands → full rate (≤2 live) / staggered half rate (3-4);
+      // no hands → probe every 4th frame. Skips are prediction-bridged.
+      let skip = false;
+      if (roundRobin && !solo) {
+        if (pl._live) skip = liveCount > 2 && ((frameCount + pl._rank) % 2 !== 0);
+        else skip = (frameCount + i) % 4 !== 0;
+      }
       if (pipe && pipe.ready && size.w && !skip) {
         const th = performance.now();
         res = pipe.detect(video, pl.bboxRaw, size, now, {
@@ -133,6 +170,8 @@ export async function initMultiplayerTracking(video, opts = {}) {
         });
         mpMs += performance.now() - th;
         lastOut.set(pl.id, res);
+      } else if (pipe && pipe.ready && skip) {
+        res = pipe.predictOnly(now, { predMs: opts.predMs });   // keep moving between detects
       } else if (lastOut.has(pl.id)) {
         res = lastOut.get(pl.id);
       }
@@ -163,6 +202,14 @@ export async function initMultiplayerTracking(video, opts = {}) {
     detect,
     mode: () => tracker.mode,
     setForceMode(m) { forceMode = (m === 'A' || m === 'B') ? m : null; },
+    /** false → skeleton-only fast path (no MediaPipe; bodies for up to 6). */
+    setHandsEnabled(on) { handsEnabled = !!on; },
+    /** Retune MoveNet pump rate (skeleton mode runs hotter, e.g. 30). */
+    setMoveNetFps(f) { mp.setFps?.(f); },
+    /** Suspend the MoveNet pump (e.g. game switched to single-player) — models stay warm. */
+    pause() { mp.stop(); },
+    /** Resume after pause(). */
+    resume() { mp.start(video); },
     stats: () => stats,
     videoSize: () => mp.videoSize(),
     poses: () => mp.latest(),          // raw MoveNet (debug/overlay)

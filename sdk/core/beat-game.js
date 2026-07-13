@@ -720,7 +720,12 @@ export class BeatGame {
     if (headX != null) this._headX += (headX - this._headX) * 0.25;
 
     // hand punch points → root-local (+ fist state: punching needs a FIST)
-    for (let h = 0; h < 2 && h < hands.length; h++) {
+    for (let h = 0; h < hands.length; h++) {
+      if (!this._handMeta[h]) {          // grow to N hands (multiplayer co-op — extra players punch too)
+        this._handMeta[h] = { speed: 0, present: false, slot: 'left' };
+        const pp = []; for (let i = 0; i < 10; i++) pp.push(new THREE.Vector3());
+        this._handPts[h] = pp;
+      }
       const hb = hands[h], meta = this._handMeta[h];
       meta.present = !!(hb && hb.present);
       if (!meta.present) continue;
@@ -855,9 +860,9 @@ export class BeatGame {
    */
   _checkPunch(s, hands) {
     const noteR = NOTE_R * s.mesh.scale.x;
-    for (let h = 0; h < 2 && h < hands.length; h++) {
+    for (let h = 0; h < hands.length; h++) {
       const meta = this._handMeta[h];
-      if (!meta.present || !meta.fist || meta.speed < PUNCH_SPEED_MIN) continue;
+      if (!meta || !meta.present || !meta.fist || meta.speed < PUNCH_SPEED_MIN) continue;
       const pad = HIT_PAD_BASE + HIT_PAD_SPEED * Math.min(meta.speed / MEGA_SPEED, 1);
       const reach = noteR + pad;
       const pts = this._handPts[h];

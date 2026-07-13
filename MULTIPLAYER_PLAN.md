@@ -189,6 +189,94 @@ CAMERA RUN #2 (2026-07-10): solo ✅ minimal latency, finger morphing fixed (512
   Expected 2p: hands 2×~12ms + ≤1 pose ~18ms → ~40ms ≈ 25fps (vs 9). If still not "solo-like", next
   lever is WEB WORKERS (one pipeline worker per player, VideoFrame transfer) — true parallelism.
 
+GAME-SUITE MERGE (2026-07-11): mpgames.html = handlab.html clone + single/multi switch.
+  PLAYERS panel section (👤 Single / 👥 Multi). Single = ORIGINAL stack, untouched (all MP branches
+  inert when S.mp=false). Multi = lazy-loaded sdk/core/multiplayer.js (TF.js only loads on first use):
+  sticky PRIMARY player (largest bbox, kept while in frame) drives ALL existing games/physics/body via
+  a frame-shim (pipeline output is already filtered+predicted → single-player re-filter bypassed, never
+  doubled); extra players (≤3) get pooled render-only rig pairs w/ own HandViews (occluder/cover/handY/
+  swap/style all live-synced). Beat-game dodge uses MoveNet nose when Mode A sheds the 3D body.
+  multiplayer.js gained pause()/resume() (MoveNet pump suspends in single mode, models stay warm).
+  Mode switch live at runtime, both directions, filter state dropped on handover. Camera-verify pending.
+  v1 SCOPE: games are primary-player-driven; per-player scoring/interaction = research phase (next).
+
+MPGAMES v2 (2026-07-13): body-render toggle + latency control + co-op beat.
+  - BODY RENDER: default is now SKELETON (2D bone-line overlay + holo hands, same look as
+    handlab-mptest) instead of the HoloBodyRig silhouette. New "BODY · render" menu: 🦴 Skeleton /
+    🧍 Avatar. Skeleton = MoveNet 17-pt COCO per player (multi) or MediaPipe 33-pt (single), drawn on
+    a 2D overlay canvas #ov (z under the hand canvas), cover-corrected. Avatar = the old silhouette
+    mesh (primary/driving player), opt-in. Silhouette rig now gated on S.bodyRender==='avatar'
+    (skeleton mode poses both body rigs null). Overlay only draws in mirror view.
+  - LATENCY: "LATENCY · model switch" menu (Auto / A / B) → mt.setForceMode; applied on MP-on and
+    live. Auto = multiplayer.js hysteresis (B ≤2p, A >2p); pose-cadence governor already self-tunes.
+    Metrics HUD shows `multi Np·mode · mp Xms · pose 1/N`.
+  - CO-OP GAMES: beat-game.js extended 2→N hands (lazy-grow _handMeta/_handPts; backward-compatible,
+    handlab still passes 2). Each MP player gets a HandBody pair (added to mpSlots); all players'
+    hands feed beatGame → everyone punches the shared note stream (co-op, one score). Cube/ball stay
+    primary-driven (object ownership/passing = still research). Full body physics (bodyBody, jump)
+    active in avatar mode; skeleton mode uses headX for dodge (hand-driven games unaffected).
+  Syntax-verified (beat-game.js, multiplayer.js, mpgames module). Single-player path untouched
+  (all new logic guarded by S.mp / S.bodyRender). Camera-verify + push pending. STILL uncommitted.
+  NEXT (research phase): per-player scoring/scoreboards, object passing between users, avatar-avatar
+  collision, competitive vs co-op modes, landmark-misalignment prevention in multi.
+
+CAMERA RUN #3 + FIX SET (2026-07-13): "mesh bloats + goes latent once >2 hands appear" in mpgames MP.
+  ROOT CAUSE (bloating/misalignment — CONFIRMED in source): CROP-SPACE Z LEAK. MediaPipe normalizes
+    landmark z like x — to the IMAGE IT SAW. Per-player pipelines see a CROP (bw≈0.4–0.6 of frame),
+    but hand-views mirrorPoint() scales depth assuming FULL-FRAME z (depth = d + z·sW·mirrorDepth,
+    hand-views.js:248). Unscaled crop z reads ~1/bw× too deep → depth·(s=depth/d) ray-scaling balloons
+    the mesh + makes it swim. Solo fast path (bw=1) unaffected → exactly "1p fine, 2p+ bloats".
+    FIX: player-pipeline remaps z·bw to full-frame units (hands img + pose img). World lm unaffected.
+  LATENCY (mpgames-specific stack-up, fixed):
+    (1) CompositeCam was ALWAYS in the boot path → canvas+captureStream hop = +1 frame (~33ms) on
+        detection + bg video. FIX: raw initCamera by default; clone-test lazily builds CompositeCam
+        from a CLONE of the live stream (new useStream() — no 2nd getUserMedia) and swaps srcObject
+        live; 1× swaps back to raw. Zero overhead when not clone-testing.
+    (2) Primary-swap smear: chirality/z-sign latches persisted across a primary-player handover.
+        FIX: drop views slots when mpPrimaryId changes.
+  CUBE 4-HAND / 2-PERSON HANDOVER (built):
+    - Unique HandBody identities for extra players (slot 'left#<id>'/'right#<id>') — grab/held/twist
+      compare slot strings; two players' lefts no longer alias.
+    - ballColliders rebuilt per frame: [primary L, R, bodyBody, ...every extra player's hands] —
+      cube + ball grab/collide/z-bias now see ALL hands (z-bias seeks nearest palm of ANY player).
+    - HANDOVER mechanics (v1): release-then-take — A opens grip (grace frames) while B grips → B's
+      grab takes it, same GrabbableBox rules. Two-person palm-CLAMP also works (clamp is slot-agnostic).
+    - TWIST generalized: A = holder resolved across all hands; B = strongest-gripping OTHER hand of
+      ANY player (twistG.twistSlot) → cross-person "one holds, the other twists a layer". Null-guards
+      for a holder leaving the frame.
+  STILL OPEN (accuracy framework, next iterations): tug-transfer (grab-from-a-holding-hand without
+    release), per-player glow/score attribution, MoveNet-wrist velocity compensation in the ownership
+    gate, crop-z calibration for non-square crops (bw vs bh — currently width-normalized like MP docs).
+  Syntax-verified; single-player + handlab untouched. Camera-verify pending. STILL uncommitted.
+
+CAMERA RUN #4 + FIX SET (2026-07-13): 4× clone test — bodies 4/4 ✅, hands degrade with count:
+  4th player's hands never track; 2nd/3rd hands laggy, small/offset mesh, no finger curl.
+  THREE ROOT CAUSES FOUND + FIXED:
+  (1) STRETCHED CROPS: crop boxes were square in NORMALIZED units → on a 16:9 frame that's a
+      1.78×-wide pixel rectangle drawn into a square canvas → every landmarker saw a widened hand →
+      degraded geometry/z/finger-curl + shrunken/offset mesh (x/y remap cancels the stretch but the
+      MODEL's estimates suffer). FIX: player-pipeline reshapes to square-in-PIXELS before cropping.
+  (2) GL-CONTEXT CEILING: every pipeline eagerly built HandLandmarker+PoseLandmarker (a GL context
+      each); with Three.js + TF.js + idle single tracker + 4 pipes×2 ≈ browser WebGL context limit →
+      pipeline #4 creation fails/thrashes → "4th player's hands never track". FIX: PoseLandmarker is
+      LAZY (created on first Mode-B ask); prewarmed 2 pipes keep eager pose (they serve ≤2p Mode B),
+      growth pipes never build one in Mode A.
+  (3) BLIND ROUND-ROBIN: >2 players halved EVERY player to ~15Hz hands even when only 1-2 had hands
+      raised. FIX: ACTIVITY-BASED SCHEDULER — live-handed players detect every frame (≤2 live) or
+      staggered 1/2 (3-4 live); hand-less players PROBED every 4th frame (discovery <~130ms); skipped
+      frames bridged by new pipe.predictOnly() (One-Euro velocity extrapolation, zero GPU) so gaps
+      never read as frozen. pipe.handsLive() drives the scheduler.
+  Syntax-verified. If 4p hands still heavy after this: web workers remain the structural lever.
+
+SKELETONS GROUP MODE (2026-07-13): new SHOW option `🦴 Skeletons` in mpgames — body-only tracking
+  for LARGE GROUPS (up to 6 people, MoveNet's cap), zero hand models. multiplayer.js gained
+  setHandsEnabled(false) → skeleton fast path in detect(): players get id/bbox/body2D/wrists only,
+  NO pipelines touched → detect() cost ≈ 0 (MoveNet is async); + setMoveNetFps (multipose.setFps) —
+  the pump runs hotter (30) in this mode since the whole GPU budget is MoveNet's. Selecting it
+  auto-enables Multi (rides the MP engine), hides hand rigs everywhere (single-mode gather guard,
+  extras block guard, avatar gates), draws per-player-colored skeletons + strict `P<id>` badge above
+  each head, body checkbox can't exit it. Other modes untouched. Leaving restores hands + 24fps pump.
+
 TEST TOOLING — fake multi-person from ONE person (sdk/core/test-source.js, CompositeCam):
   Composites the webcam (or a recorded clip via useFile) into a canvas tiled N×, exposed as a
   captureStream — the pipeline sees N real bodies, N pipelines run, intruder-mask fires on overlap.

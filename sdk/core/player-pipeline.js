@@ -38,7 +38,11 @@ export class PlayerPipeline {
     // (see detect()), with the wrist-ownership gate as second line.
     this.numHands = opts.numHands || 2;
     this.withPose = opts.withPose !== false;
+    this.eagerPose = !!opts.eagerPose;
     this.predMs = opts.predMs ?? 0;
+    this._lastDetectT = 0;          // for predict-only frames + activity scheduling
+    this._slotLive = { left: false, right: false };
+    this._poseLoading = false;
 
     this.canvas = document.createElement('canvas');
     this.canvas.width = this.canvas.height = this.cropPx;
@@ -59,9 +63,21 @@ export class PlayerPipeline {
 
   async init() {
     this.handLM = await createHandLandmarker({ numHands: this.numHands });
-    if (this.withPose) this.poseLM = await createPoseLandmarker({ numPoses: 1 });
+    // PoseLandmarker is LAZY unless eagerPose: every landmarker holds a GL
+    // context, and 4 players × 2 tasks + Three + TF.js brushes the browser's
+    // WebGL-context ceiling (the "4th player's hands never track" failure).
+    // Mode A (>2 players) never uses pose, so growth pipelines skip it.
+    if (this.withPose && this.eagerPose) this.poseLM = await createPoseLandmarker({ numPoses: 1 });
     this.ready = true;
     return this;
+  }
+
+  _ensurePose() {
+    if (this.poseLM || !this.withPose || this._poseLoading) return;
+    this._poseLoading = true;
+    createPoseLandmarker({ numPoses: 1 })
+      .then(p => { this.poseLM = p; this._poseLoading = false; })
+      .catch(() => { this._poseLoading = false; this.withPose = false; });
   }
 
   _ts(tMs) {
@@ -93,6 +109,16 @@ export class PlayerPipeline {
       bx = clamp01(box.x); by = clamp01(box.y);
       bw = Math.min(box.w, 1 - bx); bh = Math.min(box.h, 1 - by);
       if (bw <= 0 || bh <= 0) return out;
+      // SQUARE IN PIXELS, not normalized units: a normalized square on a 16:9
+      // frame is a 1.78×-stretched rectangle in pixels, and drawing it into a
+      // square canvas fed the landmarker a widened hand — degraded geometry,
+      // z and finger curl. Expand the smaller PIXEL side to match the larger.
+      {
+        const side = Math.max(bw * size.w, bh * size.h);
+        const nbw = Math.min(side / size.w, 1), nbh = Math.min(side / size.h, 1);
+        bx = clamp01(bx - (nbw - bw) / 2); by = clamp01(by - (nbh - bh) / 2);
+        bw = Math.min(nbw, 1 - bx); bh = Math.min(nbh, 1 - by);
+      }
       const px = this.cropPx;
       this.ctx.drawImage(video, bx * size.w, by * size.h, bw * size.w, bh * size.h, 0, 0, px, px);
       src = this.canvas;
@@ -142,7 +168,11 @@ export class PlayerPipeline {
       const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
       const cands = [];
       for (let h = 0; h < hr.landmarks.length; h++) {
-        const img = hr.landmarks[h].map(p => ({ x: 1 - (bx + p.x * bw), y: by + p.y * bh, z: p.z }));
+        // z is normalized to the IMAGE the landmarker saw (like x) — i.e. the
+        // CROP. Downstream mirror-depth math assumes FULL-FRAME units, so an
+        // unscaled crop z reads ~1/bw× too deep → the mesh balloons/swims
+        // (the multi-player "bloating" bug). Scale by bw to full-frame units.
+        const img = hr.landmarks[h].map(p => ({ x: 1 - (bx + p.x * bw), y: by + p.y * bh, z: p.z * bw }));
         const w0 = img[0];
         cands.push({
           img, world: hr.worldLandmarks?.[h] || null,
@@ -178,11 +208,15 @@ export class PlayerPipeline {
         out.hands[slot] = { img: this.imgBank.predicted(slot, predMs), world };
       }
     }
+    this._lastDetectT = tMs;
+    this._slotLive.left = !!out.hands.left;
+    this._slotLive.right = !!out.hands.right;
 
     // ── BODY (Mode B, every poseEvery-th frame; cached between) ──
     // posePhase staggers players so at most ONE pose model runs per frame
     // (both firing on the same frame made 110ms spike frames at 2p).
     const poseEvery = o.poseEvery || 2;
+    if (o.wantPose && !this.poseLM) this._ensurePose();   // lazy-load on first Mode-B ask
     if (o.wantPose && this.poseLM) {
       if (((o.frameCount || 0) + (o.posePhase || 0)) % poseEvery === 0) {
         // pose reads an UNMASKED crop — the intruder mask can cover parts of
@@ -199,7 +233,8 @@ export class PlayerPipeline {
         }
         const pr = this.poseLM.detectForVideo(poseSrc, ts);
         if (pr.landmarks && pr.landmarks.length) {
-          const img = pr.landmarks[0].map(p => ({ x: 1 - (bx + p.x * bw), y: by + p.y * bh, z: p.z || 0, v: p.visibility ?? 1 }));
+          // z scaled crop→full-frame units, same reason as the hands above
+          const img = pr.landmarks[0].map(p => ({ x: 1 - (bx + p.x * bw), y: by + p.y * bh, z: (p.z || 0) * bw, v: p.visibility ?? 1 }));
           this.poseImgBank.apply('body', img, tMs);
           let world = null;
           if (pr.worldLandmarks && pr.worldLandmarks.length) { this.poseWorldBank.apply('body', pr.worldLandmarks[0], tMs); world = this.poseWorldBank.predicted('body', predMs); }
@@ -212,12 +247,38 @@ export class PlayerPipeline {
     return out;
   }
 
+  /** Any hand seen on the last real detect within maxAgeMs? (scheduler) */
+  handsLive(tMs, maxAgeMs = 700) {
+    return this._lastDetectT > 0 && (tMs - this._lastDetectT) < maxAgeMs &&
+           (this._slotLive.left || this._slotLive.right);
+  }
+
+  /**
+   * PREDICT-ONLY frame — no GPU, no detection: extrapolate the last measured
+   * hands forward via the One-Euro velocity estimates (clamped by maxLead).
+   * Bridges scheduler-skipped frames so hands keep MOVING between detects.
+   */
+  predictOnly(tMs, o = {}) {
+    const out = { hands: { left: null, right: null },
+                  bodyImg: this._lastBody ? this._lastBody.img : null,
+                  bodyWorld: this._lastBody ? this._lastBody.world : null };
+    if (!this._lastDetectT) return out;
+    const lead = (o.predMs ?? this.predMs) + Math.max(0, tMs - this._lastDetectT);
+    for (const slot of ['left', 'right']) {
+      if (!this._slotLive[slot]) continue;
+      out.hands[slot] = { img: this.imgBank.predicted(slot, lead), world: this.worldBank.predicted(slot, lead) };
+    }
+    return out;
+  }
+
   /** Reset filter state (call on player-leave / pool release). */
   drop() {
     for (const s of ['left', 'right']) { this.imgBank.drop(s); this.worldBank.drop(s); }
     this.poseImgBank.drop('body'); this.poseWorldBank.drop('body');
     this._lastBody = null;
     this._lastTs = 0;
+    this._lastDetectT = 0;
+    this._slotLive.left = this._slotLive.right = false;
   }
 
   dispose() {
