@@ -268,6 +268,84 @@ CAMERA RUN #4 + FIX SET (2026-07-13): 4× clone test — bodies 4/4 ✅, hands d
       never read as frozen. pipe.handsLive() drives the scheduler.
   Syntax-verified. If 4p hands still heavy after this: web workers remain the structural lever.
 
+SOURCE FEATURE (2026-07-13): screen-share / URL / file tracking in mpgames — PURE FEATURE LAYER
+  (zero sdk/core changes; verified empty sdk diff). New SOURCE panel: 📷 Camera / 🖥 Screen / 🔗 URL /
+  📁 File. Screen = getDisplayMedia (the YouTube path — user shares the tab; consent replaces CORS,
+  captured pixels are canvas-clean); URL = direct .mp4 w/ crossOrigin (CORS-blocked → toast → use
+  File); File = local clip via object URL; bgVid synced via captureStream. MIRROR ARCHITECTURE: the
+  stack's mirrored convention is untouched — body.ext-source CSS un-flips the video and CSS-flips
+  #ov/#c so mirrored coords land un-mirrored on un-flipped footage (badge text counter-flipped in
+  draw). External source auto-forces mirror view + 🦴 skeletons display (restores prior display on
+  camera return); browser "stop sharing" bounces back to camera. NOISE REJECTION (no YOLO, shipped):
+  🎯 TAP-TO-LOCK — pointerdown hit-tests last frame's player bboxes (x un-mirrored for ext), toggles
+  ids in a locked set; when non-empty only locked ids render (render-side: tracker still sees all,
+  unlock instant, ids never reset). 🙈 SIZE GATE — bbox.h < 0.17 skipped for ext sources (audience/
+  far figures). Known limits: MoveNet 6-person cap + tiny broadcast bodies → full NBA court needs
+  the YOLO/ByteTrack pipeline (separate track); DRM tabs capture black.
+
+YOLO TRACKING TRACK (2026-07-16, research + local setup): MoveNet's 6-cap + ID drift + fast-motion
+  failure on NBA footage → move detection to YOLO + a real MOT tracker. THE PIPELINE (from NBA/sports
+  prior art): YOLO detect (no person cap, imgsz 960+ for small players) → ByteTrack (motion+low-conf
+  assoc, fast) OR BoT-SORT (adds appearance ReID, occlusion-robust, right for crowded court) →
+  IDENTITY layer for cut-proof persistence: team-color cluster (drop refs/crowd) + jersey-number OCR
+  with 30-50 frame voting + ReID embeddings (CLIP-ReIdent) → optional court homography → XY.
+  DEPLOY: (A) client ONNX-web (light, ~handful of people) or (B) CLOUD-PROCESS on GPU + stream
+  {id,box} JSON per frame over WebSocket → browser renders+taps (recommended for NBA scale; removes
+  browser-GPU ceiling; latency = 1 round-trip, hidden by existing One-Euro predict). Plugs into our
+  stack as a SOURCE SWAP — multiplayer.js already consumes {id,bbox,keypoints}; "YOLO-over-WS"
+  replaces MoveNet, render/tap/skeleton layers unchanged. Prior art: roboflow identify-basketball-
+  players, github j7yn/nba-vision, ahmed-nady/Sports-Player-Identification, arxiv TrackID3x3
+  (2503.18282), SoccerNet GSR-2024 winner, CLIP-ReIdent (2303.11855).
+  LOCAL SETUP (C:/Users/hanna/yololab, OUTSIDE the git repo — venvs/weights never committed):
+  Python 3.11.9 + RTX 4060 8GB (cu124 torch) + ultralytics + onnx/onnxruntime. Scripts: check_gpu,
+  track.py (YOLO+ByteTrack/BoT-SORT → annotated mp4 + tracks.jsonl = the browser payload), train.py
+  (fine-tune on Roboflow basketball data), export_onnx.py (opset12/dynamic → onnxruntime-web),
+  shell.bat/run.bat, FOUNDATIONS.md (theory→practice teaching). Build order in FOUNDATIONS.md §5.
+
+YOLO SMOOTHNESS + TEAM-COLOR FIX SET (2026-07-16 #2): jitter/steppy motion root causes:
+  (1) interp formula rendered the NEWEST snapshot on arrival then froze → frame-by-frame stepping.
+      FIX: render ~one update-interval BEHIND (delay = min(260, span·1.1)) — always moving between
+      two known snapshots (networked-game standard). Cost ~90ms display latency, buys butter.
+  (2) raw pose keypoints shake px-level per frame → per-id One-Euro banks (HandFilterBank count:17,
+      minCutoff .5, beta 1.0) applied at snapshot ingestion, cloned (banks reuse arrays).
+  (3) server ran imgsz 1280 on a 960px upload = pure upscale waste → imgsz 960 match (67→54ms gpu).
+  TEAM-COLOR CLASSIFICATION (no training): server samples each player's TORSO via shoulder/hip
+  keypoints (not box crop — box is mostly court), median BGR, online clustering into ≤4 team
+  centroids (EMA-adapting) → payload {team, col}. Browser: skeleton/box coloured by ACTUAL jersey
+  colour (brightened), badge shows P<id>·T<team>. Validated e2e: 2 teams separated on test image.
+  DECISIONS (user, 2026-07-16): identity = BOTH, SEQUENCED — tap-to-enroll appearance ReID first,
+  jersey-number OCR later as the broadcast confirmation layer. Perf profile = FAST 960 default.
+  Deploy = LOCAL-ONLY for this build; afterwards flag user to design/implement CLOUD + continued
+  jitter/model/training-data evolution (model choices + detection fine-tuning iterate over time).
+
+REAL-TIME-FEEL + IDENTITY REGISTRY (2026-07-16 #3):
+  "Not real time" fix = VSYNC: ring-buffer the footage client-side and DISPLAY it delayed by
+  rtt+interp (~150-250ms) so video and skeletons are IN SYNC — alignment is what makes tap feel live
+  (broadcast-graphics standard). #dvid canvas covers bgVid when YOLO+ext-source+vsyncChk. Plus fp16
+  server inference (54→42.5ms gpu) and SCENE-CUT detection (64×36 gray mean-diff>28) → client clears
+  interp/banks on cut (no cross-cut smearing).
+  IDENTITY (research-grounded): faces are 10-20px at broadcast res — NOT viable (Sports Re-ID lit);
+  what works = fusion of court position + appearance + team + height. Built v1: 📐 4-tap court
+  calibration (NBA paint 4.88×5.79m, DLT homography) → feet→metres; IDENTITY REGISTRY client-side —
+  stable tags (A,B,C…) re-match new server ids to recently-lost entities by court-distance + team +
+  jersey-colour + size (cost fusion, <85 threshold, 0.4-15s window); 🔒 locks FOLLOW the person
+  across id changes; lock card shows court position + "identity held" through cuts.
+  NEXT (sequenced per user decision): OSNet appearance embeddings server-side (tap-to-enroll
+  gallery), jersey-number OCR + voting, Deep-EIoU-style tracker (SportsMOT winner — motion-agnostic,
+  Kalman assumes linear motion which athletes violate), basketball fine-tune via train.py. Then CLOUD
+  deploy (flag user for design). Refs: arxiv 2306.13074 (Deep-EIoU), 2206.02373 (Sports Re-ID),
+  2602.00484 (GTATrack/SoccerTrack25), SoccerNet GSR winner.
+
+DOLLHOUSE (research notes — NOT built): live 3D miniature of tracked players. Lightweight path:
+  (1) MoveNet 2D skeletons (already have, 6 cap) or YOLO+RTMPose for crowds; (2) GROUND POSITION via
+  court homography — 4+ known court points → H matrix → each player's ankle midpoint lifts to court
+  XY in metres (the key trick: no depth model needed for placement); (3) POSE LIFT: drive premade
+  low-poly avatar rigs (the existing BodyPose.retarget FK pattern — bone DIRECTIONS from 2D+canonical
+  proportions, lengths from the rig) — same predictive-model philosophy as the hand rig; (4) render
+  the rigs in a second three.js scene = orbitable "dollhouse". Prediction/interp covers occlusion
+  gaps (One-Euro per track id). All client-side, no server. Camera cuts reset H → detect cut (frame
+  diff spike) + re-solve homography or freeze dollhouse. Build AFTER the source feature proves out.
+
 SKELETONS GROUP MODE (2026-07-13): new SHOW option `🦴 Skeletons` in mpgames — body-only tracking
   for LARGE GROUPS (up to 6 people, MoveNet's cap), zero hand models. multiplayer.js gained
   setHandsEnabled(false) → skeleton fast path in detect(): players get id/bbox/body2D/wrists only,

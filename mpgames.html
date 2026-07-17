@@ -18,6 +18,25 @@
   #vid { width: 2px; height: 2px; opacity: 0; pointer-events: none; }
   #c { display: block; }
   #ov { display: block; pointer-events: none; z-index: 4; }   /* body-skeleton overlay — under the 3D hand canvas */
+  /* EXTERNAL SOURCE (screen share / URL / file): broadcast footage must show
+     UN-flipped (readable text), but the whole tracking stack emits MIRRORED
+     coords. Solved in the DISPLAY layer only: un-flip the video, CSS-flip the
+     overlay+3D canvases so mirrored coords land un-mirrored. Zero math touched. */
+  body.ext-source #bgVid { transform: none; }
+  body.ext-source #ov, body.ext-source #c { transform: scaleX(-1); }
+  #srcUrlRow { display: none; margin-top: 6px; gap: 5px; }
+  #srcUrlRow input { flex: 1; min-width: 0; background: rgba(30,42,56,.55); color: var(--txt);
+    border: 1px solid rgba(102,224,255,.14); border-radius: 7px; padding: 6px 8px; font-size: 11px; }
+  #lockCard { position: fixed; right: 14px; bottom: 14px; z-index: 8; display: none; min-width: 168px;
+    max-width: 240px; background: rgba(5,8,13,.93); border: 1px solid rgba(255,157,91,.4); border-radius: 9px;
+    padding: 10px 12px; font: 11px/1.5 ui-monospace, Consolas, monospace; color: var(--txt); backdrop-filter: blur(6px); }
+  #lockCard b { color: var(--cy); }
+  /* VSYNC: delayed-video canvas — sits over the live video, under the overlays.
+     When active, the DISPLAYED footage is delayed to match tracking latency so
+     skeletons sit ON the players (broadcast-graphics sync trick). */
+  #dvid { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 3; pointer-events: none; display: none; }
+  body.vsync #dvid { display: block; }
+  body.vsync #bgVid { visibility: hidden; }
 
   .panel { position: fixed; background: var(--panel); border: 1px solid var(--edge);
     border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(10px); z-index: 10;
@@ -73,8 +92,10 @@
 <body>
 <video id="bgVid" autoplay playsinline muted></video>
 <video id="vid" autoplay playsinline muted></video>
+<canvas id="dvid"></canvas>
 <canvas id="ov"></canvas>
 <canvas id="c"></canvas>
+<div id="lockCard"></div>
 
 <h1>MP GAMES <small>hopeOS · multiplayer hand lab</small></h1>
 
@@ -102,6 +123,31 @@
     </div>
     <div class="sname">tile your own camera into N tracked players — test multi-person tracking + tap accuracy solo, anytime (auto-enables Multi)</div>
   </div>
+  <div class="sec">
+    <div class="lbl">SOURCE · what feeds the tracker</div>
+    <div class="row" id="srcOpts">
+      <button class="opt sel" data-src="camera">📷 Camera</button>
+      <button class="opt" data-src="screen">🖥 Screen</button>
+      <button class="opt" data-src="url">🔗 URL</button>
+      <button class="opt" data-src="file">📁 File</button>
+    </div>
+    <div class="row" id="srcUrlRow">
+      <input id="srcUrl" type="text" placeholder="direct .mp4 link… (YouTube → use 🖥 Screen)">
+      <button class="opt" id="srcUrlGo" style="flex:0 0 auto">Load</button>
+    </div>
+    <div class="sname">🖥 = share a tab (YouTube / any live page) · video sources run un-mirrored</div>
+    <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
+    <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
+    <label class="chk"><input id="sizeChk" type="checkbox" checked> 🙈 ignore small / far figures (audience, refs at distance)</label>
+    <label class="chk"><input id="yoloChk" type="checkbox"> 🧠 YOLO engine (localhost) — many players + persistent ids · needs serve.py</label>
+    <label class="chk"><input id="vsyncChk" type="checkbox" checked> 🎬 sync video ↔ tracking — delays footage so skeletons sit ON players (feels real-time)</label>
+    <div class="row">
+      <button class="opt" id="calibBtn">📐 Calibrate court · 4 taps</button>
+      <button class="opt" id="calibClr" style="flex:0 0 auto">✕</button>
+    </div>
+    <div class="sname">tap the PAINT's 4 corners (top-left → top-right → bottom-right → bottom-left) → real court positions power identity re-matching across cuts</div>
+  </div>
+  <input type="file" id="srcFile" accept="video/*" style="display:none">
   <div class="sec">
     <div class="lbl">HAND MODEL</div>
     <div class="row" id="styleOpts">
@@ -335,6 +381,19 @@ let rigR = null, rigL = null;      // mesh-chirality rigs
 let tracker = null;
 let cam = null;                    // composite self-clone camera (clone-test: 1 person → N)
 let camStreams = null;             // { stream, bgStream } from initCamera — raw camera path
+// YOLO engine state — MUST be declared before loop() first runs (loop references it every frame)
+const YOLO = { on: false, ws: null, players: [], lastT: 0, lastSend: 0, cv: document.createElement('canvas'),
+               firstSeen: new Map(), lastSeen: new Map(), rtt: 0, serverMs: 0,
+               inFlight: false,                       // backpressure: ONE frame in flight, ever
+               prev: null, curr: null, tPrev: 0, tCurr: 0,     // snapshot pair for interpolation
+               banks: new Map() };                    // per-id One-Euro banks — kills keypoint jitter
+// (all referenced by loop() from its first frame — must live above the loop() call)
+const VS = { buf: [], delay: 160, lastCap: 0, active: false };          // 🎬 vsync state
+const CAL = { pts: [], H: null, picking: false };                        // 📐 court homography
+const CAL_WORLD = [{ x: 0, y: 0 }, { x: 4.88, y: 0 }, { x: 4.88, y: 5.79 }, { x: 0, y: 5.79 }];
+const REG = { ents: new Map(), alias: new Map(), nextTag: 0 };           // stable identity registry
+const TAGS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const dvid = document.getElementById('dvid'), dctx = dvid.getContext('2d');
 
 // ─────────────── MULTIPLAYER (opt-in; single = original stack) ───────────────
 // S.mp toggles between the ORIGINAL single-player pipeline (initTracking →
@@ -1051,6 +1110,7 @@ function loop() {
       mpPrimaryId = best.id;
     }
     mpPrimary = mpF.players.find(p => p.id === mpPrimaryId) || null;
+    loop._lastPlayers = mpF.players;   // for tap-to-lock hit-testing (SOURCE feature)
     // primary handover → re-latch chirality/z-sign for the NEW person's hands
     // (stale latches from the old primary smear the mesh for seconds)
     if (mpPrimaryId !== loop._lastPrimary) {
@@ -1199,13 +1259,48 @@ function loop() {
 
   // 4c. BODY-SKELETON OVERLAY (default render) — mirror view. Multi: every
   //     player's MoveNet 17-pt lines; single: the MediaPipe 33-pt pose.
+  yoloTick(now);   // 🧠 ship a frame to the YOLO server when engine on
+  vsyncTick(now);  // 🎬 delayed-video sync (skeletons sit ON the players)
   octx.clearRect(0, 0, innerWidth, innerHeight);
+  // 📐 calibration crosses while picking corners
+  if (CAL.picking && CAL.pts.length) {
+    const pr = coverProj();
+    octx.strokeStyle = '#ff9d5d'; octx.lineWidth = 2;
+    for (const q of CAL.pts) {
+      const sx = pr.ox + q.x * pr.dw, sy = pr.oy + q.y * pr.dh;
+      octx.beginPath(); octx.moveTo(sx - 9, sy); octx.lineTo(sx + 9, sy);
+      octx.moveTo(sx, sy - 9); octx.lineTo(sx, sy + 9); octx.stroke();
+    }
+  }
   const skelMode = S.display === 'skeletons';
+  // 🧠 YOLO engine ON → render ITS tracks; else MoveNet's (fresh within 800ms)
+  const yoloLive = YOLO.on && (now - YOLO.lastT < 1500);
+  const skelPlayers = yoloLive ? yoloInterp(now) : (mpF ? mpF.players : []);
+  if (yoloLive) loop._lastPlayers = skelPlayers;   // tap-to-lock hits YOLO ids
+  // adaptive size-gate reference: median tracked-player height this frame —
+  // on a WIDE broadcast shot every player is small, so a FIXED threshold
+  // (0.17, webcam-tuned) deleted ALL of them. Median-relative survives any zoom.
+  {
+    const hs = skelPlayers.map(p => p.bbox?.h || 0).filter(h => h > 0).sort((x, y) => x - y);
+    loop._medianH = hs.length ? hs[hs.length >> 1] : 0;
+  }
   if ((S.bodyRender === 'skeleton' || skelMode) && S.mode === 'mirror' && bodyOn()) {
-    if (S.mp && mpF) {
-      for (const p of mpF.players) {
-        const col = SKEL_COL[p.id % SKEL_COL.length];
+    if (S.mp && (mpF || yoloLive)) {
+      for (const p of skelPlayers) {
+        if (skelMode && srcFilterSkip(p)) continue;   // 🎯 lock + 🙈 size gate (SOURCE feature)
+        // YOLO sends the player's ACTUAL jersey colour → skeletons colour by
+        // TEAM (brightened for visibility); fallback = per-id palette
+        const col = p.col ? yoloBright(p.col) : SKEL_COL[p.id % SKEL_COL.length];
         drawSkel(p.body2D, COCO_EDGES, col);
+        // 🧠 YOLO: colored tracking BOX per player — dashed normally, SOLID+bold
+        // when locked. This is the visible "box selection" + proof YOLO is engaged.
+        if (yoloLive && p.bbox) {
+          const pr = coverProj(), locked = SRC.lockedIds.has(p.id);
+          octx.strokeStyle = col; octx.lineWidth = locked ? 4 : 2;
+          octx.setLineDash(locked ? [] : [8, 5]);
+          octx.strokeRect(pr.ox + p.bbox.x * pr.dw, pr.oy + p.bbox.y * pr.dh, p.bbox.w * pr.dw, p.bbox.h * pr.dh);
+          octx.setLineDash([]);
+        }
         // GROUP mode: strict per-player id badge pinned above the head
         if (skelMode) {
           const nose = p.body2D[0];
@@ -1213,7 +1308,20 @@ function loop() {
             const pr = coverProj();
             octx.font = 'bold 17px ui-monospace, Consolas, monospace';
             octx.fillStyle = col;
-            octx.fillText('P' + p.id, pr.ox + nose.x * pr.dw - 12, pr.oy + nose.y * pr.dh - 34);
+            const age = yoloLive && YOLO.firstSeen.has(p.id)
+              ? ' ·' + ((performance.now() - YOLO.firstSeen.get(p.id)) / 1000).toFixed(0) + 's' : '';
+            const tag = (SRC.lockedIds.has(p.id) ? '🔒' : '') + (p.tag || 'P' + p.id) +
+                        (p.team != null ? '·T' + p.team : '') + age;   // stable tag letter · T team · Ns duration
+            const tx = pr.ox + nose.x * pr.dw - 12;
+            // the overlay canvas is CSS-flipped for external sources — flip the
+            // TEXT back around its anchor so badges stay readable
+            if (document.body.classList.contains('ext-source')) {
+              octx.save(); octx.translate(tx, 0); octx.scale(-1, 1);
+              octx.fillText(tag, -octx.measureText(tag).width, pr.oy + nose.y * pr.dh - 34);
+              octx.restore();
+            } else {
+              octx.fillText(tag, tx, pr.oy + nose.y * pr.dh - 34);
+            }
           }
         }
       }
@@ -1286,7 +1394,30 @@ function loop() {
       `mesh <b>${rigR?.stats?.verts ?? '—'}</b> verts (${rigR?.stats?.style ?? '—'})<br>` +
       `body <b>${bodyOn() && activeBodyRig() ? (S.bodyLook === 'shadow' ? '🌑' : '👻') + activeBodyRig().stats.verts + 'v' + (bodyBody.present ? ' ●' : ' ○') + (bodyPose.airY > 0.05 ? ' ▲' : '') : 'off'}</b> · felt ≈ <b>${felt.toFixed(0)}ms</b><br>` +
       `hands <b>${(handsBySlot.left ? '◐ ' : '') + (handsBySlot.right ? '◑' : '') || '—'}</b> · view <b>${S.mode}</b>` +
-      (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '');
+      (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '') +
+      // 🧠 unmistakable YOLO status — engine state, connection, live player count, round-trip latency
+      (YOLO.on ? `<br>🧠 <b style="color:${yoloLive ? '#a6ff5d' : '#ffd15d'}">YOLO ${YOLO.ws && YOLO.ws.readyState === 1 ? (yoloLive ? '● LIVE' : '● connected (no data)') : '○ connecting…'}</b><br>` +
+        `tracking <b>${YOLO.players.length}</b> people · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
+
+    // 🔒 LOCKED-PLAYER ID CARD — the "prompt to ID on a locked person"
+    const lc = document.getElementById('lockCard');
+    if (YOLO.on && SRC.lockedIds.size) {
+      const rows = [...SRC.lockedIds].map(id => {
+        const p = (loop._lastPlayers || []).find(q => q.id === id);
+        const etag = REG.alias.get(id), ent = etag ? REG.ents.get(etag) : null;
+        const age = ent ? ((performance.now() - ent.born) / 1000).toFixed(0) + 's'
+                  : YOLO.firstSeen.has(id) ? ((performance.now() - YOLO.firstSeen.get(id)) / 1000).toFixed(1) + 's' : '—';
+        const pos = ent?.court ? `court ${ent.court.x.toFixed(1)}, ${ent.court.y.toFixed(1)} m`
+                  : p ? `x ${p.bbox.x.toFixed(2)} · y ${p.bbox.y.toFixed(2)}` : 'off-screen';
+        const col = (p?.col && yoloBright(p.col)) || SKEL_COL[id % SKEL_COL.length];
+        return `<div style="border-left:3px solid ${col};padding-left:7px;margin:5px 0">` +
+               `<b style="color:${col}">🔒 PLAYER ${etag || id}</b>${p?.team != null ? ` · team ${p.team}` : ''}<br>` +
+               `known <b>${age}</b> · ${pos}<br>` +
+               `<span style="color:#6d8494">${p ? 'in frame · locked' : 'occluded / cut — identity held'}</span></div>`;
+      }).join('');
+      lc.innerHTML = `<div style="color:#ff9d5d;letter-spacing:.1em;margin-bottom:4px">LOCKED · ${SRC.lockedIds.size}</div>${rows}`;
+      lc.style.display = 'block';
+    } else if (lc) { lc.style.display = 'none'; }
   }
 
   renderer.render(scene, camera);
@@ -1382,6 +1513,425 @@ document.getElementById('mpModeOpts').addEventListener('click', (e) => {
   toast(S.mpMode === 'auto' ? 'latency: Auto (3D↔2D body by player count)'
       : S.mpMode === 'A' ? 'Mode A — lowest latency (2D body · 3D hands)' : 'Mode B — full 3D body');
 });
+// ───────── SOURCE: external feeds (screen share / URL / file) ─────────
+// FEATURE LAYER ONLY — swaps what the two <video> elements play, manages the
+// mirror convention via the body.ext-source CSS class, and auto-switches the
+// suite into 🦴 skeletons group mode for footage. The tracking stack itself
+// (tracking.js / multiplayer.js / pipelines) is not touched in any way.
+const SRC = {
+  kind: 'camera',
+  stream: null,          // active external MediaStream (screen) — stopped on switch
+  lockedIds: new Set(),  // 🎯 tap-to-lock: when non-empty, only these ids render
+  prevDisplay: 'lab',    // display mode to restore when returning to camera
+};
+
+function srcSetButtons(kind) {
+  document.querySelectorAll('#srcOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.src === kind));
+  document.getElementById('srcUrlRow').style.display = kind === 'url' ? 'flex' : 'none';
+}
+
+function srcStopExternal() {
+  if (SRC.stream) { SRC.stream.getTracks().forEach(t => t.stop()); SRC.stream = null; }
+  els.vid.removeAttribute('src'); // clear any URL/file playback
+}
+
+/** Route BOTH videos (detection + background) onto a stream or a media URL. */
+async function srcRoute(streamOrUrl) {
+  if (typeof streamOrUrl === 'string') {
+    els.vid.crossOrigin = 'anonymous';           // pixel access needs CORS on direct links
+    els.vid.srcObject = null;
+    els.vid.src = streamOrUrl;
+    els.vid.loop = true; els.vid.muted = true;
+    await els.vid.play();
+    els.bgVid.srcObject = els.vid.captureStream ? els.vid.captureStream() : null;   // stays in sync
+    els.bgVid.play().catch(() => {});
+  } else {
+    els.vid.srcObject = streamOrUrl; els.vid.play().catch(() => {});
+    els.bgVid.srcObject = streamOrUrl; els.bgVid.play().catch(() => {});
+  }
+}
+
+async function srcActivate(kind) {
+  if (!S.running || !camStreams) { toast('▶ START the lab first, then pick a source'); return; }
+  if (kind === SRC.kind && kind !== 'url' && kind !== 'file') return;
+  try {
+    if (kind === 'camera') {
+      srcStopExternal();
+      els.vid.srcObject = camStreams.stream; els.vid.play().catch(() => {});
+      els.bgVid.srcObject = camStreams.bgStream || camStreams.stream; els.bgVid.play().catch(() => {});
+      document.body.classList.remove('ext-source');
+      SRC.kind = 'camera'; SRC.lockedIds.clear();
+      srcSetButtons('camera');
+      applyDisplay(SRC.prevDisplay);              // restore what the user had
+      toast('📷 camera — mirror mode restored');
+      return;
+    }
+    if (kind === 'screen') {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30 } }, audio: false
+      });
+      srcStopExternal();
+      SRC.stream = stream;
+      // user hits the browser's own "stop sharing" → bounce back to camera
+      stream.getVideoTracks()[0].addEventListener('ended', () => srcActivate('camera'));
+      await srcRoute(stream);
+    } else if (kind === 'url') {
+      const url = document.getElementById('srcUrl').value.trim();
+      if (!url) { toast('paste a direct .mp4 link first (YouTube → use 🖥 Screen)'); return; }
+      srcStopExternal();
+      await srcRoute(url);
+    } else if (kind === 'file') {
+      document.getElementById('srcFile').click();   // continues in the change handler
+      return;
+    }
+    srcEnterExternal(kind);
+  } catch (err) {
+    console.error(err);
+    toast(kind === 'screen' && (err.name === 'NotAllowedError' || err.name === 'AbortError')
+      ? 'share cancelled' : '✕ source failed: ' + (err.message || err), 5000);
+    srcSetButtons(SRC.kind);
+  }
+}
+
+function srcEnterExternal(kind) {
+  if (SRC.kind === 'camera') SRC.prevDisplay = S.display;   // remember to restore later
+  SRC.kind = kind; SRC.lockedIds.clear();
+  srcSetButtons(kind);
+  document.body.classList.add('ext-source');                // un-flip video, flip overlays
+  if (S.mode !== 'mirror') {                                // POV modes are meaningless for footage
+    document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === 'mirror'));
+    applyMode('mirror');
+  }
+  // 🦴 skeleton-only (default) = no hand mesh on video sources; toggle to allow hands
+  if (document.getElementById('skelOnlyChk').checked) { if (S.display !== 'skeletons') applyDisplay('skeletons'); }
+  else if (S.display === 'skeletons') applyDisplay('handsBody');
+  const skl = document.getElementById('skelOnlyChk').checked;
+  toast(kind === 'screen' ? `🖥 sharing — ${skl ? '🦴 skeletons, no hands' : '🖐 hands + body'} · tap a body to lock 🎯`
+                          : `🎬 footage — ${skl ? '🦴 skeletons, no hands' : '🖐 hands + body'} · tap a body to lock 🎯`, 4200);
+}
+
+document.getElementById('srcOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  srcActivate(b.dataset.src);
+});
+document.getElementById('srcUrlGo').addEventListener('click', () => srcActivate('url'));
+document.getElementById('srcFile').addEventListener('change', async (e) => {
+  const f = e.target.files?.[0]; if (!f) return;
+  try { srcStopExternal(); await srcRoute(URL.createObjectURL(f)); srcEnterExternal('file'); }
+  catch (err) { console.error(err); toast('✕ clip failed: ' + (err.message || err), 5000); }
+});
+els.vid.addEventListener('error', () => {
+  if (SRC.kind === 'url') toast('✕ link blocked (no CORS or bad URL) — download the clip and use 📁 File', 6000);
+});
+// 🦴 skeleton-only toggle — governs hand mesh on video sources, live
+document.getElementById('skelOnlyChk').addEventListener('change', (e) => {
+  if (SRC.kind === 'camera') { toast('🦴 skeleton-only applies to 🖥/🔗/📁 video sources'); return; }
+  if (e.target.checked) { if (S.display !== 'skeletons') applyDisplay('skeletons'); toast('🦴 skeleton only — hand mesh off'); }
+  else { applyDisplay('handsBody'); toast('🖐 hand mesh enabled on this source'); }
+});
+
+// 🎯 TAP-TO-LOCK + 🙈 SIZE GATE — the shippable noise rejection (no YOLO):
+// lock = tap a skeleton, only locked ids render/badge; gate = drop tiny
+// far-away figures (audience). Filtering is RENDER-side: the tracker still
+// sees everyone, so un-locking is instant and ids never reset.
+const MIN_BODY_H = 0.17;   // normalized bbox height — webcam-scale threshold
+function srcFilterSkip(p) {
+  if (document.getElementById('sizeChk').checked && document.body.classList.contains('ext-source')) {
+    // YOLO engine: MEDIAN-RELATIVE gate (drop figures <45% of the median tracked
+    // height = bench/audience) — a fixed threshold deleted every player on wide
+    // broadcast shots. MoveNet path keeps the old fixed webcam-scale gate.
+    const thr = (YOLO.on && loop._medianH) ? loop._medianH * 0.45 : MIN_BODY_H;
+    if (p.bbox.h < thr) return true;
+  }
+  if (SRC.lockedIds.size && !SRC.lockedIds.has(p.id)) return true;
+  return false;
+}
+addEventListener('pointerdown', (e) => {
+  if (!document.getElementById('lockChk').checked) return;
+  if (S.display !== 'skeletons' || !mt || !S.mp) return;
+  if (e.target.closest('.panel') || e.target.closest('button') || e.target.closest('input')) return;
+  const pr = coverProj();
+  const nx = (e.clientX - pr.ox) / pr.dw, ny = (e.clientY - pr.oy) / pr.dh;
+  if (nx < 0 || nx > 1 || ny < 0 || ny > 1) return;
+  // overlay is CSS-flipped for external sources → screen x maps to 1-x there
+  const mx = document.body.classList.contains('ext-source') ? 1 - nx : nx;
+  // 📐 court calibration takes priority over tap-to-lock while picking
+  if (CAL.picking) {
+    CAL.pts.push({ x: mx, y: ny });
+    if (CAL.pts.length >= 4) {
+      CAL.H = solveH(CAL.pts, CAL_WORLD);
+      CAL.picking = false;
+      toast(CAL.H ? '📐 court calibrated — positions in metres now power identity re-matching'
+                  : '📐 solve failed (points collinear?) — try again', 5000);
+    } else toast(`📐 corner ${CAL.pts.length}/4 set`);
+    return;
+  }
+  const players = loop._lastPlayers || [];   // last frame's PlayerFrames (set in the loop)
+  for (const p of players) {
+    const b = p.bbox;
+    if (mx >= b.x && mx <= b.x + b.w && ny >= b.y && ny <= b.y + b.h) {
+      if (SRC.lockedIds.has(p.id)) SRC.lockedIds.delete(p.id);
+      else SRC.lockedIds.add(p.id);
+      toast(SRC.lockedIds.size ? `🎯 locked: ${[...SRC.lockedIds].map(i => 'P' + i).join(' ')}` : '🎯 lock cleared — tracking everyone');
+      return;
+    }
+  }
+});
+
+// ───────── YOLO ENGINE — cloud bridge (swaps MoveNet for YOLO-pose over WS) ─────────
+// FEATURE LAYER ONLY. When ON: ships the current source's frames to the local
+// GPU server (yololab/serve.py) and renders the returned {id, keypoints} tracks
+// with the SAME skeleton overlay + tap-to-lock. When OFF: zero change, MoveNet
+// runs exactly as before. This is the swap-the-engine, keep-the-UI design.
+// (YOLO state is declared up top with the globals — loop() uses it every frame.)
+function yoloMap(arr) {
+  // server sends RAW normalized coords → mirror x to match MoveNet's convention
+  return arr.map(p => {
+    const body2D = p.kpts.map(k => ({ x: 1 - k[0], y: k[1], score: k[2] }));
+    const cx = p.box[0], cy = p.box[1], bw = p.box[2], bh = p.box[3];
+    return { id: p.id, body2D, bbox: { x: 1 - (cx + bw / 2), y: cy - bh / 2, w: bw, h: bh },
+             team: p.team ?? null, col: p.col || null,   // jersey team cluster + actual torso colour
+             wrists: [null, null], hands: { left: null, right: null }, bodyImg: null, bodyWorld: null };
+  });
+}
+// ── VSYNC: delay the DISPLAYED footage to match tracking latency ──────────
+// "Real-time feel" for tap-on-footage = ALIGNMENT, not absolute speed: if the
+// video you see and the skeletons on it are in sync, taps land and it reads
+// as live (broadcast graphics run seconds behind reality this same way).
+// (VS / dvid / dctx state is declared up top with the globals — loop() uses it)
+function vsyncTick(now) {
+  const want = YOLO.on && document.getElementById('vsyncChk').checked &&
+               document.body.classList.contains('ext-source');
+  if (!want) { if (VS.active) vsyncStop(); return; }
+  VS.active = true;
+  document.body.classList.add('vsync');
+  const v = els.bgVid.videoWidth ? els.bgVid : els.vid;
+  if (v.videoWidth && now - VS.lastCap > 28) {          // ~35fps ring buffer
+    VS.lastCap = now;
+    createImageBitmap(v).then(bmp => {
+      VS.buf.push({ bmp, t: performance.now() });
+      while (VS.buf.length && VS.buf[0].t < performance.now() - 1200) VS.buf.shift().bmp.close();
+    }).catch(() => {});
+  }
+  // draw the frame from (now - delay) — the moment the current skeletons describe
+  const target = now - VS.delay;
+  let f = null;
+  for (const q of VS.buf) { if (q.t <= target) f = q; else break; }
+  if (!f) return;
+  const W = innerWidth, H = innerHeight, dpr = Math.min(devicePixelRatio, 2);
+  if (dvid.width !== Math.round(W * dpr)) { dvid.width = W * dpr; dvid.height = H * dpr; dctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  const vw = f.bmp.width, vh = f.bmp.height, s = Math.max(W / vw, H / vh);
+  dctx.drawImage(f.bmp, (W - vw * s) / 2, (H - vh * s) / 2, vw * s, vh * s);
+}
+function vsyncStop() {
+  VS.active = false;
+  document.body.classList.remove('vsync');
+  for (const q of VS.buf) q.bmp.close();
+  VS.buf.length = 0;
+}
+
+// ── COURT HOMOGRAPHY (📐 4-tap calibration) ───────────────────────────────
+// Maps video pixels → real court metres via the NBA paint (4.88m × 5.79m).
+// Court position is the strongest cut-proof identity cue that needs NO
+// appearance model: players can't teleport between frames.
+// (CAL / CAL_WORLD state is declared up top with the globals)
+function solveH(src, dst) {                  // exact 4-point DLT via 8×8 gaussian elim
+  const A = [], B = [];
+  for (let i = 0; i < 4; i++) {
+    const { x, y } = src[i], { x: X, y: Y } = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -X * x, -X * y]); B.push(X);
+    A.push([0, 0, 0, x, y, 1, -Y * x, -Y * y]); B.push(Y);
+  }
+  for (let c = 0; c < 8; c++) {
+    let piv = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    [A[c], A[piv]] = [A[piv], A[c]]; [B[c], B[piv]] = [B[piv], B[c]];
+    if (Math.abs(A[c][c]) < 1e-9) return null;
+    for (let r = 0; r < 8; r++) {
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k];
+      B[r] -= f * B[c];
+    }
+  }
+  const h = B.map((b, i) => b / A[i][i]);
+  return [h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], 1];
+}
+function courtXY(pt) {
+  if (!CAL.H || !pt) return null;
+  const H = CAL.H, d = H[6] * pt.x + H[7] * pt.y + H[8];
+  if (Math.abs(d) < 1e-9) return null;
+  return { x: (H[0] * pt.x + H[1] * pt.y + H[2]) / d, y: (H[3] * pt.x + H[4] * pt.y + H[5]) / d };
+}
+document.getElementById('calibBtn').addEventListener('click', () => {
+  CAL.picking = true; CAL.pts = [];
+  toast('📐 tap the PAINT corners in order: top-left → top-right → bottom-right → bottom-left', 8000);
+});
+document.getElementById('calibClr').addEventListener('click', () => {
+  CAL.H = null; CAL.pts = []; CAL.picking = false; toast('📐 court calibration cleared');
+});
+
+// ── IDENTITY REGISTRY: stable player tags across cuts & re-entries ────────
+// The tracker's ids die on every camera cut. The registry re-matches each NEW
+// server id against recently-lost entities using the research-standard fusion:
+// court position (metres, if calibrated) + team + jersey colour + size. A lock
+// FOLLOWS the person: when their entity re-aliases to a new id, the lock moves.
+// (REG / TAGS state is declared up top with the globals)
+function colDist(a, b) {
+  if (!a || !b) return 999;
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  return Math.hypot(((pa >> 16) & 255) - ((pb >> 16) & 255), ((pa >> 8) & 255) - ((pb >> 8) & 255), (pa & 255) - (pb & 255));
+}
+const feetOf = (p) => ({ x: p.bbox.x + p.bbox.w / 2, y: p.bbox.y + p.bbox.h });
+function regIngest(arr, t) {
+  for (const p of arr) {
+    const known = REG.alias.get(p.id);
+    if (known && REG.ents.has(known)) { regUpdate(REG.ents.get(known), p, t); p.tag = known; continue; }
+    // new server id → try to re-claim a recently-lost entity (cut / re-entry)
+    let best = null, bestC = Infinity;
+    for (const [tg, e] of REG.ents) {
+      const idle = t - e.lastSeen;
+      if (idle < 400 || idle > 15000) continue;      // active elsewhere / too stale
+      let c = (e.team !== p.team ? 60 : 0) + colDist(e.col, p.col) * 0.5 +
+              Math.abs(e.h - p.bbox.h) / Math.max(e.h, 1e-3) * 40;
+      const cxy = courtXY(feetOf(p));
+      if (cxy && e.court) c += Math.hypot(cxy.x - e.court.x, cxy.y - e.court.y) * 15;  // metres matter
+      if (c < bestC) { bestC = c; best = tg; }
+    }
+    if (best !== null && bestC < 85) {
+      const e = REG.ents.get(best), oldSid = e.sid;
+      REG.alias.set(p.id, best);
+      if (SRC.lockedIds.has(oldSid)) { SRC.lockedIds.delete(oldSid); SRC.lockedIds.add(p.id); }  // 🔒 follows the PERSON
+      regUpdate(e, p, t); p.tag = best;
+    } else {
+      const tag = TAGS[REG.nextTag++ % TAGS.length];
+      REG.ents.set(tag, { sid: p.id, team: p.team ?? null, col: p.col, h: p.bbox.h,
+                          court: courtXY(feetOf(p)), lastSeen: t, born: t });
+      REG.alias.set(p.id, tag); p.tag = tag;
+    }
+  }
+  for (const [tg, e] of REG.ents) if (t - e.lastSeen > 90000) REG.ents.delete(tg);
+}
+function regUpdate(e, p, t) {
+  e.lastSeen = t; e.sid = p.id;
+  if (p.team != null) e.team = p.team;
+  if (p.col) e.col = p.col;
+  e.h += (p.bbox.h - e.h) * 0.1;
+  const c = courtXY(feetOf(p)); if (c) e.court = c;
+}
+
+// brighten a jersey hex so dark uniforms still read on court footage
+function yoloBright(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  const mix = (v) => Math.round(v + (255 - v) * 0.45);
+  return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
+}
+function yoloConnect() {
+  try { YOLO.ws = new WebSocket('ws://localhost:8765'); }
+  catch (e) { toast('🧠 could not open ws — is serve.py running?', 5000); YOLO.on = false; return; }
+  YOLO.ws.binaryType = 'arraybuffer';
+  YOLO.ws.onopen = () => toast('🧠 YOLO server connected — tracking on the GPU');
+  YOLO.ws.onmessage = (e) => {
+    YOLO.inFlight = false;                          // reply received → next frame may go
+    try {
+      const d = JSON.parse(e.data);
+      const arr = yoloMap(d.players ?? d);          // {players, ms} (new) or bare array (old)
+      YOLO.serverMs = d.ms ?? 0;
+      const t = performance.now();
+      YOLO.rtt = t - YOLO.lastSend;                 // true round-trip (send→receive, 1 in flight)
+      YOLO.lastT = t;
+      // SCENE CUT: never interpolate/filter ACROSS a camera cut — poses teleport
+      if (d.cut) { YOLO.prev = null; YOLO.tPrev = 0; YOLO.banks.clear(); }
+      // stable identity tags (registry re-matches new ids to lost entities)
+      regIngest(arr, t);
+      // vsync delay target: round-trip + one interp interval behind
+      VS.delay = Math.min(500, YOLO.rtt + Math.max(40, t - YOLO.tCurr) * 1.1);
+      // ONE-EURO per tracked id: the pose model's raw keypoints shake a few px
+      // frame-to-frame; filter each id's 17 points at snapshot rate, then CLONE
+      // (banks reuse their output arrays — prev/curr must not alias).
+      for (const p of arr) {
+        let bk = YOLO.banks.get(p.id);
+        if (!bk) { bk = new HandFilterBank({ count: 17, minCutoff: 0.5, beta: 1.0 }); YOLO.banks.set(p.id, bk); }
+        const f = bk.apply('k', p.body2D, t);
+        p.body2D = p.body2D.map((k, i) => ({ x: f[i].x, y: f[i].y, score: k.score }));
+      }
+      // snapshot pair → the render loop INTERPOLATES between them, so ~10fps
+      // server updates draw as smooth 60fps motion instead of frozen steps
+      YOLO.prev = YOLO.curr; YOLO.tPrev = YOLO.tCurr;
+      YOLO.curr = new Map(arr.map(p => [p.id, p])); YOLO.tCurr = t;
+      YOLO.players = arr;
+      // per-id persistence timers: how long has each id been continuously tracked
+      for (const p of arr) { if (!YOLO.firstSeen.has(p.id)) YOLO.firstSeen.set(p.id, t); YOLO.lastSeen.set(p.id, t); }
+      for (const [id, ls] of YOLO.lastSeen) if (t - ls > 4000) { YOLO.lastSeen.delete(id); YOLO.firstSeen.delete(id); YOLO.banks.delete(id); }
+    } catch (_) {}
+  };
+  YOLO.ws.onerror = () => toast('🧠 YOLO server not reachable — run: python serve.py', 6000);
+}
+function yoloTick(now) {
+  if (!YOLO.on || !YOLO.ws || YOLO.ws.readyState !== 1) return;
+  // BACKPRESSURE: never more than ONE frame in flight. The old fixed-rate send
+  // queued frames faster than the GPU consumed them → latency grew unboundedly
+  // and "ghost" skeletons of long-gone players kept arriving. Now the server's
+  // own pace sets the frame rate and worst-case lag = one round-trip.
+  if (YOLO.inFlight && now - YOLO.lastSend < 1500) return;   // 1.5s = stuck-reply escape hatch
+  if (now - YOLO.lastSend < 40) return;                      // hard cap ~25fps
+  const v = els.vid; if (!v.videoWidth) return;
+  YOLO.inFlight = true; YOLO.lastSend = now;
+  // 960px + q0.65 — the old 640/q0.5 turned far broadcast players into mush
+  const cw = 960, ch = Math.round(cw * v.videoHeight / v.videoWidth) || 540;
+  YOLO.cv.width = cw; YOLO.cv.height = ch;
+  YOLO.cv.getContext('2d').drawImage(v, 0, 0, cw, ch);
+  YOLO.cv.toBlob(b => {
+    if (b && YOLO.ws && YOLO.ws.readyState === 1) b.arrayBuffer().then(buf => YOLO.ws.send(buf));
+    else YOLO.inFlight = false;
+  }, 'image/jpeg', 0.65);
+}
+
+// Interpolated view of the two latest server snapshots — smooth 60fps render
+// from ~10fps updates (snapshot interpolation, the networked-game standard).
+// THE FIX for frame-by-frame motion: render ~ONE UPDATE-INTERVAL BEHIND, so we
+// are always moving BETWEEN two known snapshots. The old formula jumped to the
+// newest snapshot the moment it arrived and then froze until the next one —
+// which is exactly the stepping that was visible. Cost: ~1 interval (~90ms) of
+// extra display latency, invisible for footage; smoothness is what's usable.
+function yoloInterp(now) {
+  if (!YOLO.curr) return [];
+  if (!YOLO.prev || !YOLO.tPrev) return YOLO.players;
+  const span = Math.max(30, YOLO.tCurr - YOLO.tPrev);
+  const delay = Math.min(260, span * 1.1);           // trail by ~one interval
+  let a = (now - delay - YOLO.tPrev) / span;         // 0 = prev pose … 1 = curr pose
+  a = Math.max(0, Math.min(1.25, a));                // slight extrapolation if late
+  const out = [];
+  for (const [id, c] of YOLO.curr) {
+    const p = YOLO.prev.get(id);
+    if (!p) { out.push(c); continue; }
+    out.push({
+      ...c,
+      body2D: c.body2D.map((k, i) => ({
+        x: p.body2D[i].x + (k.x - p.body2D[i].x) * a,
+        y: p.body2D[i].y + (k.y - p.body2D[i].y) * a,
+        score: k.score
+      })),
+      bbox: { x: p.bbox.x + (c.bbox.x - p.bbox.x) * a, y: p.bbox.y + (c.bbox.y - p.bbox.y) * a,
+              w: p.bbox.w + (c.bbox.w - p.bbox.w) * a, h: p.bbox.h + (c.bbox.h - p.bbox.h) * a }
+    });
+  }
+  return out;
+}
+document.getElementById('yoloChk').addEventListener('change', (e) => {
+  YOLO.on = e.target.checked;
+  if (YOLO.on) {
+    if (!S.mp) document.querySelector('#mpOpts .opt[data-p="multi"]')?.click();   // needs the MP render/tap path
+    if (S.display !== 'skeletons') applyDisplay('skeletons');                     // YOLO = skeletons tier
+    yoloConnect();
+    toast('🧠 YOLO engine ON — make sure serve.py is running in yololab', 5000);
+  } else {
+    YOLO.players = []; try { YOLO.ws?.close(); } catch (_) {} YOLO.ws = null;
+    toast('🧠 YOLO engine OFF — back to MoveNet');
+  }
+});
+
 const CLONE_CFG = { '1': [1, 0], '2': [2, 0], '2o': [2, 0.12], '4': [4, 0] };
 document.getElementById('mpCloneOpts').addEventListener('click', async (e) => {
   const b = e.target.closest('.opt'); if (!b) return;
