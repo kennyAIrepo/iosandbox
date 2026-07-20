@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hopeOS · Dollhouse — court replay v0</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#070a10; color:#cfe6f2; font:12px/1.5 ui-monospace,Consolas,monospace; overflow:hidden; }
+  #c { position:fixed; inset:0; width:100%; height:100%; }
+  #panel { position:fixed; left:12px; top:12px; z-index:5; background:rgba(13,18,26,.85); border:1px solid rgba(102,224,255,.25);
+           border-radius:10px; padding:12px 14px; width:min(330px, calc(100vw - 70px)); backdrop-filter:blur(8px); }
+  h1 { font-size:13px; margin:0 0 6px; color:#66e0ff; letter-spacing:.1em; }
+  .mut { color:#6d8494; font-size:10.5px; }
+  button, input[type=file]::file-selector-button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e;
+           border-radius:6px; padding:5px 10px; cursor:pointer; margin:3px 3px 3px 0; }
+  button.sel { background:#2f66c8; border-color:#7fb0ff; color:#fff; }
+  #seek { width:100%; accent-color:#66e0ff; }
+  #stat { white-space:pre; margin-top:6px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel">
+  <h1>🏟 DOLLHOUSE · court replay v0</h1>
+  <div class="mut">Load a <b>court-session .jsonl</b> recorded in mpgames (⏺ REC). Players replay
+  as figures on an orbitable court — the presentation seed of the mid-server sim. v0 places players
+  by COURT-METRES (needs 📐 calibration in the recording; uncalibrated falls back to screen-plane).</div>
+  <div style="margin-top:7px">
+    <input id="file" type="file" accept=".jsonl,.json,.txt">
+  </div>
+  <div style="margin-top:5px">
+    <button id="play">▶ play</button>
+    <button id="speed">1×</button>
+  </div>
+  <input id="seek" type="range" min="0" max="1000" value="0">
+  <div id="stat">no session loaded</div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x070a10);
+scene.fog = new THREE.Fog(0x070a10, 30, 90);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(2.4, 12, 16);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(2.4, 0, 3);
+controls.enableDamping = true;
+scene.add(new THREE.HemisphereLight(0xbfe8ff, 0x0a1220, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(6, 14, 8); scene.add(sun);
+
+// ── court (v0): floor + the calibrated PAINT frame [0..4.88]×[0..5.79] ──
+// Recorded court-metres are in the PAINT's frame, so the paint IS our origin.
+{
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(46, 46),
+    new THREE.MeshStandardMaterial({ color: 0x14301e, roughness: .92 }));
+  floor.rotation.x = -Math.PI / 2; floor.position.set(2.44, -0.01, 3); scene.add(floor);
+  const paint = new THREE.Mesh(new THREE.PlaneGeometry(4.88, 5.79),
+    new THREE.MeshStandardMaterial({ color: 0x5a2a86, roughness: .85 }));
+  paint.rotation.x = -Math.PI / 2; paint.position.set(2.44, 0, 2.895); scene.add(paint);
+  const grid = new THREE.GridHelper(46, 46, 0x1d4e35, 0x123122);
+  grid.position.set(2.44, 0.005, 3); scene.add(grid);
+}
+
+// COCO-17 edges for the mini skeleton figures
+const EDGES = [[5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]];
+const puppets = new Map();   // tag -> { grp, lines, mat }
+function puppet(tag, colHex) {
+  let p = puppets.get(tag);
+  if (p) return p;
+  const grp = new THREE.Group();
+  const col = new THREE.Color(colHex || '#66e0ff').lerp(new THREE.Color('#ffffff'), 0.25);
+  const mat = new THREE.LineBasicMaterial({ color: col });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(EDGES.length * 2 * 3), 3));
+  const lines = new THREE.LineSegments(geo, mat);
+  grp.add(lines);
+  const disc = new THREE.Mesh(new THREE.CircleGeometry(0.34, 24),
+    new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.35 }));
+  disc.rotation.x = -Math.PI / 2; disc.position.y = 0.02; grp.add(disc);
+  scene.add(grp);
+  p = { grp, lines, mat };
+  puppets.set(tag, p);
+  return p;
+}
+
+// pose the puppet: keypoints are 2D image-normalized → drawn on a camera-facing
+// plane above the player's court spot, scaled to ~human height (v0 — a learned
+// 2D→3D lifter like MotionBERT replaces this projection later)
+const _kp = [];
+function posePuppet(p, plr) {
+  const c = plr.court;
+  if (c) p.grp.position.set(c.x, 0, c.y);
+  else p.grp.position.set((plr.box[0] + plr.box[2] / 2) * 15 - 5, 0, (plr.box[1] + plr.box[3]) * 8 - 1);
+  const k = plr.k;
+  const hipX = (k[11][0] + k[12][0]) / 2, hipY = (k[11][1] + k[12][1]) / 2;
+  const span = Math.max(0.02, plr.box[3]);                       // bbox height in image units
+  const S = 1.75 / span;                                          // → ~1.75m figure
+  const pos = p.lines.geometry.getAttribute('position');
+  let n = 0;
+  for (const [a, b] of EDGES) {
+    for (const j of [a, b]) {
+      const vx = -(k[j][0] - hipX) * S, vy = -(k[j][1] - hipY) * S + 0.95;
+      pos.setXYZ(n++, vx, Math.max(0.02, vy), 0);
+    }
+  }
+  pos.needsUpdate = true;
+  p.lines.lookAt(camera.position.x, p.lines.position.y, camera.position.z);   // billboard
+}
+
+// ── playback ────────────────────────────────────────────────────────────
+let frames = [], idx = 0, playing = false, speed = 1, lastT = 0;
+const stat = document.getElementById('stat'), seek = document.getElementById('seek');
+document.getElementById('file').addEventListener('change', async (e) => {
+  const f = e.target.files?.[0]; if (!f) return;
+  const txt = await f.text();
+  frames = txt.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+  idx = 0; playing = true;
+  document.getElementById('play').textContent = '⏸ pause';
+  stat.textContent = `${frames.length} frames · ${(frames.at(-1)?.t / 1000 || 0).toFixed(1)}s · ${new Set(frames.flatMap(fr => fr.players.map(p => p.tag))).size} players`;
+});
+document.getElementById('play').addEventListener('click', (e) => {
+  playing = !playing; e.target.textContent = playing ? '⏸ pause' : '▶ play';
+});
+document.getElementById('speed').addEventListener('click', (e) => {
+  speed = speed === 1 ? 2 : speed === 2 ? 0.5 : 1; e.target.textContent = speed + '×';
+});
+seek.addEventListener('input', () => { if (frames.length) idx = Math.floor(seek.value / 1000 * (frames.length - 1)); });
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  controls.update();
+  if (frames.length && playing && now - lastT > 33 / speed) {
+    lastT = now;
+    idx = (idx + 1) % frames.length;
+    seek.value = Math.round(idx / Math.max(1, frames.length - 1) * 1000);
+  }
+  if (frames.length) {
+    const fr = frames[idx];
+    const live = new Set();
+    for (const plr of fr.players) {
+      if (!plr.k || plr.k.length < 17) continue;
+      live.add(plr.tag);
+      posePuppet(puppet(plr.tag, plr.col), plr);
+    }
+    for (const [tag, p] of puppets) p.grp.visible = live.has(tag);
+  }
+  renderer.render(scene, camera);
+}
+tick(0);
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

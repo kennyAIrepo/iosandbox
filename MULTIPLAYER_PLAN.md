@@ -336,6 +336,49 @@ REAL-TIME-FEEL + IDENTITY REGISTRY (2026-07-16 #3):
   deploy (flag user for design). Refs: arxiv 2306.13074 (Deep-EIoU), 2206.02373 (Sports Re-ID),
   2602.00484 (GTATrack/SoccerTrack25), SoccerNet GSR winner.
 
+VSYNC v2 + COURT-ONLY + TRAINING KICKOFF (2026-07-17):
+  VSYNC jitter root cause: createImageBitmap promise chain stalled the main thread → buffer starved
+  → delayed video froze/"played slow". v2 = pre-allocated CANVAS ring (sync drawImage, 1280 cap),
+  EMA-smoothed delay target, underflow→nearest frame (never freeze).
+  NOISE: 🏟 COURT-ONLY filter — with 📐 homography, drop anyone whose FEET project outside the court
+  plane (x∉[-6,10.9] paint-frame ≈ beyond sidelines+apron, |y|>29) — kills sideline crowd/photogs/
+  bench by pure geometry. The screenshot noise (seated audience tracked as T0) was exactly this class.
+  TRAINING STARTED (yololab): get_clip.bat + prep_dataset.py (frames → yolo11m pseudo-labels →
+  jersey-color 2-means → classes player/other/ball → YOLO dataset) + TRAINING.md (full roadmap:
+  1 player/other/ball detector ← running now on the Knicks clip, 60ep yolo11s on the 4060;
+  2 jersey-number OCR+voting (SoccerNet jersey dataset, PARSeq/EasyOCR shortcut);
+  3 OSNet ReID gallery = the principled "pre-compiled player features" (faces DON'T work at 10-20px,
+  height DOES once homography orientation fixed); 4 Deep-EIoU association swap; latency levers:
+  TensorRT engine (~2-3×), court-tuned yolo11n, WebCodecs transport, ROI inference).
+  MID-SERVER (user context, not built): browser JSON → cloud sim (avatars/dollhouse, multiplayer,
+  player-profile behavior models + prediction) → stream back. Our {id,kpts,box,team,col} payload is
+  already the ingest seam; homography court-metres makes logged tracks camera-invariant = trainable
+  for the behavior models; end-to-end budget ~250ms with VSYNC alignment at the final hop.
+
+PARALLEL TRACK (2026-07-17 #2, while detector trains): ⏺ SESSION RECORDER in mpgames — logs every
+  YOLO frame {tag, team, col, court-metres, box, 17 kpts} to downloadable .jsonl (cap 40k frames) =
+  the camera-invariant TRAINING DATA for retargeting/behavior models + dollhouse replay.
+  dollhouse.html v0 BUILT (standalone, zero coupling): loads a session .jsonl, replays players as
+  billboard skeleton figures positioned by court-metres on an orbitable 3D court (paint = origin
+  frame), play/pause/speed/seek. It is the presentation seed of the mid-server sim.
+  RETARGETING TRUTH (user asked "train mediapipe/movenet"): those models aren't retrainable
+  (closed pipelines); the trainable seam is the LANDMARK→AVATAR lifter — MotionBERT/VideoPose3D-class
+  (2D kpt sequences → 3D joint rotations, few M params, Apache pretrained, ONNX-able for browser).
+  Recorded sessions are exactly its input format. Next parallel steps (GPU-light until detector
+  done): torchreid/OSNet install + embedding endpoint, EasyOCR jersey-number spike, MotionBERT
+  checkpoint eval on a recorded session.
+
+ROUND-5 TRAINED MODEL DEPLOYED (2026-07-17 19:1x): yolo11s fine-tune on 3,620 1080p frames (v6/v7
+  labels + 255 human-corrected imgs; survived session-crash at ep36 via resume from last.pt).
+  FINAL: player P 0.754 / R 0.928 / mAP50 0.926 · other 0.771 · ball 0.521 (weak — 219 instances,
+  known). DEPLOY = PLAYER-GATE in serve.py: fine-tuned best.pt at imgsz 640 conf 0.35 decides WHO is
+  a player; pose model supplies skeletons; IoU>0.3 match; gate REPLACES court/standing heuristics
+  when present (they're baked into its training); --no-gate flag reverts. Verified: street-photo test
+  gate-filtered 2/4 people; gpu 41ms post-training. best.pt backed up (backups/best_round5.pt).
+  Also this session: frame-timestamp echo protocol (measured VSYNC — client renders the exact
+  buffered frame each pose describes; kills estimation drift). NEXT LEVERS: TensorRT engine export
+  (~15-20ms), torso-crop team/logo classifier (Route B), jersey OCR, ball-specific data, cloud deploy.
+
 DOLLHOUSE (research notes — NOT built): live 3D miniature of tracked players. Lightweight path:
   (1) MoveNet 2D skeletons (already have, 6 cap) or YOLO+RTMPose for crowds; (2) GROUND POSITION via
   court homography — 4+ known court points → H matrix → each player's ankle midpoint lifts to court

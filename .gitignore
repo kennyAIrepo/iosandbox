@@ -21,3 +21,9 @@ dei_config.local.js
 # (opted in for the hosted music-sync demo)
 assets/audio/*.mp3
 !assets/audio/beat-it.mp3
+
+# model weights — stock/downloadable or trained; never commit into the web repo
+# (YOLO stack + trained best.pt live in ../yololab, deployed separately)
+*.pt
+*.onnx
+*.engine

@@ -139,13 +139,24 @@
     <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
     <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
     <label class="chk"><input id="sizeChk" type="checkbox" checked> 🙈 ignore small / far figures (audience, refs at distance)</label>
-    <label class="chk"><input id="yoloChk" type="checkbox"> 🧠 YOLO engine (localhost) — many players + persistent ids · needs serve.py</label>
+    <label class="chk"><input id="yoloChk" type="checkbox"> 🧠 Machine training engine (localhost) — many players + persistent ids · needs serve.py</label>
+    <div class="row" id="gateProfOpts">
+      <button class="opt sel" data-gp="sports">🏀 Sports · NBA</button>
+      <button class="opt" data-gp="general">👥 General</button>
+    </div>
+    <div class="sname">GUIDE GATE — 🏀 fine-tuned player/ball recognition + court & standing rules · 👥 same persistent low-noise tracking of EVERYONE, no basketball logic</div>
+    <label class="chk"><input id="gateDbgChk" type="checkbox" checked> 🔬 show ball detection — <b style="color:#ffd15d">◯ yellow = ball</b></label>
     <label class="chk"><input id="vsyncChk" type="checkbox" checked> 🎬 sync video ↔ tracking — delays footage so skeletons sit ON players (feels real-time)</label>
     <div class="row">
       <button class="opt" id="calibBtn">📐 Calibrate court · 4 taps</button>
       <button class="opt" id="calibClr" style="flex:0 0 auto">✕</button>
     </div>
     <div class="sname">tap the PAINT's 4 corners (top-left → top-right → bottom-right → bottom-left) → real court positions power identity re-matching across cuts</div>
+    <label class="chk"><input id="courtChk" type="checkbox" checked> 🏟 court-only — hide audience / bench / photographers by GEOMETRY (needs 📐)</label>
+    <div class="row">
+      <button class="opt" id="recBtn">⏺ REC session</button>
+    </div>
+    <div class="sname">records tracked players (tags · teams · court-metres · keypoints) to a .jsonl — the TRAINING DATA for avatar retargeting, behavior models & the mid-server dollhouse</div>
   </div>
   <input type="file" id="srcFile" accept="video/*" style="display:none">
   <div class="sec">
@@ -383,16 +394,19 @@ let cam = null;                    // composite self-clone camera (clone-test: 1
 let camStreams = null;             // { stream, bgStream } from initCamera — raw camera path
 // YOLO engine state — MUST be declared before loop() first runs (loop references it every frame)
 const YOLO = { on: false, ws: null, players: [], lastT: 0, lastSend: 0, cv: document.createElement('canvas'),
+               profile: 'sports',                     // guide-gate: 'sports' (NBA gate) | 'general' (all people)
                firstSeen: new Map(), lastSeen: new Map(), rtt: 0, serverMs: 0,
                inFlight: false,                       // backpressure: ONE frame in flight, ever
                prev: null, curr: null, tPrev: 0, tCurr: 0,     // snapshot pair for interpolation
-               banks: new Map() };                    // per-id One-Euro banks — kills keypoint jitter
+               banks: new Map(),                      // per-id One-Euro banks — kills keypoint jitter
+               coast: new Map() };                    // per-id last pose+time — bridge brief detection gaps (no blink)
 // (all referenced by loop() from its first frame — must live above the loop() call)
-const VS = { buf: [], delay: 160, lastCap: 0, active: false };          // 🎬 vsync state
+const VS = { buf: [], pool: [], delay: 160, dSm: 160, lastCap: 0, active: false };   // 🎬 vsync state
 const CAL = { pts: [], H: null, picking: false };                        // 📐 court homography
 const CAL_WORLD = [{ x: 0, y: 0 }, { x: 4.88, y: 0 }, { x: 4.88, y: 5.79 }, { x: 0, y: 5.79 }];
 const REG = { ents: new Map(), alias: new Map(), nextTag: 0 };           // stable identity registry
 const TAGS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+const REC = { on: false, rows: [], t0: 0 };                              // ⏺ session recorder
 const dvid = document.getElementById('dvid'), dctx = dvid.getContext('2d');
 
 // ─────────────── MULTIPLAYER (opt-in; single = original stack) ───────────────
@@ -1328,6 +1342,17 @@ function loop() {
     } else {
       drawSkel((seenPose && poseFilters.predicted('p', 0)) || frame.pose, MP_EDGES, SKEL_COL[0]);
     }
+    // 🔬 GATE DEBUG — non-players (crowd/ref/bench) are simply NOT tracked, so
+    // there is no rejection marker. Only the trained BALL detection is drawn.
+    if (yoloLive && document.getElementById('gateDbgChk').checked) {
+      const pr = coverProj();
+      octx.strokeStyle = '#ffd15d'; octx.lineWidth = 3;
+      for (const b of (YOLO.balls || [])) {
+        octx.beginPath();
+        octx.arc(pr.ox + b.x * pr.dw, pr.oy + b.y * pr.dh, Math.max(8, b.r * pr.dw), 0, 7);
+        octx.stroke();
+      }
+    }
   }
 
   // 5. hand physics bodies (same packs the rigs render → physics matches
@@ -1397,7 +1422,7 @@ function loop() {
       (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '') +
       // 🧠 unmistakable YOLO status — engine state, connection, live player count, round-trip latency
       (YOLO.on ? `<br>🧠 <b style="color:${yoloLive ? '#a6ff5d' : '#ffd15d'}">YOLO ${YOLO.ws && YOLO.ws.readyState === 1 ? (yoloLive ? '● LIVE' : '● connected (no data)') : '○ connecting…'}</b><br>` +
-        `tracking <b>${YOLO.players.length}</b> people · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
+        `${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
 
     // 🔒 LOCKED-PLAYER ID CARD — the "prompt to ID on a locked person"
     const lc = document.getElementById('lockCard');
@@ -1643,6 +1668,17 @@ function srcFilterSkip(p) {
     const thr = (YOLO.on && loop._medianH) ? loop._medianH * 0.45 : MIN_BODY_H;
     if (p.bbox.h < thr) return true;
   }
+  // 🏟 COURT-ONLY (the real noise fix, pure geometry): once the paint is
+  // calibrated, anyone whose FEET don't land on the court plane is not a
+  // player — sideline crowd/photographers project metres outside the
+  // sidelines. Paint frame: x∈[0,4.88] → sidelines at ≈ −5.2 / +10.1;
+  // ±0.8m apron keeps players saving a ball out of bounds. y-orientation
+  // (which end is the baseline) is unknown from 4 taps → generous |y| cap.
+  if (YOLO.on && CAL.H && document.getElementById('courtChk').checked &&
+      document.body.classList.contains('ext-source')) {
+    const c = courtXY(feetOf(p));
+    if (c && (c.x < -6.0 || c.x > 10.9 || Math.abs(c.y) > 29)) return true;
+  }
   if (SRC.lockedIds.size && !SRC.lockedIds.has(p.id)) return true;
   return false;
 }
@@ -1699,6 +1735,17 @@ function yoloMap(arr) {
 // video you see and the skeletons on it are in sync, taps land and it reads
 // as live (broadcast graphics run seconds behind reality this same way).
 // (VS / dvid / dctx state is declared up top with the globals — loop() uses it)
+// v2: pre-allocated CANVAS ring (synchronous drawImage — the old createImageBitmap
+// promise chain stalled the main thread and starved the buffer → the delayed
+// video froze and "played slow"). Plus EMA-smoothed delay (a jumping delay
+// target skips/repeats frames) and underflow → nearest frame (never freeze).
+function vsyncGrabCanvas(vw, vh) {
+  let cv = VS.pool.pop();
+  if (!cv) cv = document.createElement('canvas');
+  const cw = Math.min(vw, 1280), ch = Math.round(cw * vh / vw);   // cap memory; display upscales fine
+  if (cv.width !== cw) { cv.width = cw; cv.height = ch; }
+  return cv;
+}
 function vsyncTick(now) {
   const want = YOLO.on && document.getElementById('vsyncChk').checked &&
                document.body.classList.contains('ext-source');
@@ -1706,27 +1753,31 @@ function vsyncTick(now) {
   VS.active = true;
   document.body.classList.add('vsync');
   const v = els.bgVid.videoWidth ? els.bgVid : els.vid;
-  if (v.videoWidth && now - VS.lastCap > 28) {          // ~35fps ring buffer
+  if (v.videoWidth && now - VS.lastCap >= 32) {         // ~30fps ring, synchronous
     VS.lastCap = now;
-    createImageBitmap(v).then(bmp => {
-      VS.buf.push({ bmp, t: performance.now() });
-      while (VS.buf.length && VS.buf[0].t < performance.now() - 1200) VS.buf.shift().bmp.close();
-    }).catch(() => {});
+    const cv = vsyncGrabCanvas(v.videoWidth, v.videoHeight);
+    cv.getContext('2d').drawImage(v, 0, 0, cv.width, cv.height);
+    VS.buf.push({ cv, t: now });
+    while (VS.buf.length && VS.buf[0].t < now - 1400) VS.pool.push(VS.buf.shift().cv);
+    if (VS.pool.length > 50) VS.pool.length = 50;
   }
-  // draw the frame from (now - delay) — the moment the current skeletons describe
-  const target = now - VS.delay;
-  let f = null;
+  if (!VS.buf.length) return;
+  // MEASURED sync when the server echoes frame timestamps: render the buffered
+  // frame the current pose actually DESCRIBES. Fallback: estimated delay.
+  let target;
+  if (YOLO.renderFrameT) target = YOLO.renderFrameT;
+  else { VS.dSm += (VS.delay - VS.dSm) * 0.05; target = now - VS.dSm; }
+  let f = VS.buf[0];                                    // underflow → oldest (closest), never freeze
   for (const q of VS.buf) { if (q.t <= target) f = q; else break; }
-  if (!f) return;
   const W = innerWidth, H = innerHeight, dpr = Math.min(devicePixelRatio, 2);
   if (dvid.width !== Math.round(W * dpr)) { dvid.width = W * dpr; dvid.height = H * dpr; dctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
-  const vw = f.bmp.width, vh = f.bmp.height, s = Math.max(W / vw, H / vh);
-  dctx.drawImage(f.bmp, (W - vw * s) / 2, (H - vh * s) / 2, vw * s, vh * s);
+  const vw = f.cv.width, vh = f.cv.height, s = Math.max(W / vw, H / vh);
+  dctx.drawImage(f.cv, (W - vw * s) / 2, (H - vh * s) / 2, vw * s, vh * s);
 }
 function vsyncStop() {
   VS.active = false;
   document.body.classList.remove('vsync');
-  for (const q of VS.buf) q.bmp.close();
+  for (const q of VS.buf) VS.pool.push(q.cv);
   VS.buf.length = 0;
 }
 
@@ -1769,6 +1820,23 @@ document.getElementById('calibBtn').addEventListener('click', () => {
 });
 document.getElementById('calibClr').addEventListener('click', () => {
   CAL.H = null; CAL.pts = []; CAL.picking = false; toast('📐 court calibration cleared');
+});
+document.getElementById('recBtn').addEventListener('click', (e) => {
+  if (!REC.on) {
+    REC.on = true; REC.rows = []; REC.t0 = performance.now();
+    e.target.textContent = '⏹ STOP · saving'; e.target.classList.add('sel');
+    toast('⏺ recording tracked session — calibrate 📐 first for court-metre data');
+  } else {
+    REC.on = false;
+    e.target.textContent = '⏺ REC session'; e.target.classList.remove('sel');
+    const blob = new Blob([REC.rows.join('\n')], { type: 'application/jsonl' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `court-session-${Date.now()}.jsonl`;
+    a.click(); URL.revokeObjectURL(a.href);
+    toast(`⏹ saved ${REC.rows.length} frames — replay it in dollhouse.html`);
+    REC.rows = [];
+  }
 });
 
 // ── IDENTITY REGISTRY: stable player tags across cuts & re-entries ────────
@@ -1831,18 +1899,25 @@ function yoloConnect() {
   try { YOLO.ws = new WebSocket('ws://localhost:8765'); }
   catch (e) { toast('🧠 could not open ws — is serve.py running?', 5000); YOLO.on = false; return; }
   YOLO.ws.binaryType = 'arraybuffer';
-  YOLO.ws.onopen = () => toast('🧠 YOLO server connected — tracking on the GPU');
+  YOLO.ws.onopen = () => {
+    toast('🧠 YOLO server connected — tracking on the GPU');
+    try { YOLO.ws.send(JSON.stringify({ profile: YOLO.profile })); } catch (_) {}
+  };
   YOLO.ws.onmessage = (e) => {
     YOLO.inFlight = false;                          // reply received → next frame may go
     try {
       const d = JSON.parse(e.data);
       const arr = yoloMap(d.players ?? d);          // {players, ms} (new) or bare array (old)
       YOLO.serverMs = d.ms ?? 0;
+      YOLO.gateBlocked = d.filtered ?? 0;           // people the TRAINED gate rejected (crowd/refs)
+      // gate-debug overlays (mirrored like everything else)
+      YOLO.rej = (d.rej || []).map(b => ({ x: 1 - (b[0] + b[2] / 2), y: b[1] - b[3] / 2, w: b[2], h: b[3] }));
+      YOLO.balls = (d.balls || []).map(b => ({ x: 1 - b[0], y: b[1], r: Math.max(b[2], b[3]) / 2 }));
       const t = performance.now();
       YOLO.rtt = t - YOLO.lastSend;                 // true round-trip (send→receive, 1 in flight)
       YOLO.lastT = t;
       // SCENE CUT: never interpolate/filter ACROSS a camera cut — poses teleport
-      if (d.cut) { YOLO.prev = null; YOLO.tPrev = 0; YOLO.banks.clear(); }
+      if (d.cut) { YOLO.prev = null; YOLO.tPrev = 0; YOLO.banks.clear(); YOLO.coast.clear(); }
       // stable identity tags (registry re-matches new ids to lost entities)
       regIngest(arr, t);
       // vsync delay target: round-trip + one interp interval behind
@@ -1856,10 +1931,33 @@ function yoloConnect() {
         const f = bk.apply('k', p.body2D, t);
         p.body2D = p.body2D.map((k, i) => ({ x: f[i].x, y: f[i].y, score: k.score }));
       }
+      // ⏺ session recorder — court-metre tracks are the camera-invariant
+      // training data (retargeting, behavior models, dollhouse replay)
+      if (REC.on && REC.rows.length < 40000) {
+        REC.rows.push(JSON.stringify({
+          t: Math.round(t - REC.t0), cut: !!d.cut,
+          players: arr.map(p => ({
+            tag: p.tag, id: p.id, team: p.team, col: p.col,
+            court: courtXY(feetOf(p)),
+            box: [+p.bbox.x.toFixed(4), +p.bbox.y.toFixed(4), +p.bbox.w.toFixed(4), +p.bbox.h.toFixed(4)],
+            k: p.body2D.map(k => [+k.x.toFixed(4), +k.y.toFixed(4), +(k.score ?? 0).toFixed(2)])
+          }))
+        }));
+      }
+      // COAST: remember each id's last pose + per-keypoint velocity, so a brief
+      // server gap (one missed detection) is bridged by dead-reckoning instead
+      // of the skeleton blinking out. prevSnap = the snapshot before this one.
+      { const prevSnap = YOLO.curr, prevT = YOLO.tCurr, dt = Math.max(1, t - prevT);
+        for (const p of arr) {
+          const q = prevSnap && prevSnap.get(p.id);
+          const vel = q ? p.body2D.map((k, i) => ({ vx: (k.x - q.body2D[i].x) / dt, vy: (k.y - q.body2D[i].y) / dt })) : null;
+          YOLO.coast.set(p.id, { p, vel, t });
+        } }
       // snapshot pair → the render loop INTERPOLATES between them, so ~10fps
       // server updates draw as smooth 60fps motion instead of frozen steps
-      YOLO.prev = YOLO.curr; YOLO.tPrev = YOLO.tCurr;
+      YOLO.prev = YOLO.curr; YOLO.tPrev = YOLO.tCurr; YOLO.fPrev = YOLO.fCurr;
       YOLO.curr = new Map(arr.map(p => [p.id, p])); YOLO.tCurr = t;
+      YOLO.fCurr = d.cts || 0;      // capture time of the FRAME this pose describes
       YOLO.players = arr;
       // per-id persistence timers: how long has each id been continuously tracked
       for (const p of arr) { if (!YOLO.firstSeen.has(p.id)) YOLO.firstSeen.set(p.id, t); YOLO.lastSeen.set(p.id, t); }
@@ -1867,6 +1965,12 @@ function yoloConnect() {
     } catch (_) {}
   };
   YOLO.ws.onerror = () => toast('🧠 YOLO server not reachable — run: python serve.py', 6000);
+  // AUTO-RECONNECT: server restarts (deploys, crashes) must not silently
+  // strand the page on MoveNet — retry every 2s while the engine is on
+  YOLO.ws.onclose = () => {
+    YOLO.inFlight = false;
+    if (YOLO.on) { toast('🧠 server connection lost — auto-reconnecting…'); setTimeout(() => { if (YOLO.on && (!YOLO.ws || YOLO.ws.readyState > 1)) yoloConnect(); }, 2000); }
+  };
 }
 function yoloTick(now) {
   if (!YOLO.on || !YOLO.ws || YOLO.ws.readyState !== 1) return;
@@ -1882,9 +1986,16 @@ function yoloTick(now) {
   const cw = 960, ch = Math.round(cw * v.videoHeight / v.videoWidth) || 540;
   YOLO.cv.width = cw; YOLO.cv.height = ch;
   YOLO.cv.getContext('2d').drawImage(v, 0, 0, cw, ch);
+  const capT = now;   // frame capture time — echoed back by the server for EXACT vsync
   YOLO.cv.toBlob(b => {
-    if (b && YOLO.ws && YOLO.ws.readyState === 1) b.arrayBuffer().then(buf => YOLO.ws.send(buf));
-    else YOLO.inFlight = false;
+    if (b && YOLO.ws && YOLO.ws.readyState === 1) {
+      b.arrayBuffer().then(buf => {
+        const out = new ArrayBuffer(8 + buf.byteLength);
+        new DataView(out).setFloat64(0, capT, true);
+        new Uint8Array(out, 8).set(new Uint8Array(buf));
+        YOLO.ws.send(out);
+      });
+    } else YOLO.inFlight = false;
   }, 'image/jpeg', 0.65);
 }
 
@@ -1902,6 +2013,10 @@ function yoloInterp(now) {
   const delay = Math.min(260, span * 1.1);           // trail by ~one interval
   let a = (now - delay - YOLO.tPrev) / span;         // 0 = prev pose … 1 = curr pose
   a = Math.max(0, Math.min(1.25, a));                // slight extrapolation if late
+  // MEASURED sync: the frame-time this interpolated pose describes → vsync
+  // renders exactly that buffered video frame (no estimation drift)
+  if (YOLO.fPrev && YOLO.fCurr) YOLO.renderFrameT = YOLO.fPrev + (YOLO.fCurr - YOLO.fPrev) * a;
+  else YOLO.renderFrameT = 0;
   const out = [];
   for (const [id, c] of YOLO.curr) {
     const p = YOLO.prev.get(id);
@@ -1917,6 +2032,20 @@ function yoloInterp(now) {
               w: p.bbox.w + (c.bbox.w - p.bbox.w) * a, h: p.bbox.h + (c.bbox.h - p.bbox.h) * a }
     });
   }
+  // COAST the recently-dropped: any id the server just stopped reporting is
+  // held for ≤COAST_MS, dead-reckoned from its last velocity, so a one-frame
+  // detection miss no longer flickers the skeleton off. Snaps back on return.
+  const COAST_MS = 320;
+  for (const [id, e] of YOLO.coast) {
+    if (YOLO.curr.has(id)) continue;                 // still tracked → not coasting
+    const dt = now - e.t;
+    if (dt > COAST_MS) { YOLO.coast.delete(id); continue; }
+    const ext = Math.min(dt, 250);                   // cap extrapolation reach
+    const body2D = e.vel
+      ? e.p.body2D.map((k, i) => ({ x: k.x + e.vel[i].vx * ext, y: k.y + e.vel[i].vy * ext, score: k.score }))
+      : e.p.body2D;
+    out.push({ ...e.p, body2D, coasted: true });
+  }
   return out;
 }
 document.getElementById('yoloChk').addEventListener('change', (e) => {
@@ -1930,6 +2059,17 @@ document.getElementById('yoloChk').addEventListener('change', (e) => {
     YOLO.players = []; try { YOLO.ws?.close(); } catch (_) {} YOLO.ws = null;
     toast('🧠 YOLO engine OFF — back to MoveNet');
   }
+});
+// GUIDE GATE — choose what the cloud tracker recognizes. 'sports' = fine-tuned
+// NBA player/ball gate + court & standing rules; 'general' = same persistent
+// tracking of every person, no basketball-specific logic. Live-switchable.
+document.getElementById('gateProfOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  document.querySelectorAll('#gateProfOpts .opt').forEach(x => x.classList.toggle('sel', x === b));
+  YOLO.profile = b.dataset.gp;
+  if (YOLO.ws && YOLO.ws.readyState === 1) { try { YOLO.ws.send(JSON.stringify({ profile: YOLO.profile })); } catch (_) {} }
+  toast(YOLO.profile === 'sports' ? '🏀 SPORTS gate — NBA player/ball recognition + court rules'
+                                  : '👥 GENERAL — tracking everyone, no basketball filters');
 });
 
 const CLONE_CFG = { '1': [1, 0], '2': [2, 0], '2o': [2, 0.12], '4': [4, 0] };
