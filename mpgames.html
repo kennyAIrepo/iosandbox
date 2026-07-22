@@ -135,7 +135,7 @@
       <input id="srcUrl" type="text" placeholder="any video link — 🧠 on = cloud fetch (YouTube ok)">
       <button class="opt" id="srcUrlGo" style="flex:0 0 auto">Load</button>
     </div>
-    <label class="chk" id="samAssistRow" style="display:none"><input id="samAssistChk" type="checkbox"> ⚓ SAM anchor-lock — persistent ids + 🎭 masks · URL cloud-streams ONLY (not camera/screenshare yet) · slower</label>
+    <label class="chk" id="samAssistRow" style="display:none"><input id="samAssistChk" type="checkbox"> ⚓ SAM — segment/lock via role-taps · works on 🖥 SCREENSHARE + 🔗 URL cloud-streams · slower</label>
     <div class="row" id="samRoleRow" style="display:none">
       <button class="opt sel" data-samrole="player">🏀 Player</button>
       <button class="opt" data-samrole="ref">🦓 Ref·exclude</button>
@@ -368,7 +368,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-9';           // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-10';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1530,7 +1530,7 @@ function loop() {
       (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '') +
       // 🧠 unmistakable YOLO status — engine state, connection, live player count, round-trip latency
       (YOLO.on ? `<br>🧠 <b style="color:${yoloLive ? '#a6ff5d' : '#ffd15d'}">YOLO ${YOLO.ws && YOLO.ws.readyState === 1 ? (yoloLive ? '● LIVE' : '● connected (no data)') : '○ connecting…'}</b><br>` +
-        `<span style="color:#5d7a94">build ${BUILD}</span><br>${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
+        `<span style="color:#5d7a94">build ${BUILD}</span><br>${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms${YOLO.samMs !== undefined ? ` · sam ${YOLO.samMs}ms` : ''}) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
 
     // 🔒 LOCKED-PLAYER ID CARD — the "prompt to ID on a locked person"
     const lc = document.getElementById('lockCard');
@@ -1661,8 +1661,32 @@ const SRC = {
 function srcSetButtons(kind) {
   document.querySelectorAll('#srcOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.src === kind));
   document.getElementById('srcUrlRow').style.display = kind === 'url' ? 'flex' : 'none';
-  document.getElementById('samAssistRow').style.display = kind === 'url' ? '' : 'none';
+  document.getElementById('samAssistRow').style.display = (kind === 'url' || kind === 'screen') ? '' : 'none';
+  samUiSync();
 }
+
+function samActive() {
+  return !!document.getElementById('samAssistChk')?.checked && (CS.on || SRC.kind === 'screen');
+}
+function samUiSync() {
+  const on = samActive();
+  document.getElementById('samRoleRow').style.display = on ? 'flex' : 'none';
+  document.getElementById('samRoleHint').style.display = on ? '' : 'none';
+  if (!on) YOLO.smasks = [];
+}
+// the ws that carries SAM prompts: subscribe lane in ☁ URL mode, frame lane on 🖥
+function samWs() {
+  const w = CS.on ? CS.ws : YOLO.ws;
+  return (w && w.readyState === 1) ? w : null;
+}
+document.getElementById('samAssistChk').addEventListener('change', (e) => {
+  if (SRC.kind === 'screen' && !CS.on) {
+    const w = samWs();
+    if (w) { try { w.send(JSON.stringify({ cmd: 'sam', on: e.target.checked ? 1 : 0 })); } catch (_) {} }
+    toast(e.target.checked ? '⚓ SAM ON for this share — pick a role and TAP the video' : '⚓ SAM off');
+  }
+  samUiSync();
+});
 
 function srcStopExternal() {
   if (SRC.stream) { SRC.stream.getTracks().forEach(t => t.stop()); SRC.stream = null; }
@@ -1754,6 +1778,12 @@ function srcEnterExternal(kind) {
   if (document.getElementById('skelOnlyChk').checked) { if (S.display !== 'skeletons') applyDisplay('skeletons'); }
   else if (S.display === 'skeletons') applyDisplay('handsBody');
   const skl = document.getElementById('skelOnlyChk').checked;
+  // 🖥 + ⚓ already checked → arm SAM on the frame lane immediately
+  if (kind === 'screen' && document.getElementById('samAssistChk')?.checked) {
+    const w = samWs();
+    if (w) { try { w.send(JSON.stringify({ cmd: 'sam', on: 1 })); } catch (_) {} }
+  }
+  samUiSync();
   toast(kind === 'screen' ? `🖥 sharing — ${skl ? '🦴 skeletons, no hands' : '🖐 hands + body'} · tap a body to lock 🎯`
                           : `🎬 footage — ${skl ? '🦴 skeletons, no hands' : '🖐 hands + body'} · tap a body to lock 🎯`, 4200);
 }
@@ -1825,12 +1855,15 @@ addEventListener('pointerdown', (e) => {
     } else toast(`📐 corner ${CAL.pts.length}/4 set`);
     return;
   }
-  // ☁ SAM role-prompts: ref/court taps are POINT prompts anywhere on the video
-  // (player taps keep the lock-flow below, which also anchors)
-  if (CS.on && CS.role !== 'player' && CS.ws?.readyState === 1) {
-    try { CS.ws.send(JSON.stringify({ cmd: 'anchor', x: 1 - mx, y: ny, role: CS.role })); } catch (_) {}
-    CS.markers.push({ x: mx, y: ny, role: CS.role, t: performance.now() });
-    toast(CS.role === 'ref' ? '🦓 ref prompt sent — excluding on the cloud…' : '🟦 court prompt sent…', 3000);
+  // SAM role-prompts (☁ URL or 🖥 screenshare): ref/court taps are POINT
+  // prompts anywhere on the video (player taps keep the lock-flow below)
+  if (samActive() && CS.role !== 'player') {
+    const w = samWs();
+    if (w) {
+      try { w.send(JSON.stringify({ cmd: 'anchor', x: 1 - mx, y: ny, role: CS.role })); } catch (_) {}
+      CS.markers.push({ x: mx, y: ny, role: CS.role, t: performance.now() });
+      toast(CS.role === 'ref' ? '🦓 ref prompt sent — excluding on the cloud…' : '🟦 court prompt sent…', 3000);
+    }
     return;
   }
   const players = loop._lastPlayers || [];   // last frame's PlayerFrames (set in the loop)
@@ -1842,10 +1875,13 @@ addEventListener('pointerdown', (e) => {
         SRC.lockedIds.add(p.id);
         // ☁+⚓: in cloud-stream, a lock-tap ALSO becomes a SAM anchor prompt —
         // the cloud pins a pixel-mask identity on that exact person
-        if (CS.on && CS.ws?.readyState === 1) {
-          try { CS.ws.send(JSON.stringify({ cmd: 'anchor', x: 1 - mx, y: ny, role: 'player' })); } catch (_) {}
-          CS.markers.push({ x: mx, y: ny, role: 'player', t: performance.now() });
-          toast('⚓ SAM anchoring that player on the cloud…', 2500);
+        if (samActive()) {
+          const w = samWs();
+          if (w) {
+            try { w.send(JSON.stringify({ cmd: 'anchor', x: 1 - mx, y: ny, role: 'player' })); } catch (_) {}
+            CS.markers.push({ x: mx, y: ny, role: 'player', t: performance.now() });
+            toast('⚓ SAM anchoring that player on the cloud…', 2500);
+          }
         }
       }
       toast(SRC.lockedIds.size ? `🎯 locked: ${[...SRC.lockedIds].map(i => 'P' + i).join(' ')}` : '🎯 lock cleared — tracking everyone');
@@ -2085,6 +2121,7 @@ function yoloOnMessage(e) {
       const d = JSON.parse(e.data);
       const arr = yoloMap(d.players ?? d);          // {players, ms} (new) or bare array (old)
       YOLO.serverMs = d.ms ?? 0;
+      YOLO.samMs = d.sms;
       YOLO.gateBlocked = d.filtered ?? 0;           // people the TRAINED gate rejected (crowd/refs)
       // gate-debug overlays (mirrored like everything else)
       YOLO.rej = (d.rej || []).map(b => ({ x: 1 - (b[0] + b[2] / 2), y: b[1] - b[3] / 2, w: b[2], h: b[3] }));
@@ -2204,17 +2241,13 @@ async function csStart(url) {
     setTimeout(() => { if (!settled) { settled = true; rej(new Error('no answer from the cloud in 30s')); } }, 30000);
   });
   YOLO.ws = CS.ws;                                  // HUD + tap-lock see a live socket
-  const sam = document.getElementById('samAssistChk')?.checked;
-  document.getElementById('samRoleRow').style.display = sam ? 'flex' : 'none';
-  document.getElementById('samRoleHint').style.display = sam ? '' : 'none';
+  samUiSync();
   toast('☁ CLOUD-STREAM confirmed — GPU is on it; skeletons appear as packets arrive', 5000);
 }
 function csStop() {
   if (CS.ws) { const w = CS.ws; CS.ws = null; try { w.onclose = null; w.close(); } catch (_) {} }
   CS.on = false; CS.buf = []; CS.meta = null; CS.markers = [];
-  const rr = document.getElementById('samRoleRow'), rh = document.getElementById('samRoleHint');
-  if (rr) rr.style.display = 'none';
-  if (rh) rh.style.display = 'none';
+  samUiSync();
 }
 document.getElementById('samRoleRow').addEventListener('click', (e) => {
   const b = e.target.closest('.opt'); if (!b) return;
