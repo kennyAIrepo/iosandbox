@@ -1312,13 +1312,25 @@ function loop() {
   // 🧠 YOLO engine ON → render ITS tracks; else MoveNet's (fresh within 800ms)
   // ☁ cloud-stream feeder: replay buffered server packets in VIDEO TIME so the
   // overlay lands exactly on the frame it describes (tighter than live vsync)
-  if (CS.on && els.vid.duration) {
-    const vt = els.vid.currentTime;
+  if (CS.on) {
+    // video clock: whichever element is actually advancing (vid = tracker
+    // input, bgVid = display — routing differs per browser/source)
+    const vt = Math.max(els.vid?.currentTime || 0, els.bgVid?.currentTime || 0);
+    CS._vt = vt;
     let fed = 0;
     while (CS.buf.length && CS.buf[0].t <= vt + 0.02 && fed < 8) {
       const pkt = CS.buf.shift();
       if (pkt.t < vt - 1.5) continue;                // stale (after a seek-forward)
-      yoloOnMessage({ data: JSON.stringify(pkt) }); fed++;
+      yoloOnMessage({ data: JSON.stringify(pkt) }); fed++; CS._fed = (CS._fed || 0) + 1;
+    }
+    // FAIL-SAFE: if the video clock never advances (autoplay blocked, element
+    // routing quirk) but packets are piling up, replay them at packet pace —
+    // cloud skeletons MUST show even when sync can't.
+    if (!fed && CS.buf.length > 24 && vt < 0.2) {
+      if (!CS._ff || now - CS._ff > 85) {
+        CS._ff = now;
+        yoloOnMessage({ data: JSON.stringify(CS.buf.shift()) }); CS._fed = (CS._fed || 0) + 1;
+      }
     }
     // broadcast our playhead ~1/s so remote dollhouse views pace to THIS video
     if (!CS._ph || now - CS._ph > 1000) {
@@ -1327,7 +1339,9 @@ function loop() {
     }
   }
   const yoloLive = YOLO.on && (now - YOLO.lastT < 1500);
-  const skelPlayers = yoloLive ? yoloInterp(now) : (mpF ? mpF.players : []);
+  // in ☁ cloud-stream, NEVER silently fall back to local MoveNet — a blank
+  // overlay + the ☁ HUD line is a diagnosable state; a MoveNet overlay is a lie
+  const skelPlayers = yoloLive ? yoloInterp(now) : (CS.on ? [] : (mpF ? mpF.players : []));
   if (yoloLive) loop._lastPlayers = skelPlayers;   // tap-to-lock hits YOLO ids
   // 🏟 room bus — MoveNet/browser path (the YOLO path emits richer packets,
   // with tags/teams/ball, from its ws handler): dollhouse gets live players
@@ -1496,7 +1510,7 @@ function loop() {
       (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '') +
       // 🧠 unmistakable YOLO status — engine state, connection, live player count, round-trip latency
       (YOLO.on ? `<br>🧠 <b style="color:${yoloLive ? '#a6ff5d' : '#ffd15d'}">YOLO ${YOLO.ws && YOLO.ws.readyState === 1 ? (yoloLive ? '● LIVE' : '● connected (no data)') : '○ connecting…'}</b><br>` +
-        `${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
+        `${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
 
     // 🔒 LOCKED-PLAYER ID CARD — the "prompt to ID on a locked person"
     const lc = document.getElementById('lockCard');
