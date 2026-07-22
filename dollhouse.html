@@ -29,13 +29,15 @@
 <canvas id="c"></canvas>
 <div id="panel">
   <h1>🏟 DOLLHOUSE · court replay v0</h1>
-  <div class="mut">Load a <b>court-session .jsonl</b> recorded in mpgames (⏺ REC). Players replay
-  as figures on an orbitable court — the presentation seed of the mid-server sim. v0 places players
-  by COURT-METRES (needs 📐 calibration in the recording; uncalibrated falls back to screen-plane).</div>
+  <div class="mut"><b>LIVE:</b> keep an mpgames tab tracking (🧠 engine + any source — camera /
+  🖥 screenshare / file) and players appear here in real time, reconstructed as avatars on the court.
+  Or load a <b>court-session .jsonl</b> (⏺ REC) to replay. v0 places players by COURT-METRES
+  (needs 📐 calibration; uncalibrated falls back to screen-plane).</div>
   <div style="margin-top:7px">
     <input id="file" type="file" accept=".jsonl,.json,.txt">
   </div>
   <div style="margin-top:5px">
+    <button id="liveBtn" class="sel">🔴 LIVE</button>
     <button id="play">▶ play</button>
     <button id="speed">1×</button>
   </div>
@@ -99,11 +101,20 @@ function puppet(tag, colHex) {
 // pose the puppet: keypoints are 2D image-normalized → drawn on a camera-facing
 // plane above the player's court spot, scaled to ~human height (v0 — a learned
 // 2D→3D lifter like MotionBERT replaces this projection later)
-const _kp = [];
+// SMOOTHING: packets land at ~10Hz with jittery spacing; drawing them raw
+// makes figures freeze-then-teleport. Every target (court position + each
+// skeleton vertex) is blended toward exponentially per rendered frame —
+// ~100ms settle at 60fps — the same trick mpgames' One-Euro banks do.
+const SM = 0.28;
 function posePuppet(p, plr) {
   const c = plr.court;
-  if (c) p.grp.position.set(c.x, 0, c.y);
-  else p.grp.position.set((plr.box[0] + plr.box[2] / 2) * 15 - 5, 0, (plr.box[1] + plr.box[3]) * 8 - 1);
+  const tx = c ? c.x : (plr.box[0] + plr.box[2] / 2) * 15 - 5;
+  const tz = c ? c.y : (plr.box[1] + plr.box[3]) * 8 - 1;
+  if (!p.init) { p.grp.position.set(tx, 0, tz); }
+  else {
+    p.grp.position.x += (tx - p.grp.position.x) * SM;
+    p.grp.position.z += (tz - p.grp.position.z) * SM;
+  }
   const k = plr.k;
   const hipX = (k[11][0] + k[12][0]) / 2, hipY = (k[11][1] + k[12][1]) / 2;
   const span = Math.max(0.02, plr.box[3]);                       // bbox height in image units
@@ -112,22 +123,68 @@ function posePuppet(p, plr) {
   let n = 0;
   for (const [a, b] of EDGES) {
     for (const j of [a, b]) {
-      const vx = -(k[j][0] - hipX) * S, vy = -(k[j][1] - hipY) * S + 0.95;
-      pos.setXYZ(n++, vx, Math.max(0.02, vy), 0);
+      const vx = -(k[j][0] - hipX) * S, vy = Math.max(0.02, -(k[j][1] - hipY) * S + 0.95);
+      if (!p.init) pos.setXYZ(n, vx, vy, 0);
+      else pos.setXYZ(n, pos.getX(n) + (vx - pos.getX(n)) * SM, pos.getY(n) + (vy - pos.getY(n)) * SM, 0);
+      n++;
     }
   }
+  p.init = true;
   pos.needsUpdate = true;
   p.lines.lookAt(camera.position.x, p.lines.position.y, camera.position.z);   // billboard
+}
+
+// ── the ball (authoritative-object seed: rendered from the live stream) ──
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 18, 14),
+  new THREE.MeshStandardMaterial({ color: 0xff8a2a, roughness: .5 }));
+ballMesh.visible = false; scene.add(ballMesh);
+
+// ── LIVE mode — subscribe to the mpgames ROOM BUS (BroadcastChannel =
+// the v0 loopback transport of MULTIPLAYER_SYNC_ARCHITECTURES.md). Packets
+// are the recorder rows, live; render one interval behind between the two
+// latest snapshots (same snapshot-interpolation the engine uses) so ~10Hz
+// tracking draws as smooth motion. File replay takes over when loaded;
+// 🔴 LIVE returns to the stream.
+const LIVE = { want: true, prev: null, curr: null, tPrev: 0, tCurr: 0, lastMsg: 0 };
+const bus = ('BroadcastChannel' in window) ? new BroadcastChannel('hopeos-room') : null;
+if (bus) bus.onmessage = (e) => {
+  const d = e.data;
+  if (!d || d.kind !== 'presence') return;
+  const now = performance.now();
+  LIVE.lastMsg = now;
+  LIVE.prev = LIVE.curr; LIVE.tPrev = LIVE.tCurr;
+  LIVE.curr = d; LIVE.tCurr = now;
+  if (d.cut) { LIVE.prev = null; LIVE.tPrev = 0; }
+};
+
+function lerpPlayers(a) {  // interpolate curr/prev packets by tag → drawable rows
+  const cur = LIVE.curr; if (!cur) return [];
+  const prevBy = new Map((LIVE.prev?.players || []).map(p => [p.tag ?? p.id, p]));
+  return cur.players.map(c => {
+    const p = prevBy.get(c.tag ?? c.id);
+    if (!p || !p.k || !c.k) return c;
+    return { ...c,
+      court: (c.court && p.court) ? { x: p.court.x + (c.court.x - p.court.x) * a, y: p.court.y + (c.court.y - p.court.y) * a } : c.court,
+      box: c.box.map((v, i) => p.box[i] + (v - p.box[i]) * a),
+      k: c.k.map((kp, i) => [p.k[i][0] + (kp[0] - p.k[i][0]) * a, p.k[i][1] + (kp[1] - p.k[i][1]) * a, kp[2]]) };
+  });
 }
 
 // ── playback ────────────────────────────────────────────────────────────
 let frames = [], idx = 0, playing = false, speed = 1, lastT = 0;
 const stat = document.getElementById('stat'), seek = document.getElementById('seek');
+const liveBtn = document.getElementById('liveBtn');
+liveBtn.addEventListener('click', () => {
+  LIVE.want = true; frames = []; idx = 0; playing = false;
+  document.getElementById('play').textContent = '▶ play';
+  liveBtn.classList.add('sel');
+  stat.textContent = 'LIVE — waiting for an mpgames tab (🧠 engine + source on)…';
+});
 document.getElementById('file').addEventListener('change', async (e) => {
   const f = e.target.files?.[0]; if (!f) return;
   const txt = await f.text();
   frames = txt.split('\n').filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
-  idx = 0; playing = true;
+  idx = 0; playing = true; LIVE.want = false; liveBtn.classList.remove('sel');
   document.getElementById('play').textContent = '⏸ pause';
   stat.textContent = `${frames.length} frames · ${(frames.at(-1)?.t / 1000 || 0).toFixed(1)}s · ${new Set(frames.flatMap(fr => fr.players.map(p => p.tag))).size} players`;
 });
@@ -139,6 +196,26 @@ document.getElementById('speed').addEventListener('click', (e) => {
 });
 seek.addEventListener('input', () => { if (frames.length) idx = Math.floor(seek.value / 1000 * (frames.length - 1)); });
 
+function drawRow(players, balls, now) {
+  for (const plr of players) {
+    if (!plr.k || plr.k.length < 17) continue;
+    const tag = plr.tag ?? ('#' + plr.id);
+    const p = puppet(tag, plr.col);
+    p.last = now; p.grp.visible = true;
+    posePuppet(p, plr);
+  }
+  // COAST: a figure whose tag skipped a packet holds its (smoothed) pose for
+  // 450ms before hiding — tracking flicker no longer blinks avatars in/out
+  for (const [, p] of puppets) if (now - (p.last || 0) > 450) p.grp.visible = false;
+  const b = balls && balls[0];
+  if (b) {
+    const bx = b.court ? b.court.x : b.x * 15 - 5, bz = b.court ? b.court.y : b.y * 8 - 1;
+    if (!ballMesh.visible) ballMesh.position.set(bx, 0.9, bz);
+    else { ballMesh.position.x += (bx - ballMesh.position.x) * SM; ballMesh.position.z += (bz - ballMesh.position.z) * SM; }
+    ballMesh.visible = true; ballMesh._last = now;
+  } else if (now - (ballMesh._last || 0) > 600) ballMesh.visible = false;
+}
+
 function tick(now) {
   requestAnimationFrame(tick);
   controls.update();
@@ -148,14 +225,20 @@ function tick(now) {
     seek.value = Math.round(idx / Math.max(1, frames.length - 1) * 1000);
   }
   if (frames.length) {
-    const fr = frames[idx];
-    const live = new Set();
-    for (const plr of fr.players) {
-      if (!plr.k || plr.k.length < 17) continue;
-      live.add(plr.tag);
-      posePuppet(puppet(plr.tag, plr.col), plr);
+    drawRow(frames[idx].players, frames[idx].balls, now);
+  } else if (LIVE.want) {
+    const fresh = now - LIVE.lastMsg < 4000;
+    if (LIVE.curr && fresh) {
+      const span = Math.max(30, LIVE.tCurr - LIVE.tPrev || 100);
+      let a = (now - Math.min(260, span * 1.1) - LIVE.tPrev) / span;   // trail one interval
+      a = Math.max(0, Math.min(1.25, a));
+      drawRow(LIVE.prev ? lerpPlayers(a) : LIVE.curr.players, LIVE.curr.balls, now);
+      stat.textContent = `LIVE · ${LIVE.curr.players.length} players · ${LIVE.curr.cal ? 'court-metres 📐' : 'screen-plane (no 📐)'} · ${LIVE.curr.profile === 'general' ? '👥 general' : '🏀 sports'}`;
+    } else {
+      for (const [, p] of puppets) p.grp.visible = false;
+      ballMesh.visible = false;
+      stat.textContent = 'LIVE — waiting for an mpgames tab (🧠 engine + source on)…';
     }
-    for (const [tag, p] of puppets) p.grp.visible = live.has(tag);
   }
   renderer.render(scene, camera);
 }

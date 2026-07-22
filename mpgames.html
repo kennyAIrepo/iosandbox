@@ -139,7 +139,12 @@
     <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
     <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
     <label class="chk"><input id="sizeChk" type="checkbox" checked> 🙈 ignore small / far figures (audience, refs at distance)</label>
-    <label class="chk"><input id="yoloChk" type="checkbox"> 🧠 Machine training engine (localhost) — many players + persistent ids · needs serve.py</label>
+    <label class="chk"><input id="yoloChk" type="checkbox"> 🧠 Machine training engine — many players + persistent ids</label>
+    <div class="row" id="yoloSrvRow">
+      <input id="yoloSrv" type="text" placeholder="ws://localhost:8765">
+      <button class="opt" id="yoloSrvGo" style="flex:0 0 auto">Set</button>
+    </div>
+    <div class="sname">TRACKING SERVER — local bridge by default · paste a cloud <b>wss://</b> URL to run this same page off the cloud GPU (works from phones) · or open with <b>?server=wss://…</b></div>
     <div class="row" id="gateProfOpts">
       <button class="opt sel" data-gp="sports">🏀 Sports · NBA</button>
       <button class="opt" data-gp="general">👥 General</button>
@@ -157,6 +162,10 @@
       <button class="opt" id="recBtn">⏺ REC session</button>
     </div>
     <div class="sname">records tracked players (tags · teams · court-metres · keypoints) to a .jsonl — the TRAINING DATA for avatar retargeting, behavior models & the mid-server dollhouse</div>
+    <div class="row">
+      <button class="opt" id="dollBtn">🏟 Dollhouse · live 3D court</button>
+    </div>
+    <div class="sname">opens the reconstruction view in a new tab — it renders THIS tab's live tracking (players · teams · court-metres · skeletons · ball) as avatars on an orbitable court, and replays ⏺ recordings</div>
   </div>
   <input type="file" id="srcFile" accept="video/*" style="display:none">
   <div class="sec">
@@ -407,6 +416,12 @@ const CAL_WORLD = [{ x: 0, y: 0 }, { x: 4.88, y: 0 }, { x: 4.88, y: 5.79 }, { x:
 const REG = { ents: new Map(), alias: new Map(), nextTag: 0 };           // stable identity registry
 const TAGS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 const REC = { on: false, rows: [], t0: 0 };                              // ⏺ session recorder
+// 🏟 ROOM BUS — v0 loopback transport of the sync architecture (see
+// MULTIPLAYER_SYNC_ARCHITECTURES.md §2/§6): the stats-extraction package
+// (same rows ⏺ REC writes) broadcast LIVE to same-origin views. dollhouse
+// subscribes and reconstructs the court in 3D in real time. Swapping this
+// for WebRTC/PartyKit later changes the transport, not the packet.
+const ROOM = ('BroadcastChannel' in window) ? new BroadcastChannel('hopeos-room') : null;
 const dvid = document.getElementById('dvid'), dctx = dvid.getContext('2d');
 
 // ─────────────── MULTIPLAYER (opt-in; single = original stack) ───────────────
@@ -1291,6 +1306,19 @@ function loop() {
   const yoloLive = YOLO.on && (now - YOLO.lastT < 1500);
   const skelPlayers = yoloLive ? yoloInterp(now) : (mpF ? mpF.players : []);
   if (yoloLive) loop._lastPlayers = skelPlayers;   // tap-to-lock hits YOLO ids
+  // 🏟 room bus — MoveNet/browser path (the YOLO path emits richer packets,
+  // with tags/teams/ball, from its ws handler): dollhouse gets live players
+  // no matter which engine is tracking. ~12Hz throttle.
+  if (ROOM && !yoloLive && S.mp && mpF && mpF.players.length && now - (ROOM._t || 0) > 80) {
+    ROOM._t = now;
+    try {
+      ROOM.postMessage({ v: 1, kind: 'presence', t: Math.round(now), cut: false, cal: !!CAL.H, profile: 'general',
+        players: mpF.players.map(p => ({ tag: 'P' + p.id, id: p.id, team: null, col: null,
+          court: courtXY(feetOf(p)), box: [p.bbox.x, p.bbox.y, p.bbox.w, p.bbox.h],
+          k: p.body2D.map(q => [q.x, q.y, q.score ?? 0]) })),
+        balls: [] });
+    } catch (_) {}
+  }
   // adaptive size-gate reference: median tracked-player height this frame —
   // on a WIDE broadcast shot every player is small, so a FIXED threshold
   // (0.17, webcam-tuned) deleted ALL of them. Median-relative survives any zoom.
@@ -1821,6 +1849,20 @@ document.getElementById('calibBtn').addEventListener('click', () => {
 document.getElementById('calibClr').addEventListener('click', () => {
   CAL.H = null; CAL.pts = []; CAL.picking = false; toast('📐 court calibration cleared');
 });
+{
+  const inp = document.getElementById('yoloSrv');
+  inp.value = yoloServerUrl();
+  document.getElementById('yoloSrvGo').addEventListener('click', () => {
+    const v = inp.value.trim() || 'ws://localhost:8765';
+    localStorage.setItem('hopeos-yolo-server', v);
+    toast('🧠 tracking server → ' + v);
+    if (YOLO.on) { try { YOLO.ws?.close(); } catch (_) {} }   // auto-reconnects to the new URL
+  });
+}
+document.getElementById('dollBtn').addEventListener('click', () => {
+  window.open('dollhouse.html', '_blank');
+  toast('🏟 dollhouse opened — it renders this tab\'s live tracking (turn on 🧠 + a source)');
+});
 document.getElementById('recBtn').addEventListener('click', (e) => {
   if (!REC.on) {
     REC.on = true; REC.rows = []; REC.t0 = performance.now();
@@ -1895,9 +1937,19 @@ function yoloBright(hex) {
   const mix = (v) => Math.round(v + (255 - v) * 0.45);
   return `rgb(${mix(r)},${mix(g)},${mix(b)})`;
 }
+// TRACKING-SERVER pointer: ?server=wss://… → saved; else saved setting; else
+// local bridge. The page is a THIN CLIENT — swapping this URL is the entire
+// difference between "my desktop's GPU" and "the cloud 5090" (phones incl.).
+function yoloServerUrl() {
+  return localStorage.getItem('hopeos-yolo-server') || 'ws://localhost:8765';
+}
+{
+  const qs = new URLSearchParams(location.search).get('server');
+  if (qs) localStorage.setItem('hopeos-yolo-server', qs);
+}
 function yoloConnect() {
-  try { YOLO.ws = new WebSocket('ws://localhost:8765'); }
-  catch (e) { toast('🧠 could not open ws — is serve.py running?', 5000); YOLO.on = false; return; }
+  try { YOLO.ws = new WebSocket(yoloServerUrl()); }
+  catch (e) { toast('🧠 could not open ws — check the tracking-server URL', 5000); YOLO.on = false; return; }
   YOLO.ws.binaryType = 'arraybuffer';
   YOLO.ws.onopen = () => {
     toast('🧠 YOLO server connected — tracking on the GPU');
@@ -1943,6 +1995,23 @@ function yoloConnect() {
             k: p.body2D.map(k => [+k.x.toFixed(4), +k.y.toFixed(4), +(k.score ?? 0).toFixed(2)])
           }))
         }));
+      }
+      // 🏟 LIVE ROOM BUS: broadcast this snapshot as a presence packet (the
+      // recorder row, live) — dollhouse reconstructs the court from it in
+      // real time. Fire-and-forget; no listener = no cost that matters.
+      if (ROOM) {
+        try {
+          ROOM.postMessage({ v: 1, kind: 'presence', t: Math.round(t), cut: !!d.cut, cal: !!CAL.H,
+            profile: YOLO.profile,
+            players: arr.map(p => ({
+              tag: p.tag, id: p.id, team: p.team, col: p.col,
+              court: courtXY(feetOf(p)),
+              box: [p.bbox.x, p.bbox.y, p.bbox.w, p.bbox.h],
+              k: p.body2D.map(q => [q.x, q.y, q.score ?? 0])
+            })),
+            balls: (YOLO.balls || []).map(b => ({ x: b.x, y: b.y, r: b.r, court: courtXY({ x: b.x, y: b.y + b.r }) }))
+          });
+        } catch (_) {}
       }
       // COAST: remember each id's last pose + per-keypoint velocity, so a brief
       // server gap (one missed detection) is bridged by dead-reckoning instead

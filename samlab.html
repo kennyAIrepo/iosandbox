@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hopeOS · SAM Lab — prompt · track · judge</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  html,body { margin:0; height:100%; background:#0a0d13; color:#d5e8f2; font:13px/1.55 ui-monospace,Consolas,monospace; }
+  #wrap { display:grid; grid-template-columns: 330px 1fr; gap:12px; padding:12px; height:calc(100vh - 24px); }
+  #side { overflow-y:auto; background:#101622; border:1px solid #23324a; border-radius:12px; padding:14px; }
+  #main { display:flex; flex-direction:column; gap:8px; min-width:0; }
+  h1 { font-size:15px; color:#66e0ff; margin:0 0 8px; letter-spacing:.06em; }
+  h2 { font-size:12px; color:#8fd8ff; margin:14px 0 4px; text-transform:uppercase; letter-spacing:.1em; }
+  .mut { color:#7d92a6; font-size:11.5px; }
+  button { font:inherit; background:#1b2740; color:#cfe; border:1px solid #38507e; border-radius:8px; padding:7px 12px; cursor:pointer; margin:2px 4px 2px 0; }
+  button.sel { background:#2f66c8; border-color:#7fb0ff; color:#fff; }
+  button.role-player.sel { background:#1d7a3a; border-color:#5dff7d; }
+  button.role-ref.sel { background:#8a5a1d; border-color:#ffb15d; }
+  button.role-court.sel { background:#1d4f8a; border-color:#5db8ff; }
+  button:disabled { opacity:.4; cursor:default; }
+  #cv { width:100%; flex:1; min-height:0; background:#000; border-radius:12px; border:1px solid #23324a; cursor:crosshair; object-fit:contain; }
+  #bar { display:flex; align-items:center; gap:8px; }
+  #seek { flex:1; accent-color:#66e0ff; }
+  #stat { white-space:pre-wrap; background:#0d1420; border-radius:8px; padding:8px 10px; margin-top:8px; font-size:11.5px; min-height:34px; }
+  input[type=file] { font:inherit; }
+  textarea { width:100%; background:#0d1420; color:#d5e8f2; border:1px solid #23324a; border-radius:8px; font:inherit; padding:6px; }
+  .step { margin:6px 0; padding-left:8px; border-left:2px solid #2b4c7d; }
+  .step b { color:#aee6ff; }
+  ol { padding-left:18px; margin:6px 0; }
+  li { margin:4px 0; }
+  .key { color:#ffd15d; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="side">
+    <h1>🎯 SAM LAB · prompt → track → judge</h1>
+    <div class="mut">You are validating <b>SAM 2.1-small</b> as our tap-to-lock + court + <b>referee-exclusion</b>
+    engine. Your taps are the prompts; SAM locks a pixel-mask on that exact person/region and follows it
+    through the clip. You judge whether the lock HOLDS.</div>
+
+    <h2>How to run a session</h2>
+    <ol>
+      <li><b>Load a video</b> (the NBA clip works) ↓</li>
+      <li>Seek in the preview, then <b>Grab clip</b> (~8s from that point)</li>
+      <li>Pick a role → <b>tap that person on the big canvas</b>:
+        <br>🏀 <span class="key">Player</span> — tap 1–2 players you want locked
+        <br>🦓 <span class="key">Ref</span> — tap EACH referee once (this is the ref fix!)
+        <br>🟦 <span class="key">Court</span> — tap an empty patch of floor</li>
+      <li><b>Propagate</b> — SAM tracks every tapped object through all frames</li>
+      <li><b>Play</b> and scrub. Judge it (next section), file the verdict.</li>
+    </ol>
+
+    <h2>What to judge (the keypoints)</h2>
+    <ol>
+      <li><b>Lock persistence:</b> does a tapped player's mask survive screens, crossings, occlusions —
+        without jumping to a different person? (This replaces tap-to-lock.)</li>
+      <li><b>Ref exclusion:</b> once tapped, does each ref stay masked the whole clip?
+        3 taps/game = refs solved at runtime, no training.</li>
+      <li><b>Court edges:</b> does the floor mask hug the real boundary (baseline, sidelines)?
+        (This replaces the color-blob heuristic.)</li>
+      <li><b>Mask quality on smalls:</b> distant players — usable silhouettes or mush?
+        (Decides small vs base+.)</li>
+    </ol>
+
+    <h2>1 · Video</h2>
+    <input id="vfile" type="file" accept="video/*">
+    <video id="vprev" controls muted style="width:100%; border-radius:8px; margin-top:6px; display:none"></video>
+    <div style="margin-top:6px">
+      <button id="grab" disabled>⏺ Grab clip (8s @ 12fps)</button>
+    </div>
+
+    <h2>2 · Prompts</h2>
+    <div>
+      <button class="role-player sel" data-role="player">🏀 Player</button>
+      <button class="role-ref" data-role="ref">🦓 Ref</button>
+      <button class="role-court" data-role="court">🟦 Court</button>
+    </div>
+    <div style="margin-top:4px">
+      <button id="prop" disabled>🚀 Propagate</button>
+      <button id="clearObjs" disabled>✕ Clear prompts</button>
+    </div>
+    <div class="mut">Tap on the canvas at the CURRENT frame. Add prompts on any frame (scrub first), then Propagate again.</div>
+
+    <h2>3 · Verdict → feeds training</h2>
+    <div>
+      <button id="fbGood">✔ holds up</button>
+      <button id="fbBad">✘ breaks</button>
+    </div>
+    <textarea id="fbNote" rows="3" placeholder="what broke / what impressed — e.g. 'ref #2 mask jumped to player at ~4s', 'court edge bleeds into apron'"></textarea>
+    <div style="margin-top:4px"><button id="fbSend">📨 File verdict</button></div>
+
+    <div id="stat">connecting…</div>
+  </div>
+
+  <div id="main">
+    <canvas id="cv"></canvas>
+    <div id="bar">
+      <button id="play">▶</button>
+      <input id="seek" type="range" min="0" max="0" value="0">
+      <span id="ftxt" class="mut">0/0</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const SRV = new URLSearchParams(location.search).get('server') || 'ws://localhost:8788';
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const stat = document.getElementById('stat'), seek = document.getElementById('seek'), ftxt = document.getElementById('ftxt');
+const ROLE_COL = { player: '#5dff7d', ref: '#ffb15d', court: '#5db8ff' };
+const S = { frames: [], masks: new Map(), cur: 0, role: 'player', playing: false, ws: null, ready: false, prompts: [] };
+
+function say(t) { stat.textContent = t; }
+
+// ── websocket ─────────────────────────────────────────────────────────────
+function connect() {
+  const ws = new WebSocket(SRV);
+  ws.binaryType = 'arraybuffer';
+  S.ws = ws;
+  ws.onopen = () => say('✅ connected to SAM on the cloud GPU — load a video (step 1)');
+  ws.onclose = () => { say('⚠ server connection lost — is the tunnel/samlab.py up? retrying in 3s'); setTimeout(connect, 3000); };
+  ws.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'ready') { S.ready = true; say(`🎞 ${d.frames} frames on the GPU — pick a role and TAP someone (step 2)`); enable(); }
+    if (d.type === 'prompted') { say(`🎯 locked prompt #${d.obj} (${d.role}) — add more taps or hit 🚀 Propagate`); }
+    if (d.type === 'masks') { S.masks.set(d.frame, d.objs); if (d.frame === S.cur) draw(); }
+    if (d.type === 'done') { say(`🚀 propagated in ${d.secs}s — PLAY it and judge (see keypoints). Verdict when ready.`); }
+    if (d.type === 'objs_reset') { S.masks.clear(); S.prompts = []; draw(); say('prompts cleared — tap again'); }
+    if (d.type === 'feedback_ok') { say('📨 verdict filed — it feeds the training loop. Run another clip or more taps.'); }
+  };
+}
+connect();
+function enable() {
+  document.getElementById('prop').disabled = false;
+  document.getElementById('clearObjs').disabled = false;
+}
+
+// ── clip extraction ───────────────────────────────────────────────────────
+const vprev = document.getElementById('vprev');
+document.getElementById('vfile').addEventListener('change', (e) => {
+  const f = e.target.files?.[0]; if (!f) return;
+  vprev.src = URL.createObjectURL(f); vprev.style.display = 'block';
+  document.getElementById('grab').disabled = false;
+  say('seek the preview to an interesting moment, then ⏺ Grab clip');
+});
+document.getElementById('grab').addEventListener('click', async () => {
+  const FPS = 12, SECS = 8, W = 960;
+  const t0 = vprev.currentTime;
+  const scale = W / vprev.videoWidth;
+  const Hh = Math.round(vprev.videoHeight * scale);
+  const oc = document.createElement('canvas'); oc.width = W; oc.height = Hh;
+  const octx = oc.getContext('2d');
+  S.frames = []; S.masks.clear(); S.prompts = []; S.ready = false;
+  const n = FPS * SECS;
+  say('⏳ extracting ' + n + ' frames…');
+  const blobs = [];
+  for (let i = 0; i < n; i++) {
+    vprev.currentTime = t0 + i / FPS;
+    await new Promise(r => vprev.onseeked = r);
+    octx.drawImage(vprev, 0, 0, W, Hh);
+    const blob = await new Promise(r => oc.toBlob(r, 'image/jpeg', 0.78));
+    blobs.push(blob);
+    S.frames.push(await createImageBitmap(oc));
+    if (i % 12 === 0) say(`⏳ extracting ${i}/${n}…`);
+  }
+  seek.max = n - 1; seek.value = 0; S.cur = 0; draw();
+  say('⏫ uploading to the GPU…');
+  S.ws.send(JSON.stringify({ type: 'begin', count: n }));
+  for (const b of blobs) S.ws.send(await b.arrayBuffer());
+});
+
+// ── roles + tapping ───────────────────────────────────────────────────────
+document.querySelectorAll('[data-role]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-role]').forEach(x => x.classList.toggle('sel', x === b));
+  S.role = b.dataset.role;
+}));
+cv.addEventListener('click', (e) => {
+  if (!S.ready || !S.frames.length) return;
+  const r = cv.getBoundingClientRect();
+  const bmp = S.frames[S.cur];
+  const sc = Math.min(r.width / bmp.width, r.height / bmp.height);
+  const dx = (r.width - bmp.width * sc) / 2, dy = (r.height - bmp.height * sc) / 2;
+  const x = (e.clientX - r.left - dx) / (bmp.width * sc), y = (e.clientY - r.top - dy) / (bmp.height * sc);
+  if (x < 0 || x > 1 || y < 0 || y > 1) return;
+  S.prompts.push({ frame: S.cur, x, y, role: S.role });
+  S.ws.send(JSON.stringify({ type: 'prompt', frame: S.cur, x, y, role: S.role }));
+  draw();
+});
+document.getElementById('prop').addEventListener('click', () => { say('🚀 propagating…'); S.ws.send(JSON.stringify({ type: 'propagate' })); });
+document.getElementById('clearObjs').addEventListener('click', () => S.ws.send(JSON.stringify({ type: 'reset_objs' })));
+
+// ── verdicts ──────────────────────────────────────────────────────────────
+let verdict = null;
+document.getElementById('fbGood').addEventListener('click', (e) => { verdict = 'good'; e.target.classList.add('sel'); document.getElementById('fbBad').classList.remove('sel'); });
+document.getElementById('fbBad').addEventListener('click', (e) => { verdict = 'bad'; e.target.classList.add('sel'); document.getElementById('fbGood').classList.remove('sel'); });
+document.getElementById('fbSend').addEventListener('click', () => {
+  S.ws.send(JSON.stringify({ type: 'feedback', verdict, note: document.getElementById('fbNote').value, prompts: S.prompts, model: 'sam2.1-small' }));
+});
+
+// ── render ────────────────────────────────────────────────────────────────
+function draw() {
+  const bmp = S.frames[S.cur]; if (!bmp) return;
+  if (cv.width !== cv.clientWidth || cv.height !== cv.clientHeight) { cv.width = cv.clientWidth; cv.height = cv.clientHeight; }
+  const sc = Math.min(cv.width / bmp.width, cv.height / bmp.height);
+  const dx = (cv.width - bmp.width * sc) / 2, dy = (cv.height - bmp.height * sc) / 2;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.drawImage(bmp, dx, dy, bmp.width * sc, bmp.height * sc);
+  const objs = S.masks.get(S.cur) || [];
+  for (const o of objs) {
+    ctx.strokeStyle = ROLE_COL[o.role] || '#fff';
+    ctx.fillStyle = (ROLE_COL[o.role] || '#fff') + '2e';
+    ctx.lineWidth = 2.5;
+    for (const poly of o.polys) {
+      ctx.beginPath();
+      poly.forEach(([u, v], i) => { const X = dx + u * bmp.width * sc, Y = dy + v * bmp.height * sc; i ? ctx.lineTo(X, Y) : ctx.moveTo(X, Y); });
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+  }
+  for (const p of S.prompts.filter(p => p.frame === S.cur)) {
+    ctx.fillStyle = ROLE_COL[p.role];
+    ctx.beginPath(); ctx.arc(dx + p.x * bmp.width * sc, dy + p.y * bmp.height * sc, 6, 0, 7); ctx.fill();
+  }
+  ftxt.textContent = `${S.cur + 1}/${S.frames.length}`;
+}
+seek.addEventListener('input', () => { S.cur = +seek.value; draw(); });
+document.getElementById('play').addEventListener('click', (e) => { S.playing = !S.playing; e.target.textContent = S.playing ? '⏸' : '▶'; });
+setInterval(() => { if (S.playing && S.frames.length) { S.cur = (S.cur + 1) % S.frames.length; seek.value = S.cur; draw(); } }, 1000 / 12);
+addEventListener('resize', draw);
+</script>
+</body>
+</html>
