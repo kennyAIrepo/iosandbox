@@ -1310,13 +1310,18 @@ function loop() {
   // 🧠 YOLO engine ON → render ITS tracks; else MoveNet's (fresh within 800ms)
   // ☁ cloud-stream feeder: replay buffered server packets in VIDEO TIME so the
   // overlay lands exactly on the frame it describes (tighter than live vsync)
-  if (CS.on && CS.buf.length && els.vid.duration) {
+  if (CS.on && els.vid.duration) {
     const vt = els.vid.currentTime;
     let fed = 0;
     while (CS.buf.length && CS.buf[0].t <= vt + 0.02 && fed < 8) {
       const pkt = CS.buf.shift();
       if (pkt.t < vt - 1.5) continue;                // stale (after a seek-forward)
       yoloOnMessage({ data: JSON.stringify(pkt) }); fed++;
+    }
+    // broadcast our playhead ~1/s so remote dollhouse views pace to THIS video
+    if (!CS._ph || now - CS._ph > 1000) {
+      CS._ph = now;
+      if (CS.ws?.readyState === 1) { try { CS.ws.send(JSON.stringify({ cmd: 'playhead', t: vt })); } catch (_) {} }
     }
   }
   const yoloLive = YOLO.on && (now - YOLO.lastT < 1500);

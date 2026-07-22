@@ -173,15 +173,40 @@ if (bus) bus.onmessage = (e) => { if (e.data?.kind === 'presence') feedPresence(
 }
 function roomUrl() { return localStorage.getItem('hopeos-room-url') || ''; }
 let roomWs = null;
+// Room packets arrive at INGEST pace (often 3× realtime) — replaying them on
+// arrival would fast-forward the court. RB paces them to the PLAYING client's
+// broadcast playhead (or wall-clock from first packet when nobody publishes).
+const RB = { buf: [], head: null, headWall: 0, t0: null, wall0: 0 };
+function roomTick() {
+  if (!RB.buf.length) return;
+  let target;
+  if (RB.head !== null) {
+    target = RB.head + (performance.now() - RB.headWall) / 1000;
+  } else {
+    if (RB.t0 === null) { RB.t0 = RB.buf[0].t; RB.wall0 = performance.now(); }
+    target = RB.t0 + (performance.now() - RB.wall0) / 1000;
+  }
+  let last = null;
+  while (RB.buf.length && RB.buf[0].t <= target) {
+    const p = RB.buf.shift();
+    if (p.t >= target - 2) last = p;
+  }
+  if (last) {
+    feedPresence({ players: last.rows, cal: false, profile: 'sports', cut: last.cut,
+                   balls: (last.balls || []).map(b => ({ x: b[0], y: b[1], r: Math.max(b[2], b[3]) / 2, court: null })) });
+  }
+}
 function roomConnect() {
   const u = roomUrl(); if (!u) return;
   try { roomWs = new WebSocket(u); } catch (_) { return; }
   roomWs.onopen = () => { roomWs.send(JSON.stringify({ role: 'subscribe' })); stat.textContent = 'LIVE · joined cloud room'; };
   roomWs.onmessage = (e) => {
     let d; try { d = JSON.parse(e.data); } catch (_) { return; }
-    if (d.rows) {
-      feedPresence({ players: d.rows, cal: false, profile: 'sports', cut: d.cut,
-                     balls: (d.balls || []).map(b => ({ x: b[0], y: b[1], r: Math.max(b[2], b[3]) / 2, court: null })) });
+    if (d.rows !== undefined && d.t !== undefined) {
+      RB.buf.push(d);                        // paced replay — see roomTick()
+      if (RB.buf.length > 2000) RB.buf.splice(0, 500);
+    } else if (d.type === 'playhead') {
+      RB.head = d.t; RB.headWall = performance.now();
     } else if (d.kind === 'presence') feedPresence(d);
   };
   roomWs.onclose = () => { roomWs = null; setTimeout(roomConnect, 3000); };
@@ -259,6 +284,7 @@ function drawRow(players, balls, now) {
 function tick(now) {
   requestAnimationFrame(tick);
   controls.update();
+  roomTick();
   if (frames.length && playing && now - lastT > 33 / speed) {
     lastT = now;
     idx = (idx + 1) % frames.length;
