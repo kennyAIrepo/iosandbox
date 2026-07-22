@@ -362,7 +362,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-7';           // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-8';           // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1315,9 +1315,11 @@ function loop() {
   // ☁ cloud-stream feeder: replay buffered server packets in VIDEO TIME so the
   // overlay lands exactly on the frame it describes (tighter than live vsync)
   if (CS.on) {
-    // video clock: whichever element is actually advancing (vid = tracker
-    // input, bgVid = display — routing differs per browser/source)
-    const vt = Math.max(els.vid?.currentTime || 0, els.bgVid?.currentTime || 0);
+    // video clock: ONLY the routed URL video (els.vid with a src URL). Never
+    // bgVid — that can be the camera, whose clock is minutes ahead and made
+    // every cloud packet look "stale" (the silent packet-shredder bug).
+    const vt = (els.vid && els.vid.src && !els.vid.srcObject && els.vid.duration > 0)
+      ? els.vid.currentTime : 0;
     CS._vt = vt;
     let fed = 0;
     while (CS.buf.length && CS.buf[0].t <= vt + 0.02 && fed < 8) {
@@ -1325,6 +1327,7 @@ function loop() {
       if (pkt.t < vt - 1.5) continue;                // stale (after a seek-forward)
       yoloOnMessage({ data: JSON.stringify(pkt) }); fed++; CS._fed = (CS._fed || 0) + 1;
     }
+    CS._rx = CS.buf.length + (CS._fed || 0);         // packets seen (diagnostic)
     // FAIL-SAFE: if the video clock never advances (autoplay blocked, element
     // routing quirk) but packets are piling up, replay them at packet pace —
     // cloud skeletons MUST show even when sync can't.
