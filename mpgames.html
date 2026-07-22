@@ -1664,6 +1664,10 @@ async function srcActivate(kind) {
       if (YOLO.on) {
         await csStart(url);        // ☁ the 5090 watches the URL; we just render
       } else {
+        if (!/\.(mp4|webm|mov|m3u8)(\?|$)/i.test(url)) {
+          toast('that looks like a WEBPAGE link — turn ON 🧠 (cloud engine) and Load again: the GPU will fetch the actual video from it', 8000);
+          return;
+        }
         await srcRoute(url);
       }
     } else if (kind === 'file') {
