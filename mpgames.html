@@ -135,7 +135,7 @@
       <input id="srcUrl" type="text" placeholder="any video link — 🧠 on = cloud fetch (YouTube ok)">
       <button class="opt" id="srcUrlGo" style="flex:0 0 auto">Load</button>
     </div>
-    <label class="chk" id="samAssistRow" style="display:none"><input id="samAssistChk" type="checkbox"> ⚓ SAM anchor-lock (cloud) — strongest id persistence · slower processing</label>
+    <label class="chk" id="samAssistRow" style="display:none"><input id="samAssistChk" type="checkbox"> ⚓ SAM anchor-lock — persistent ids + 🎭 masks · URL cloud-streams ONLY (not camera/screenshare yet) · slower</label>
     <div class="sname">🖥 = share a tab (YouTube / any live page) · video sources run un-mirrored</div>
     <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
     <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
@@ -2139,10 +2139,22 @@ async function csStart(url) {
   try { YOLO.ws?.close(); } catch (_) {}
   CS.on = true;
   toast('☁ cloud ingest starting — the GPU is fetching the stream…', 6000);
+  // STRUCTURAL RULE: the overlay pipeline NEVER waits on the video element.
+  // We resolve as soon as the cloud confirms the stream (first meta); the
+  // video loads asynchronously and may even fail (hotlink-blocked CDNs) —
+  // tracking renders regardless, and playback upgrades to OUR proxy when the
+  // server finishes downloading (second meta).
   await new Promise((res, rej) => {
     const ws = new WebSocket(yoloServerUrl());
     CS.ws = ws;
     let settled = false;
+    const tryPlay = (u) => {
+      if (!u || CS._playing === u) return;
+      CS._playing = u;
+      srcRoute(u).then(
+        () => toast('☁ video playing', 2000),
+        () => { if (CS.on) toast('⚠ video preview blocked by the source site — overlay continues; waiting for the cloud copy…', 6000); });
+    };
     ws.onopen = () => {
       ws.send(JSON.stringify({ role: 'subscribe' }));
       ws.send(JSON.stringify({ cmd: 'ingest', url, sam: document.getElementById('samAssistChk')?.checked ? 1 : 0 }));
@@ -2151,17 +2163,19 @@ async function csStart(url) {
       let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
       if (d.meta && d.resolved) {
         CS.meta = d;
-        if (!settled) { settled = true; srcRoute(d.resolved).then(res, rej); }
+        if (!settled) { settled = true; res(); }
+        tryPlay(d.resolved);                   // 1st meta: CDN url · 2nd meta: our proxy
       } else if (d.t !== undefined) {
         CS.buf.push(d);
-      } else if (d.type === 'eof') toast('☁ stream ended on the server');
+      } else if (d.type === 'ingest_status') toast('☁ ' + d.msg, 4000);
+      else if (d.type === 'eof') toast('☁ stream ended on the server');
       else if (d.type === 'ingest_error') toast('☁ ingest failed: ' + (d.msg || 'unknown'), 9000);
     };
-    ws.onclose = () => { if (!settled) { settled = true; rej(new Error('cloud ingest connection failed')); } else if (CS.on) toast('☁ cloud stream disconnected'); };
-    setTimeout(() => { if (!settled) { settled = true; rej(new Error('cloud ingest timeout — bad URL or resolver blocked')); } }, 45000);
+    ws.onclose = () => { if (!settled) { settled = true; rej(new Error('cloud connection failed — check the tracking-server URL')); } else if (CS.on) toast('☁ cloud stream disconnected'); };
+    setTimeout(() => { if (!settled) { settled = true; rej(new Error('no answer from the cloud in 30s')); } }, 30000);
   });
   YOLO.ws = CS.ws;                                  // HUD + tap-lock see a live socket
-  toast('☁ CLOUD-STREAM — the GPU tracks the video, this device only renders', 5000);
+  toast('☁ CLOUD-STREAM confirmed — GPU is on it; skeletons appear as packets arrive', 5000);
 }
 function csStop() {
   if (CS.ws) { const w = CS.ws; CS.ws = null; try { w.onclose = null; w.close(); } catch (_) {} }
