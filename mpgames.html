@@ -362,6 +362,8 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
+const BUILD = 'cs-7';           // bumped every deploy — STALE CACHE DETECTOR
+console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
     .map(id => [id, document.getElementById(id)]));
@@ -1510,7 +1512,7 @@ function loop() {
       (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '') +
       // 🧠 unmistakable YOLO status — engine state, connection, live player count, round-trip latency
       (YOLO.on ? `<br>🧠 <b style="color:${yoloLive ? '#a6ff5d' : '#ffd15d'}">YOLO ${YOLO.ws && YOLO.ws.readyState === 1 ? (yoloLive ? '● LIVE' : '● connected (no data)') : '○ connecting…'}</b><br>` +
-        `${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
+        `<span style="color:#5d7a94">build ${BUILD}</span><br>${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
 
     // 🔒 LOCKED-PLAYER ID CARD — the "prompt to ID on a locked person"
     const lc = document.getElementById('lockCard');
