@@ -27,3 +27,6 @@ assets/audio/*.mp3
 *.pt
 *.onnx
 *.engine
+
+# local-only footage samples — never deploy (source-video ToS + size)
+clips/

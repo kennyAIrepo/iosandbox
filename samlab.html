@@ -42,8 +42,9 @@
 
     <h2>How to run a session</h2>
     <ol>
-      <li><b>Load a video</b> (the NBA clip works) ↓</li>
-      <li>Seek in the preview, then <b>Grab clip</b> (~8s from that point)</li>
+      <li><b>Footage:</b> click <b>🎬 NBA sample</b> (instant) — or 🖥 share the tab
+        playing any game footage — or load a file ↓</li>
+      <li>File/share: get to the action, then <b>Grab clip</b> (8s)</li>
       <li>Pick a role → <b>tap that person on the big canvas</b>:
         <br>🏀 <span class="key">Player</span> — tap 1–2 players you want locked
         <br>🦓 <span class="key">Ref</span> — tap EACH referee once (this is the ref fix!)
@@ -64,12 +65,18 @@
         (Decides small vs base+.)</li>
     </ol>
 
-    <h2>1 · Video</h2>
+    <h2>1 · Footage — pick ONE</h2>
+    <div>
+      <button id="sample" style="display:none">🎬 Load NBA sample (preloaded)</button>
+      <button id="shareBtn">🖥 Share screen (YouTube / any tab)</button>
+    </div>
+    <div class="mut">…or a local video file:</div>
     <input id="vfile" type="file" accept="video/*">
     <video id="vprev" controls muted style="width:100%; border-radius:8px; margin-top:6px; display:none"></video>
     <div style="margin-top:6px">
       <button id="grab" disabled>⏺ Grab clip (8s @ 12fps)</button>
     </div>
+    <div class="mut" id="srcHint">🎬 sample = instant, already on the GPU footage · 🖥 share = play the video in another tab, then Grab records 8s LIVE off it</div>
 
     <h2>2 · Prompts</h2>
     <div>
@@ -136,38 +143,91 @@ function enable() {
   document.getElementById('clearObjs').disabled = false;
 }
 
-// ── clip extraction ───────────────────────────────────────────────────────
+// ── clip sources: sample pack · screen share · local file ────────────────
 const vprev = document.getElementById('vprev');
+let shareStream = null;
+
+async function pushFrames(blobs, bmps) {
+  S.frames = bmps; S.masks.clear(); S.prompts = [];
+  seek.max = blobs.length - 1; seek.value = 0; S.cur = 0; draw();
+  say('⏫ uploading ' + blobs.length + ' frames to the GPU…');
+  S.ws.send(JSON.stringify({ type: 'begin', count: blobs.length }));
+  for (const b of blobs) S.ws.send(await b.arrayBuffer());
+}
+
+// 🎬 preloaded sample (local frame pack — hidden if not present on this host)
+fetch('clips/sample/manifest.json').then(r => r.ok ? r.json() : null).then(m => {
+  if (m && m.count) {
+    const b = document.getElementById('sample');
+    b.style.display = '';
+    b.addEventListener('click', async () => {
+      say('🎬 loading sample…');
+      const blobs = [], bmps = [];
+      for (let i = 0; i < m.count; i++) {
+        const bl = await (await fetch(`clips/sample/${String(i).padStart(5, '0')}.jpg`)).blob();
+        blobs.push(bl); bmps.push(await createImageBitmap(bl));
+        if (i % 24 === 0) say(`🎬 loading sample ${i}/${m.count}…`);
+      }
+      await pushFrames(blobs, bmps);
+    });
+  }
+}).catch(() => {});
+
+// 🖥 screen share — play footage in another tab, Grab records it live
+document.getElementById('shareBtn').addEventListener('click', async () => {
+  try {
+    shareStream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: false });
+  } catch (_) { return; }
+  vprev.srcObject = shareStream; vprev.controls = false; vprev.style.display = 'block';
+  await vprev.play();
+  document.getElementById('grab').disabled = false;
+  say('🖥 sharing — get the action playing in the other tab, then ⏺ Grab (records the NEXT 8s live)');
+  shareStream.getVideoTracks()[0].onended = () => { vprev.srcObject = null; vprev.style.display = 'none'; shareStream = null; };
+});
+
 document.getElementById('vfile').addEventListener('change', (e) => {
   const f = e.target.files?.[0]; if (!f) return;
+  if (shareStream) { shareStream.getTracks().forEach(t => t.stop()); shareStream = null; }
+  vprev.srcObject = null; vprev.controls = true;
   vprev.src = URL.createObjectURL(f); vprev.style.display = 'block';
   document.getElementById('grab').disabled = false;
   say('seek the preview to an interesting moment, then ⏺ Grab clip');
 });
+
 document.getElementById('grab').addEventListener('click', async () => {
   const FPS = 12, SECS = 8, W = 960;
-  const t0 = vprev.currentTime;
   const scale = W / vprev.videoWidth;
   const Hh = Math.round(vprev.videoHeight * scale);
   const oc = document.createElement('canvas'); oc.width = W; oc.height = Hh;
   const octx = oc.getContext('2d');
-  S.frames = []; S.masks.clear(); S.prompts = []; S.ready = false;
+  S.ready = false;
   const n = FPS * SECS;
-  say('⏳ extracting ' + n + ' frames…');
-  const blobs = [];
-  for (let i = 0; i < n; i++) {
-    vprev.currentTime = t0 + i / FPS;
-    await new Promise(r => vprev.onseeked = r);
-    octx.drawImage(vprev, 0, 0, W, Hh);
-    const blob = await new Promise(r => oc.toBlob(r, 'image/jpeg', 0.78));
-    blobs.push(blob);
-    S.frames.push(await createImageBitmap(oc));
-    if (i % 12 === 0) say(`⏳ extracting ${i}/${n}…`);
+  const blobs = [], bmps = [];
+  if (shareStream) {
+    // LIVE capture off the shared tab: one frame every 1/12s for 8s
+    say('⏺ recording the shared tab — 8s…');
+    for (let i = 0; i < n; i++) {
+      const t = performance.now();
+      octx.drawImage(vprev, 0, 0, W, Hh);
+      blobs.push(await new Promise(r => oc.toBlob(r, 'image/jpeg', 0.78)));
+      bmps.push(await createImageBitmap(oc));
+      if (i % 12 === 0) say(`⏺ recording ${Math.round(i / FPS)}s/${SECS}s…`);
+      const wait = 1000 / FPS - (performance.now() - t);
+      if (wait > 0) await new Promise(r => setTimeout(r, wait));
+    }
+  } else {
+    const t0 = vprev.currentTime;
+    say('⏳ extracting ' + n + ' frames…');
+    for (let i = 0; i < n; i++) {
+      vprev.currentTime = t0 + i / FPS;
+      await new Promise(r => vprev.onseeked = r);
+      octx.drawImage(vprev, 0, 0, W, Hh);
+      blobs.push(await new Promise(r => oc.toBlob(r, 'image/jpeg', 0.78)));
+      bmps.push(await createImageBitmap(oc));
+      if (i % 12 === 0) say(`⏳ extracting ${i}/${n}…`);
+    }
   }
-  seek.max = n - 1; seek.value = 0; S.cur = 0; draw();
-  say('⏫ uploading to the GPU…');
-  S.ws.send(JSON.stringify({ type: 'begin', count: n }));
-  for (const b of blobs) S.ws.send(await b.arrayBuffer());
+  await pushFrames(blobs, bmps);
 });
 
 // ── roles + tapping ───────────────────────────────────────────────────────
