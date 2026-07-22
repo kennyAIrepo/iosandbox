@@ -152,6 +152,7 @@
     </div>
     <div class="sname">GUIDE GATE — 🏀 fine-tuned player/ball recognition + court & standing rules · 👥 same persistent low-noise tracking of EVERYONE, no basketball logic</div>
     <label class="chk"><input id="gateDbgChk" type="checkbox" checked> 🔬 show ball detection — <b style="color:#ffd15d">◯ yellow = ball</b></label>
+    <label class="chk"><input id="maskChk" type="checkbox" checked> 🎭 SAM masks — <b style="color:#5dff7d">segmented players</b> · <b style="color:#5db8ff">court</b> · thick ring = ⚓ locked (☁ URL mode + ⚓ on)</label>
     <label class="chk"><input id="vsyncChk" type="checkbox" checked> 🎬 sync video ↔ tracking — delays footage so skeletons sit ON players (feels real-time)</label>
     <div class="row">
       <button class="opt" id="calibBtn">📐 Calibrate court · 4 taps</button>
@@ -1403,6 +1404,29 @@ function loop() {
         octx.stroke();
       }
     }
+    // 🎭 SAM SEGMENTATION — the cloud's pixel-masks made VISIBLE: court region
+    // in blue, each anchored player filled in their identity colour; a thick
+    // ring marks your ⚓ tap-locked players.
+    if (yoloLive && document.getElementById('maskChk').checked) {
+      const pr = coverProj();
+      const drawPoly = (poly, fill, stroke, lw) => {
+        octx.beginPath();
+        poly.forEach(([u, v], i) => {
+          const X = pr.ox + u * pr.dw, Y = pr.oy + v * pr.dh;
+          i ? octx.lineTo(X, Y) : octx.moveTo(X, Y);
+        });
+        octx.closePath();
+        if (fill) { octx.fillStyle = fill; octx.fill(); }
+        octx.strokeStyle = stroke; octx.lineWidth = lw; octx.stroke();
+      };
+      for (const poly of (YOLO.courtPoly || [])) drawPoly(poly, 'rgba(93,184,255,0.08)', 'rgba(93,184,255,0.45)', 1.5);
+      for (const o of (YOLO.smasks || [])) {
+        const p = (YOLO.players || []).find(q => q.id === o.id);
+        const col = (p && p.col) || '#5dff7d';
+        const locked = SRC.lockedIds.has(o.id);
+        for (const poly of o.polys) drawPoly(poly, col + '2e', col, locked ? 4.5 : 2);
+      }
+    }
   }
 
   // 5. hand physics bodies (same packs the rigs render → physics matches
@@ -1772,7 +1796,15 @@ addEventListener('pointerdown', (e) => {
     const b = p.bbox;
     if (mx >= b.x && mx <= b.x + b.w && ny >= b.y && ny <= b.y + b.h) {
       if (SRC.lockedIds.has(p.id)) SRC.lockedIds.delete(p.id);
-      else SRC.lockedIds.add(p.id);
+      else {
+        SRC.lockedIds.add(p.id);
+        // ☁+⚓: in cloud-stream, a lock-tap ALSO becomes a SAM anchor prompt —
+        // the cloud pins a pixel-mask identity on that exact person
+        if (CS.on && CS.ws?.readyState === 1) {
+          try { CS.ws.send(JSON.stringify({ cmd: 'anchor', x: 1 - mx, y: ny })); } catch (_) {}
+          toast('⚓ SAM anchoring that player on the cloud…', 2500);
+        }
+      }
       toast(SRC.lockedIds.size ? `🎯 locked: ${[...SRC.lockedIds].map(i => 'P' + i).join(' ')}` : '🎯 lock cleared — tracking everyone');
       return;
     }
@@ -2014,6 +2046,9 @@ function yoloOnMessage(e) {
       // gate-debug overlays (mirrored like everything else)
       YOLO.rej = (d.rej || []).map(b => ({ x: 1 - (b[0] + b[2] / 2), y: b[1] - b[3] / 2, w: b[2], h: b[3] }));
       YOLO.balls = (d.balls || []).map(b => ({ x: 1 - b[0], y: b[1], r: Math.max(b[2], b[3]) / 2 }));
+      // 🎭 SAM segmentation: player masks + recognized court (mirrored like all overlays)
+      if (d.smasks) YOLO.smasks = d.smasks.map(o => ({ id: o.id, polys: o.polys.map(pl => pl.map(([x, y]) => [1 - x, y])) }));
+      if (d.court) YOLO.courtPoly = d.court.map(pl => pl.map(([x, y]) => [1 - x, y]));
       const t = performance.now();
       YOLO.rtt = t - YOLO.lastSend;                 // true round-trip (send→receive, 1 in flight)
       YOLO.lastT = t;
