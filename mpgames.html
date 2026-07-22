@@ -422,6 +422,11 @@ const REC = { on: false, rows: [], t0: 0 };                              // ⏺ 
 // subscribes and reconstructs the court in 3D in real time. Swapping this
 // for WebRTC/PartyKit later changes the transport, not the packet.
 const ROOM = ('BroadcastChannel' in window) ? new BroadcastChannel('hopeos-room') : null;
+// ☁ CLOUD-STREAM: paste a URL while the 🧠 engine is on → the 5090 fetches and
+// tracks the video SERVER-SIDE (no capture, no upload, no tab-share jitter);
+// this device just plays the resolved stream and replays the tracked packets
+// in VIDEO TIME — pixel-tight overlay sync on any device, phones included.
+const CS = { on: false, ws: null, buf: [], meta: null };
 const dvid = document.getElementById('dvid'), dctx = dvid.getContext('2d');
 
 // ─────────────── MULTIPLAYER (opt-in; single = original stack) ───────────────
@@ -1303,6 +1308,17 @@ function loop() {
   }
   const skelMode = S.display === 'skeletons';
   // 🧠 YOLO engine ON → render ITS tracks; else MoveNet's (fresh within 800ms)
+  // ☁ cloud-stream feeder: replay buffered server packets in VIDEO TIME so the
+  // overlay lands exactly on the frame it describes (tighter than live vsync)
+  if (CS.on && CS.buf.length && els.vid.duration) {
+    const vt = els.vid.currentTime;
+    let fed = 0;
+    while (CS.buf.length && CS.buf[0].t <= vt + 0.02 && fed < 8) {
+      const pkt = CS.buf.shift();
+      if (pkt.t < vt - 1.5) continue;                // stale (after a seek-forward)
+      yoloOnMessage({ data: JSON.stringify(pkt) }); fed++;
+    }
+  }
   const yoloLive = YOLO.on && (now - YOLO.lastT < 1500);
   const skelPlayers = yoloLive ? yoloInterp(now) : (mpF ? mpF.players : []);
   if (yoloLive) loop._lastPlayers = skelPlayers;   // tap-to-lock hits YOLO ids
@@ -1586,6 +1602,7 @@ function srcSetButtons(kind) {
 function srcStopExternal() {
   if (SRC.stream) { SRC.stream.getTracks().forEach(t => t.stop()); SRC.stream = null; }
   els.vid.removeAttribute('src'); // clear any URL/file playback
+  if (CS.on) { csStop(); if (YOLO.on) yoloConnect(); }   // leaving ☁ → restore the frame lane
 }
 
 /** Route BOTH videos (detection + background) onto a stream or a media URL. */
@@ -1630,9 +1647,13 @@ async function srcActivate(kind) {
       await srcRoute(stream);
     } else if (kind === 'url') {
       const url = document.getElementById('srcUrl').value.trim();
-      if (!url) { toast('paste a direct .mp4 link first (YouTube → use 🖥 Screen)'); return; }
+      if (!url) { toast(YOLO.on ? 'paste ANY video link — the cloud GPU will fetch it (YouTube ok)' : 'paste a direct .mp4 link first (YouTube → turn on 🧠 for cloud fetch)'); return; }
       srcStopExternal();
-      await srcRoute(url);
+      if (YOLO.on) {
+        await csStart(url);        // ☁ the 5090 watches the URL; we just render
+      } else {
+        await srcRoute(url);
+      }
     } else if (kind === 'file') {
       document.getElementById('srcFile').click();   // continues in the change handler
       return;
@@ -1955,7 +1976,19 @@ function yoloConnect() {
     toast('🧠 YOLO server connected — tracking on the GPU');
     try { YOLO.ws.send(JSON.stringify({ profile: YOLO.profile })); } catch (_) {}
   };
-  YOLO.ws.onmessage = (e) => {
+  YOLO.ws.onmessage = yoloOnMessage;
+  YOLO.ws.onerror = () => toast('🧠 YOLO server not reachable — check the tracking-server URL', 6000);
+  // AUTO-RECONNECT: server restarts (deploys, crashes) must not silently
+  // strand the page on MoveNet — retry every 2s while the engine is on
+  YOLO.ws.onclose = () => {
+    YOLO.inFlight = false;
+    if (YOLO.on && !CS.on) { toast('🧠 server connection lost — auto-reconnecting…'); setTimeout(() => { if (YOLO.on && !CS.on && (!YOLO.ws || YOLO.ws.readyState > 1)) yoloConnect(); }, 2000); }
+  };
+}
+
+// The packet-ingest path — shared by the LIVE frame lane and ☁ cloud-stream
+// replay (which calls it with buffered packets at the right VIDEO time).
+function yoloOnMessage(e) {
     YOLO.inFlight = false;                          // reply received → next frame may go
     try {
       const d = JSON.parse(e.data);
@@ -2032,16 +2065,42 @@ function yoloConnect() {
       for (const p of arr) { if (!YOLO.firstSeen.has(p.id)) YOLO.firstSeen.set(p.id, t); YOLO.lastSeen.set(p.id, t); }
       for (const [id, ls] of YOLO.lastSeen) if (t - ls > 4000) { YOLO.lastSeen.delete(id); YOLO.firstSeen.delete(id); YOLO.banks.delete(id); }
     } catch (_) {}
-  };
-  YOLO.ws.onerror = () => toast('🧠 YOLO server not reachable — run: python serve.py', 6000);
-  // AUTO-RECONNECT: server restarts (deploys, crashes) must not silently
-  // strand the page on MoveNet — retry every 2s while the engine is on
-  YOLO.ws.onclose = () => {
-    YOLO.inFlight = false;
-    if (YOLO.on) { toast('🧠 server connection lost — auto-reconnecting…'); setTimeout(() => { if (YOLO.on && (!YOLO.ws || YOLO.ws.readyState > 1)) yoloConnect(); }, 2000); }
-  };
+}
+
+// ☁ cloud-stream control: ask the room to ingest the URL, play the resolved
+// stream locally, and buffer packets for video-time replay.
+async function csStart(url) {
+  csStop();
+  try { YOLO.ws?.close(); } catch (_) {}
+  CS.on = true;
+  toast('☁ cloud ingest starting — the GPU is fetching the stream…', 6000);
+  await new Promise((res, rej) => {
+    const ws = new WebSocket(yoloServerUrl());
+    CS.ws = ws;
+    let settled = false;
+    ws.onopen = () => { ws.send(JSON.stringify({ role: 'subscribe' })); ws.send(JSON.stringify({ cmd: 'ingest', url })); };
+    ws.onmessage = (ev) => {
+      let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
+      if (d.meta && d.resolved) {
+        CS.meta = d;
+        if (!settled) { settled = true; srcRoute(d.resolved).then(res, rej); }
+      } else if (d.t !== undefined) {
+        CS.buf.push(d);
+      } else if (d.type === 'eof') toast('☁ stream ended on the server');
+      else if (d.type === 'ingest_error') toast('☁ ingest failed: ' + (d.msg || 'unknown'), 9000);
+    };
+    ws.onclose = () => { if (!settled) { settled = true; rej(new Error('cloud ingest connection failed')); } else if (CS.on) toast('☁ cloud stream disconnected'); };
+    setTimeout(() => { if (!settled) { settled = true; rej(new Error('cloud ingest timeout — bad URL or resolver blocked')); } }, 45000);
+  });
+  YOLO.ws = CS.ws;                                  // HUD + tap-lock see a live socket
+  toast('☁ CLOUD-STREAM — the GPU tracks the video, this device only renders', 5000);
+}
+function csStop() {
+  if (CS.ws) { const w = CS.ws; CS.ws = null; try { w.onclose = null; w.close(); } catch (_) {} }
+  CS.on = false; CS.buf = []; CS.meta = null;
 }
 function yoloTick(now) {
+  if (CS.on) return;                                 // ☁ cloud-stream: server watches the video — no upload
   if (!YOLO.on || !YOLO.ws || YOLO.ws.readyState !== 1) return;
   // BACKPRESSURE: never more than ONE frame in flight. The old fixed-rate send
   // queued frames faster than the GPU consumed them → latency grew unboundedly

@@ -41,6 +41,10 @@
     <button id="play">▶ play</button>
     <button id="speed">1×</button>
   </div>
+  <div style="margin-top:5px; display:flex; gap:4px">
+    <input id="roomIn" placeholder="wss:// cloud room (optional)" style="flex:1; background:#0d1420; color:#cfe6f2; border:1px solid #23324a; border-radius:6px; font:inherit; padding:4px 6px">
+    <button id="roomGo">join</button>
+  </div>
   <input id="seek" type="range" min="0" max="1000" value="0">
   <div id="stat">no session loaded</div>
 </div>
@@ -146,16 +150,43 @@ ballMesh.visible = false; scene.add(ballMesh);
 // tracking draws as smooth motion. File replay takes over when loaded;
 // 🔴 LIVE returns to the stream.
 const LIVE = { want: true, prev: null, curr: null, tPrev: 0, tCurr: 0, lastMsg: 0 };
-const bus = ('BroadcastChannel' in window) ? new BroadcastChannel('hopeos-room') : null;
-if (bus) bus.onmessage = (e) => {
-  const d = e.data;
-  if (!d || d.kind !== 'presence') return;
+
+function feedPresence(d) {           // one ingest point for BOTH transports
+  if (!d || !d.players) return;
   const now = performance.now();
   LIVE.lastMsg = now;
   LIVE.prev = LIVE.curr; LIVE.tPrev = LIVE.tCurr;
   LIVE.curr = d; LIVE.tCurr = now;
   if (d.cut) { LIVE.prev = null; LIVE.tPrev = 0; }
-};
+}
+
+// transport 1: same-machine tab (BroadcastChannel loopback)
+const bus = ('BroadcastChannel' in window) ? new BroadcastChannel('hopeos-room') : null;
+if (bus) bus.onmessage = (e) => { if (e.data?.kind === 'presence') feedPresence(e.data); };
+
+// transport 2: the CLOUD ROOM — subscribe to the 5090's hub over the tunnel,
+// so ANY device (phone, Surface Hub) watches the live reconstruction.
+// Set via ?room=wss://… or the panel field; remembered per device.
+{
+  const q = new URLSearchParams(location.search).get('room');
+  if (q) localStorage.setItem('hopeos-room-url', q);
+}
+function roomUrl() { return localStorage.getItem('hopeos-room-url') || ''; }
+let roomWs = null;
+function roomConnect() {
+  const u = roomUrl(); if (!u) return;
+  try { roomWs = new WebSocket(u); } catch (_) { return; }
+  roomWs.onopen = () => { roomWs.send(JSON.stringify({ role: 'subscribe' })); stat.textContent = 'LIVE · joined cloud room'; };
+  roomWs.onmessage = (e) => {
+    let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+    if (d.rows) {
+      feedPresence({ players: d.rows, cal: false, profile: 'sports', cut: d.cut,
+                     balls: (d.balls || []).map(b => ({ x: b[0], y: b[1], r: Math.max(b[2], b[3]) / 2, court: null })) });
+    } else if (d.kind === 'presence') feedPresence(d);
+  };
+  roomWs.onclose = () => { roomWs = null; setTimeout(roomConnect, 3000); };
+}
+roomConnect();
 
 function lerpPlayers(a) {  // interpolate curr/prev packets by tag → drawable rows
   const cur = LIVE.curr; if (!cur) return [];
@@ -174,6 +205,15 @@ function lerpPlayers(a) {  // interpolate curr/prev packets by tag → drawable 
 let frames = [], idx = 0, playing = false, speed = 1, lastT = 0;
 const stat = document.getElementById('stat'), seek = document.getElementById('seek');
 const liveBtn = document.getElementById('liveBtn');
+{
+  const inp = document.getElementById('roomIn');
+  inp.value = roomUrl();
+  document.getElementById('roomGo').addEventListener('click', () => {
+    localStorage.setItem('hopeos-room-url', inp.value.trim());
+    try { roomWs?.close(); } catch (_) {}
+    roomWs = null; roomConnect();
+  });
+}
 liveBtn.addEventListener('click', () => {
   LIVE.want = true; frames = []; idx = 0; playing = false;
   document.getElementById('play').textContent = '▶ play';
