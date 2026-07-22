@@ -132,9 +132,10 @@
       <button class="opt" data-src="file">📁 File</button>
     </div>
     <div class="row" id="srcUrlRow">
-      <input id="srcUrl" type="text" placeholder="direct .mp4 link… (YouTube → use 🖥 Screen)">
+      <input id="srcUrl" type="text" placeholder="any video link — 🧠 on = cloud fetch (YouTube ok)">
       <button class="opt" id="srcUrlGo" style="flex:0 0 auto">Load</button>
     </div>
+    <label class="chk" id="samAssistRow" style="display:none"><input id="samAssistChk" type="checkbox"> ⚓ SAM anchor-lock (cloud) — strongest id persistence · slower processing</label>
     <div class="sname">🖥 = share a tab (YouTube / any live page) · video sources run un-mirrored</div>
     <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
     <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
@@ -1602,6 +1603,7 @@ const SRC = {
 function srcSetButtons(kind) {
   document.querySelectorAll('#srcOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.src === kind));
   document.getElementById('srcUrlRow').style.display = kind === 'url' ? 'flex' : 'none';
+  document.getElementById('samAssistRow').style.display = kind === 'url' ? '' : 'none';
 }
 
 function srcStopExternal() {
@@ -1652,7 +1654,12 @@ async function srcActivate(kind) {
       await srcRoute(stream);
     } else if (kind === 'url') {
       const url = document.getElementById('srcUrl').value.trim();
-      if (!url) { toast(YOLO.on ? 'paste ANY video link — the cloud GPU will fetch it (YouTube ok)' : 'paste a direct .mp4 link first (YouTube → turn on 🧠 for cloud fetch)'); return; }
+      if (!url) {
+        srcSetButtons('url');                        // REVEAL the paste row first
+        document.getElementById('srcUrl').focus();
+        toast(YOLO.on ? '⬇ paste ANY video link below, then Load — the cloud GPU fetches it (YouTube ok)' : '⬇ paste a direct .mp4 link below (YouTube → turn on 🧠 for cloud fetch)', 6000);
+        return;
+      }
       srcStopExternal();
       if (YOLO.on) {
         await csStart(url);        // ☁ the 5090 watches the URL; we just render
@@ -2083,7 +2090,10 @@ async function csStart(url) {
     const ws = new WebSocket(yoloServerUrl());
     CS.ws = ws;
     let settled = false;
-    ws.onopen = () => { ws.send(JSON.stringify({ role: 'subscribe' })); ws.send(JSON.stringify({ cmd: 'ingest', url })); };
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ role: 'subscribe' }));
+      ws.send(JSON.stringify({ cmd: 'ingest', url, sam: document.getElementById('samAssistChk')?.checked ? 1 : 0 }));
+    };
     ws.onmessage = (ev) => {
       let d; try { d = JSON.parse(ev.data); } catch (_) { return; }
       if (d.meta && d.resolved) {
