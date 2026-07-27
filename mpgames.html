@@ -135,7 +135,7 @@
       <input id="srcUrl" type="text" placeholder="any video link — 🧠 on = cloud fetch (YouTube ok)">
       <button class="opt" id="srcUrlGo" style="flex:0 0 auto">Load</button>
     </div>
-    <label class="chk" id="samAssistRow" style="display:none"><input id="samAssistChk" type="checkbox"> ⚓ SAM — segment/lock via role-taps · works on 🖥 SCREENSHARE + 🔗 URL cloud-streams · slower</label>
+    <label class="chk" id="samAssistRow"><input id="samAssistChk" type="checkbox"> ⚓ SAM — segment/lock via role-taps · ANY source (📷 camera incl. — 🟦 floor-tap your own room) · needs 🧠 engine or ☁ URL · slower</label>
     <div class="row" id="samRoleRow" style="display:none">
       <button class="opt sel" data-samrole="player">🏀 Player</button>
       <button class="opt" data-samrole="ref">🦓 Ref·exclude</button>
@@ -158,7 +158,7 @@
     </div>
     <div class="sname">GUIDE GATE — 🏀 fine-tuned player/ball recognition + court & standing rules · 👥 same persistent low-noise tracking of EVERYONE, no basketball logic</div>
     <label class="chk"><input id="gateDbgChk" type="checkbox" checked> 🔬 show ball detection — <b style="color:#ffd15d">◯ yellow = ball</b></label>
-    <label class="chk"><input id="maskChk" type="checkbox" checked> 🎭 SAM masks — <b style="color:#5dff7d">segmented players</b> · <b style="color:#5db8ff">court</b> · thick ring = ⚓ locked (☁ URL mode + ⚓ on)</label>
+    <label class="chk"><input id="maskChk" type="checkbox" checked> 🎭 SAM masks — <b style="color:#5dff7d">segmented players</b> · <b style="color:#5db8ff">court/floor</b> · thick ring = ⚓ locked (any source · ⚓ on)</label>
     <label class="chk"><input id="vsyncChk" type="checkbox" checked> 🎬 sync video ↔ tracking — delays footage so skeletons sit ON players (feels real-time)</label>
     <div class="row">
       <button class="opt" id="calibBtn">📐 Calibrate court · 4 taps</button>
@@ -368,7 +368,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-10';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-11';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -415,7 +415,7 @@ let camStreams = null;             // { stream, bgStream } from initCamera — r
 const YOLO = { on: false, ws: null, players: [], lastT: 0, lastSend: 0, cv: document.createElement('canvas'),
                profile: 'sports',                     // guide-gate: 'sports' (NBA gate) | 'general' (all people)
                firstSeen: new Map(), lastSeen: new Map(), rtt: 0, serverMs: 0,
-               inFlight: false,                       // backpressure: ONE frame in flight, ever
+               inFlight: 0,                           // backpressure: frames in flight (bounded window, see yoloTick)
                prev: null, curr: null, tPrev: 0, tCurr: 0,     // snapshot pair for interpolation
                banks: new Map(),                      // per-id One-Euro banks — kills keypoint jitter
                coast: new Map() };                    // per-id last pose+time — bridge brief detection gaps (no blink)
@@ -1661,12 +1661,16 @@ const SRC = {
 function srcSetButtons(kind) {
   document.querySelectorAll('#srcOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.src === kind));
   document.getElementById('srcUrlRow').style.display = kind === 'url' ? 'flex' : 'none';
-  document.getElementById('samAssistRow').style.display = (kind === 'url' || kind === 'screen') ? '' : 'none';
+  // ⚓ SAM row stays visible on EVERY source — the 🧠 frame lane ships camera/file
+  // frames to the same GPU, so SAM was never actually screenshare-only server-side
   samUiSync();
 }
 
 function samActive() {
-  return !!document.getElementById('samAssistChk')?.checked && (CS.on || SRC.kind === 'screen');
+  // ANY source: ☁ URL rides the subscribe lane; 📷 camera / 🖥 screen / 📁 file
+  // ride the 🧠 frame lane — the server segments whatever frames arrive and
+  // never knew where they came from. Live-room floor/court prompts need this.
+  return !!document.getElementById('samAssistChk')?.checked && (CS.on || YOLO.on);
 }
 function samUiSync() {
   const on = samActive();
@@ -1680,10 +1684,11 @@ function samWs() {
   return (w && w.readyState === 1) ? w : null;
 }
 document.getElementById('samAssistChk').addEventListener('change', (e) => {
-  if (SRC.kind === 'screen' && !CS.on) {
+  if (!CS.on) {                       // frame-lane sources: 📷 camera / 🖥 / 📁 / direct link
     const w = samWs();
     if (w) { try { w.send(JSON.stringify({ cmd: 'sam', on: e.target.checked ? 1 : 0 })); } catch (_) {} }
-    toast(e.target.checked ? '⚓ SAM ON for this share — pick a role and TAP the video' : '⚓ SAM off');
+    if (e.target.checked && !YOLO.on) toast('⚓ SAM runs on the cloud GPU — turn ON 🧠 Machine training engine to arm it', 6000);
+    else toast(e.target.checked ? '⚓ SAM ON — pick a role and TAP the video' : '⚓ SAM off');
   }
   samUiSync();
 });
@@ -1778,8 +1783,8 @@ function srcEnterExternal(kind) {
   if (document.getElementById('skelOnlyChk').checked) { if (S.display !== 'skeletons') applyDisplay('skeletons'); }
   else if (S.display === 'skeletons') applyDisplay('handsBody');
   const skl = document.getElementById('skelOnlyChk').checked;
-  // 🖥 + ⚓ already checked → arm SAM on the frame lane immediately
-  if (kind === 'screen' && document.getElementById('samAssistChk')?.checked) {
+  // ⚓ already checked → (re)arm SAM on the frame lane for the new source
+  if (!CS.on && document.getElementById('samAssistChk')?.checked) {
     const w = samWs();
     if (w) { try { w.send(JSON.stringify({ cmd: 'sam', on: 1 })); } catch (_) {} }
   }
@@ -1836,8 +1841,14 @@ function srcFilterSkip(p) {
   return false;
 }
 addEventListener('pointerdown', (e) => {
-  if (!document.getElementById('lockChk').checked) return;
-  if (S.display !== 'skeletons' || !mt || !S.mp) return;
+  // SAM ref/court taps are POINT prompts anywhere on the video — no skeleton
+  // hit-test needed, so they bypass the lock/display gates. This keeps camera
+  // lab modes promptable: pick 🟦 and tap the floor of your own room.
+  const samPointTap = samActive() && CS.role !== 'player' && !CAL.picking;
+  if (!samPointTap) {
+    if (!document.getElementById('lockChk').checked) return;
+    if (S.display !== 'skeletons' || !mt || !S.mp) return;
+  }
   if (e.target.closest('.panel') || e.target.closest('button') || e.target.closest('input')) return;
   const pr = coverProj();
   const nx = (e.clientX - pr.ox) / pr.dw, ny = (e.clientY - pr.oy) / pr.dh;
@@ -1855,9 +1866,9 @@ addEventListener('pointerdown', (e) => {
     } else toast(`📐 corner ${CAL.pts.length}/4 set`);
     return;
   }
-  // SAM role-prompts (☁ URL or 🖥 screenshare): ref/court taps are POINT
-  // prompts anywhere on the video (player taps keep the lock-flow below)
-  if (samActive() && CS.role !== 'player') {
+  // SAM role-prompts (any source): ref/court taps are POINT prompts anywhere
+  // on the video (player taps keep the lock-flow below)
+  if (samPointTap) {
     const w = samWs();
     if (w) {
       try { w.send(JSON.stringify({ cmd: 'anchor', x: 1 - mx, y: ny, role: CS.role })); } catch (_) {}
@@ -2102,13 +2113,19 @@ function yoloConnect() {
   YOLO.ws.onopen = () => {
     toast('🧠 YOLO server connected — tracking on the GPU');
     try { YOLO.ws.send(JSON.stringify({ profile: YOLO.profile })); } catch (_) {}
+    // ⚓ checked before the engine (or across an auto-reconnect) → (re)arm SAM
+    // on the fresh socket — the server keeps sam per-client, forgotten on close
+    if (document.getElementById('samAssistChk')?.checked) {
+      try { YOLO.ws.send(JSON.stringify({ cmd: 'sam', on: 1 })); } catch (_) {}
+    }
+    samUiSync();
   };
   YOLO.ws.onmessage = yoloOnMessage;
   YOLO.ws.onerror = () => toast('🧠 YOLO server not reachable — check the tracking-server URL', 6000);
   // AUTO-RECONNECT: server restarts (deploys, crashes) must not silently
   // strand the page on MoveNet — retry every 2s while the engine is on
   YOLO.ws.onclose = () => {
-    YOLO.inFlight = false;
+    YOLO.inFlight = 0;
     if (YOLO.on && !CS.on) { toast('🧠 server connection lost — auto-reconnecting…'); setTimeout(() => { if (YOLO.on && !CS.on && (!YOLO.ws || YOLO.ws.readyState > 1)) yoloConnect(); }, 2000); }
   };
 }
@@ -2116,7 +2133,7 @@ function yoloConnect() {
 // The packet-ingest path — shared by the LIVE frame lane and ☁ cloud-stream
 // replay (which calls it with buffered packets at the right VIDEO time).
 function yoloOnMessage(e) {
-    YOLO.inFlight = false;                          // reply received → next frame may go
+    YOLO.inFlight = Math.max(0, YOLO.inFlight - 1); // reply received → a window slot frees
     try {
       const d = JSON.parse(e.data);
       const arr = yoloMap(d.players ?? d);          // {players, ms} (new) or bare array (old)
@@ -2260,14 +2277,22 @@ document.getElementById('samRoleRow').addEventListener('click', (e) => {
 function yoloTick(now) {
   if (CS.on) return;                                 // ☁ cloud-stream: server watches the video — no upload
   if (!YOLO.on || !YOLO.ws || YOLO.ws.readyState !== 1) return;
-  // BACKPRESSURE: never more than ONE frame in flight. The old fixed-rate send
-  // queued frames faster than the GPU consumed them → latency grew unboundedly
-  // and "ghost" skeletons of long-gone players kept arriving. Now the server's
-  // own pace sets the frame rate and worst-case lag = one round-trip.
-  if (YOLO.inFlight && now - YOLO.lastSend < 1500) return;   // 1.5s = stuck-reply escape hatch
+  // PIPELINED BACKPRESSURE: a bounded WINDOW of frames in flight, sized from
+  // the live rtt. ONE-in-flight (the old rule) caps updates at 1/RTT — fine on
+  // localhost (~50fps), but over the cloud tunnel (~170-250ms) it crawls at
+  // 4-6fps: interp spans stretch and skeletons visibly trail the video. A
+  // window of round(rtt/60) (max 3) pipelines uploads so the GPU answers
+  // back-to-back → update rate ≈ window/RTT. The unbounded-queue ghosting the
+  // old comment feared can't return: the window never exceeds 3, the 1.5s
+  // stuck-reply escape resets it, and the bufferedAmount guard stops sends
+  // when the UPLINK is the real bottleneck (else we'd bufferbloat the lag up).
+  const win = Math.min(3, Math.max(1, Math.round((YOLO.rtt || 0) / 60)));
+  if (now - YOLO.lastSend >= 1500) YOLO.inFlight = 0;        // stuck-reply escape hatch
+  if (YOLO.inFlight >= win) return;
+  if (YOLO.ws.bufferedAmount > 384000) return;               // uplink saturated — don't queue more
   if (now - YOLO.lastSend < 40) return;                      // hard cap ~25fps
   const v = els.vid; if (!v.videoWidth) return;
-  YOLO.inFlight = true; YOLO.lastSend = now;
+  YOLO.inFlight++; YOLO.lastSend = now;
   // 960px + q0.65 — the old 640/q0.5 turned far broadcast players into mush
   const cw = 960, ch = Math.round(cw * v.videoHeight / v.videoWidth) || 540;
   YOLO.cv.width = cw; YOLO.cv.height = ch;
@@ -2281,7 +2306,7 @@ function yoloTick(now) {
         new Uint8Array(out, 8).set(new Uint8Array(buf));
         YOLO.ws.send(out);
       });
-    } else YOLO.inFlight = false;
+    } else YOLO.inFlight = Math.max(0, YOLO.inFlight - 1);   // send aborted → free its slot
   }, 'image/jpeg', 0.65);
 }
 
@@ -2345,6 +2370,7 @@ document.getElementById('yoloChk').addEventListener('change', (e) => {
     YOLO.players = []; try { YOLO.ws?.close(); } catch (_) {} YOLO.ws = null;
     toast('🧠 YOLO engine OFF — back to MoveNet');
   }
+  samUiSync();     // ⚓ role picker follows the engine (samActive needs 🧠 or ☁)
 });
 // GUIDE GATE — choose what the cloud tracker recognizes. 'sports' = fine-tuned
 // NBA player/ball gate + court & standing rules; 'general' = same persistent
