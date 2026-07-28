@@ -77,6 +77,13 @@
     box-shadow: 0 0 34px rgba(102,224,255,.35); }
   #startBtn:disabled { opacity: .55; cursor: wait; }
   #bootMsg { margin-top: 16px; font-size: 11px; color: var(--cy); font-family: Consolas, monospace; min-height: 15px; }
+  /* ⏯ on-video playback FAB — the control lives ON the video, not buried in a panel */
+  #vidFab { position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); z-index: 40;
+    width: 62px; height: 62px; border-radius: 50%; font-size: 26px; line-height: 1;
+    background: rgba(10, 20, 32, .74); border: 1.5px solid #2e4a6e; color: #cfe6f2;
+    cursor: pointer; display: none; backdrop-filter: blur(6px);
+    box-shadow: 0 4px 18px rgba(0,0,0,.45); transition: transform .12s, border-color .12s; }
+  #vidFab:hover { transform: translateX(-50%) scale(1.08); border-color: #5db8ff; }
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30;
     background: var(--panel); border: 1px solid var(--edge); color: var(--cy); border-radius: 8px;
     padding: 7px 16px; font-size: 11.5px; opacity: 0; transition: opacity .25s; pointer-events: none; }
@@ -328,6 +335,7 @@
 </div>
 
 <div id="toast"></div>
+<button id="vidFab" title="pause / play (frame holds — tracking stays live)">⏸</button>
 
 <script>
 // Dev safety net (non-module, runs even if the module graph dies): any
@@ -391,7 +399,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-14';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-15';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1717,8 +1725,10 @@ function srcSetButtons(kind) {
   document.getElementById('srcUrlRow').style.display = kind === 'url' ? 'flex' : 'none';
   // ⏯ playback row: only where the PAGE owns the video element (file, or a
   // direct link playing locally) — cloud-stream/camera/screen have no seekable video
-  document.getElementById('vidCtlRow').style.display = (kind === 'file' || (kind === 'url' && !CS.on)) ? 'flex' : 'none';
-  const pb = document.getElementById('vidPauseBtn'); if (pb) pb.textContent = els.vid.paused ? '▶ Play' : '⏸ Pause';
+  const showPb = (kind === 'file' || (kind === 'url' && !CS.on));
+  document.getElementById('vidCtlRow').style.display = showPb ? 'flex' : 'none';
+  document.getElementById('vidFab').style.display = showPb ? '' : 'none';
+  if (showPb) vidSyncBtns();
   // ⚓ SAM row stays visible on EVERY source — the 🧠 frame lane ships camera/file
   // frames to the same GPU, so SAM was never actually screenshare-only server-side
   samUiSync();
@@ -1908,20 +1918,35 @@ document.getElementById('srcOpts').addEventListener('click', (e) => {
 });
 // ⏯ file/link playback — pause HOLDS the frame (tracking + SAM keep running
 // on it, handy for studying masks); play resumes; restart seeks 0.
-document.getElementById('vidPauseBtn').addEventListener('click', (e) => {
+// One toggle, two surfaces: the big on-video FAB + the panel row stay in sync.
+function vidSyncBtns() {
+  const paused = els.vid.paused;
+  document.getElementById('vidPauseBtn').textContent = paused ? '▶ Play' : '⏸ Pause';
+  document.getElementById('vidFab').textContent = paused ? '▶' : '⏸';
+}
+function vidToggle() {
   if (els.vid.paused) {
     els.vid.play().catch(() => {}); els.bgVid.play().catch(() => {});
-    e.target.textContent = '⏸ Pause'; toast('▶ playing');
+    toast('▶ playing');
   } else {
     els.vid.pause(); els.bgVid.pause();
-    e.target.textContent = '▶ Play'; toast('⏸ frame held — masks/skeletons stay live on it');
+    toast('⏸ frame held — masks/skeletons stay live on it');
   }
-});
+  vidSyncBtns();
+}
+document.getElementById('vidPauseBtn').addEventListener('click', vidToggle);
+document.getElementById('vidFab').addEventListener('click', vidToggle);
 document.getElementById('vidRestartBtn').addEventListener('click', () => {
   try { els.vid.currentTime = 0; } catch (_) {}
   els.vid.play().catch(() => {}); els.bgVid.play().catch(() => {});
-  document.getElementById('vidPauseBtn').textContent = '⏸ Pause';
+  vidSyncBtns();
   toast('⏮ from the top');
+});
+// spacebar = pause/play whenever the playback controls are visible
+addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.target.closest('input, textarea, button')) return;
+  if (document.getElementById('vidFab').style.display === 'none') return;
+  e.preventDefault(); vidToggle();
 });
 document.getElementById('srcUrlGo').addEventListener('click', () => srcActivate('url'));
 document.getElementById('srcFile').addEventListener('change', async (e) => {
