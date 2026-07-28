@@ -399,7 +399,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-15';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-16';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -2316,14 +2316,23 @@ function yoloOnMessage(e) {
       }
       if (d.court) YOLO.courtPoly = d.court.map(pl => pl.map(([x, y]) => [1 - x, y]));
       const t = performance.now();
-      YOLO.rtt = t - YOLO.lastSend;                 // true round-trip (send→receive, 1 in flight)
+      // TRUE per-frame RTT: the server echoes OUR capture timestamp (cts), so
+      // now-cts is this exact frame's round trip — immune to the pipelined
+      // window (now-lastSend pairs a reply with the WRONG send and read 7ms
+      // next to gpu 9ms; that garbage churned the vsync clock = video stutter).
+      // Guard: ☁ cloud-stream packets carry VIDEO time in cts, not our clock.
+      const rttRaw = (!CS.on && d.cts && t - d.cts > 0 && t - d.cts < 5000) ? t - d.cts : t - YOLO.lastSend;
+      YOLO.rtt = rttRaw;
+      YOLO.rttEma = YOLO.rttEma ? YOLO.rttEma * 0.85 + rttRaw * 0.15 : rttRaw;
       YOLO.lastT = t;
       // SCENE CUT: never interpolate/filter ACROSS a camera cut — poses teleport
-      if (d.cut) { YOLO.prev = null; YOLO.tPrev = 0; YOLO.banks.clear(); YOLO.coast.clear(); }
+      if (d.cut) { YOLO.prev = null; YOLO.tPrev = 0; YOLO.banks.clear(); YOLO.coast.clear(); YOLO.snaps = []; }
       // stable identity tags (registry re-matches new ids to lost entities)
       regIngest(arr, t);
-      // vsync delay target: round-trip + one interp interval behind
-      VS.delay = Math.min(500, YOLO.rtt + Math.max(40, t - YOLO.tCurr) * 1.1);
+      // vsync delay target: SMOOTHED round-trip + one interp interval behind.
+      // The raw-rtt version made the delayed-video clock chase an oscillating
+      // target — the exact "frame-by-frame pause" stutter on file/screenshare.
+      VS.delay = Math.min(500, YOLO.rttEma + Math.max(40, t - YOLO.tCurr) * 1.1);
       // ONE-EURO per tracked id: the pose model's raw keypoints shake a few px
       // frame-to-frame; filter each id's 17 points at snapshot rate, then CLONE
       // (banks reuse their output arrays — prev/curr must not alias).
@@ -2383,6 +2392,11 @@ function yoloOnMessage(e) {
         } }
       // snapshot pair → the render loop INTERPOLATES between them, so ~10fps
       // server updates draw as smooth 60fps motion instead of frozen steps
+      // SNAPSHOT BUFFER: pipelined replies arrive in bursts, so a 2-snapshot
+      // chain whipsaws. Keep the last ~12; interp picks the bracketing pair
+      // by real timestamps (burst-immune).
+      (YOLO.snaps = YOLO.snaps || []).push({ t, m: new Map(arr.map(p => [p.id, p])), fT: d.cts || 0 });
+      if (YOLO.snaps.length > 12) YOLO.snaps.shift();
       YOLO.prev = YOLO.curr; YOLO.tPrev = YOLO.tCurr; YOLO.fPrev = YOLO.fCurr;
       YOLO.curr = new Map(arr.map(p => [p.id, p])); YOLO.tCurr = t;
       YOLO.fCurr = d.cts || 0;      // capture time of the FRAME this pose describes
@@ -2464,7 +2478,7 @@ function yoloTick(now) {
   // old comment feared can't return: the window never exceeds 3, the 1.5s
   // stuck-reply escape resets it, and the bufferedAmount guard stops sends
   // when the UPLINK is the real bottleneck (else we'd bufferbloat the lag up).
-  const win = Math.min(3, Math.max(1, Math.round((YOLO.rtt || 0) / 60)));
+  const win = Math.min(3, Math.max(1, Math.round((YOLO.rttEma || 0) / 60)));   // smoothed rtt → stable window, no 1↔3 flapping
   if (now - YOLO.lastSend >= 1500) YOLO.inFlight = 0;        // stuck-reply escape hatch
   if (YOLO.inFlight >= win) return;
   if (YOLO.ws.bufferedAmount > 384000) return;               // uplink saturated — don't queue more
@@ -2497,18 +2511,32 @@ function yoloTick(now) {
 // extra display latency, invisible for footage; smoothness is what's usable.
 function yoloInterp(now) {
   if (!YOLO.curr) return [];
-  if (!YOLO.prev || !YOLO.tPrev) return YOLO.players;
-  const span = Math.max(30, YOLO.tCurr - YOLO.tPrev);
-  const delay = Math.min(260, span * 1.1);           // trail by ~one interval
-  let a = (now - delay - YOLO.tPrev) / span;         // 0 = prev pose … 1 = curr pose
+  const S = YOLO.snaps || [];
+  if (S.length < 2) return YOLO.players;
+  // DELAY from the 75th-percentile inter-arrival of the buffer — bursts (two
+  // replies 12ms apart, then a gap) no longer whipsaw the read head the way
+  // raw tCurr-tPrev did. p75 ≈ the real pacing; trail ~1.2 intervals behind.
+  const gaps = [];
+  for (let i = 1; i < S.length; i++) gaps.push(S[i].t - S[i - 1].t);
+  gaps.sort((x, y) => x - y);
+  const p75 = gaps[Math.min(gaps.length - 1, Math.floor(gaps.length * 0.75))];
+  const delay = Math.min(300, Math.max(50, p75 * 1.2));
+  const target = now - delay;
+  // bracketing pair by REAL timestamps (scan from newest; buffer is tiny)
+  let lo = S[S.length - 2], hi = S[S.length - 1];
+  for (let i = S.length - 1; i > 0; i--) {
+    if (S[i - 1].t <= target) { lo = S[i - 1]; hi = S[i]; break; }
+  }
+  const span = Math.max(8, hi.t - lo.t);
+  let a = (target - lo.t) / span;
   a = Math.max(0, Math.min(1.25, a));                // slight extrapolation if late
   // MEASURED sync: the frame-time this interpolated pose describes → vsync
   // renders exactly that buffered video frame (no estimation drift)
-  if (YOLO.fPrev && YOLO.fCurr) YOLO.renderFrameT = YOLO.fPrev + (YOLO.fCurr - YOLO.fPrev) * a;
+  if (lo.fT && hi.fT) YOLO.renderFrameT = lo.fT + (hi.fT - lo.fT) * a;
   else YOLO.renderFrameT = 0;
   const out = [];
-  for (const [id, c] of YOLO.curr) {
-    const p = YOLO.prev.get(id);
+  for (const [id, c] of hi.m) {
+    const p = lo.m.get(id);
     if (!p) { out.push(c); continue; }
     out.push({
       ...c,
