@@ -207,6 +207,38 @@ three.js MHR loader + projective-texture material → B3 depth-occlusion +
 bone capsules into the game collision layer → B4 UV accumulation + effect
 material library.
 
+### 7b. Pixels → USABLE texture — researched stack (2026-07-28)
+
+Four tiers, each shippable alone; SMPL UV space is the common currency:
+
+- **T1 — projective texturing (live, zero install)**: mesh fragments sample
+  the live video through pred_cam_t/focal, clipped by the SAM mask. Real
+  appearance wherever the camera sees, per display frame. Fails only for
+  unseen surfaces (the back).
+- **T2 — persistent skin via DensePose IUV** (installing: `.venv-tex` =
+  detectron2 + DensePose + UVTextureConverter): DensePose maps every person
+  pixel to (body-part, U, V) → splat pixels into the 24-part atlas →
+  UVTextureConverter → SMPL-normal UV texture; accumulate visibility-weighted
+  over the session ⇒ texture that survives turning around. ~15-30ms/frame,
+  runs in the rig lane's cadence, not per display frame.
+- **T3 — unseen-region completion (the "indistinguishable" fill)**:
+  **SMPLitex** (BMVC'23 LDM — conditions on EXACTLY our partial UV map and
+  inpaints the rest; also text-promptable = effect skins for free) or
+  **TexDreamer** (zero-shot, seconds, ATLAS 50k dataset). Run ONCE per
+  identity when enough atlas coverage exists; cache per player tag.
+- **T4 — the ceiling: per-user 3DGS avatar** (GaussianAvatar / RMAvatar /
+  STG-Avatar / GauHuman): minutes of per-user optimization from a short clip
+  on the 5090 ⇒ drivable photoreal avatar incl. clothing wrinkle motion.
+  Adopt once T1-T3 prove the loop.
+- **Topology bridge (one-time)**: DensePose/SMPLitex live in SMPL UV; MHR has
+  its own topology → bake a closest-surface-point SMPL→MHR transfer map once,
+  or render display in SMPL space while MHR stays the stats rig. Flagged as
+  real work, not hand-waved.
+
+Sources: github.com/kuboshizuma/UVTextureConverter · detectron2 DensePose ·
+dancasas.github.io/projects/SMPLitex · TexDreamer (ECCV'24) · rm-avatar.github.io ·
+GaussianAvatar/GauHuman/STG-Avatar (arXiv 2311.08581, 2510.22140).
+
 ## 8. Sources
 
 - https://github.com/facebookresearch/sam3 · https://huggingface.co/facebook/sam3
