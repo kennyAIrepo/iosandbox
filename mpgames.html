@@ -135,6 +135,12 @@
       <input id="srcUrl" type="text" placeholder="any video link — 🧠 on = cloud fetch (YouTube ok)">
       <button class="opt" id="srcUrlGo" style="flex:0 0 auto">Load</button>
     </div>
+    <!-- ⏯ local playback controls — 📁 file / direct 🔗 link (not ☁ cloud-stream) -->
+    <div class="row" id="vidCtlRow" style="display:none">
+      <button class="opt" id="vidPauseBtn">⏸ Pause</button>
+      <button class="opt" id="vidRestartBtn">⏮ Restart</button>
+      <span class="sname" id="vidCtlHint" style="align-self:center">pausing HOLDS the frame — tracking &amp; masks stay live on it</span>
+    </div>
     <label class="chk" id="samAssistRow"><input id="samAssistChk" type="checkbox"> ⚓ SAM — segment/lock via role-taps · ANY source (📷 camera incl. — 🟦 floor-tap your own room) · needs 🧠 engine or ☁ URL · slower</label>
     <div class="row" id="samRoleRow" style="display:none">
       <button class="opt sel" data-samrole="player">🏀 Player</button>
@@ -385,7 +391,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-13';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-14';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1709,6 +1715,10 @@ const SRC = {
 function srcSetButtons(kind) {
   document.querySelectorAll('#srcOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.src === kind));
   document.getElementById('srcUrlRow').style.display = kind === 'url' ? 'flex' : 'none';
+  // ⏯ playback row: only where the PAGE owns the video element (file, or a
+  // direct link playing locally) — cloud-stream/camera/screen have no seekable video
+  document.getElementById('vidCtlRow').style.display = (kind === 'file' || (kind === 'url' && !CS.on)) ? 'flex' : 'none';
+  const pb = document.getElementById('vidPauseBtn'); if (pb) pb.textContent = els.vid.paused ? '▶ Play' : '⏸ Pause';
   // ⚓ SAM row stays visible on EVERY source — the 🧠 frame lane ships camera/file
   // frames to the same GPU, so SAM was never actually screenshare-only server-side
   samUiSync();
@@ -1895,6 +1905,23 @@ function srcEnterExternal(kind) {
 document.getElementById('srcOpts').addEventListener('click', (e) => {
   const b = e.target.closest('.opt'); if (!b) return;
   srcActivate(b.dataset.src);
+});
+// ⏯ file/link playback — pause HOLDS the frame (tracking + SAM keep running
+// on it, handy for studying masks); play resumes; restart seeks 0.
+document.getElementById('vidPauseBtn').addEventListener('click', (e) => {
+  if (els.vid.paused) {
+    els.vid.play().catch(() => {}); els.bgVid.play().catch(() => {});
+    e.target.textContent = '⏸ Pause'; toast('▶ playing');
+  } else {
+    els.vid.pause(); els.bgVid.pause();
+    e.target.textContent = '▶ Play'; toast('⏸ frame held — masks/skeletons stay live on it');
+  }
+});
+document.getElementById('vidRestartBtn').addEventListener('click', () => {
+  try { els.vid.currentTime = 0; } catch (_) {}
+  els.vid.play().catch(() => {}); els.bgVid.play().catch(() => {});
+  document.getElementById('vidPauseBtn').textContent = '⏸ Pause';
+  toast('⏮ from the top');
 });
 document.getElementById('srcUrlGo').addEventListener('click', () => srcActivate('url'));
 document.getElementById('srcFile').addEventListener('change', async (e) => {
