@@ -190,7 +190,14 @@
     <div class="sname">GUIDE GATE — 🏀 fine-tuned player/ball recognition + court & standing rules · 👥 same persistent low-noise tracking of EVERYONE, no basketball logic</div>
     <label class="chk"><input id="gateDbgChk" type="checkbox" checked> 🔬 show ball detection — <b style="color:#ffd15d">◯ yellow = ball</b></label>
     <label class="chk"><input id="maskChk" type="checkbox" checked> 🎭 SAM masks — <b style="color:#5dff7d">segmented players</b> · <b style="color:#5db8ff">court/floor</b> · thick ring = ⚓ locked (any source · ⚓ on)</label>
-    <label class="chk"><input id="vsyncChk" type="checkbox" checked> 🎬 sync video ↔ tracking — delays footage so skeletons sit ON players (feels real-time)</label>
+    <label class="chk" style="display:none"><input id="vsyncChk" type="checkbox" checked></label>
+    <!-- the LIVE↔ALIGNED choice is THE latency knob a viewer feels — make it a
+         real two-button decision instead of a buried checkbox -->
+    <div class="row" id="vidSyncOpts">
+      <button class="opt" data-vsm="aligned">🎯 ALIGNED</button>
+      <button class="opt" data-vsm="live">⚡ LIVE video</button>
+    </div>
+    <div class="sname">🎯 = video is DELAYED one round-trip so skeletons/masks sit exactly ON the players (smooth, feels synced) · ⚡ = raw video plays immediately and overlays trail it by the round-trip — pick per taste</div>
     <div class="row">
       <button class="opt" id="calibBtn">📐 Calibrate court · 4 taps</button>
       <button class="opt" id="calibClr" style="flex:0 0 auto">✕</button>
@@ -400,7 +407,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-17';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-18';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1593,7 +1600,7 @@ function loop() {
       (S.mp && mpF ? `<br>multi <b>${mpF.count}p · ${mpF.mode}</b> · mp <b>${mt.stats().total.toFixed(0)}ms</b> · pose 1/${mt.stats().poseEvery}` : '') +
       // 🧠 unmistakable YOLO status — engine state, connection, live player count, round-trip latency
       (YOLO.on ? `<br>🧠 <b style="color:${yoloLive ? '#a6ff5d' : '#ffd15d'}">YOLO ${YOLO.ws && YOLO.ws.readyState === 1 ? (yoloLive ? '● LIVE' : '● connected (no data)') : '○ connecting…'}</b><br>` +
-        `<span style="color:#5d7a94">build ${BUILD}</span><br>${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms (gpu ${YOLO.serverMs.toFixed(0)}ms${YOLO.samMs !== undefined ? ` · sam ${YOLO.samMs}ms` : ''}) · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
+        `<span style="color:#5d7a94">build ${BUILD}</span><br>${CS.on ? `☁ CLOUD-STREAM buf:<b>${CS.buf.length}</b> fed:<b>${CS._fed || 0}</b> vt:<b>${(CS._vt || 0).toFixed(1)}s</b> ws:<b>${CS.ws ? CS.ws.readyState : '–'}</b> masks:<b>${(YOLO.smasks || []).length}</b><br>` : ''}${YOLO.profile === 'sports' ? '🏀' : '👥'} tracking <b>${YOLO.players.length}</b> ${YOLO.profile === 'sports' ? 'players' : 'people'} · <b style="color:#ff9d5d">gate ⛔${YOLO.gateBlocked ?? 0}</b> non-players · rtt <b>${YOLO.rtt.toFixed(0)}</b>ms<span style="color:#5d7a94">/floor ${(YOLO.baseRtt || 0).toFixed(0)}</span> (gpu ${YOLO.serverMs.toFixed(0)}ms${YOLO.samMs !== undefined ? ` · sam ${YOLO.samMs}ms` : ''}) · pace <b>${(1000 / (YOLO.sendIv || 66)).toFixed(0)}</b>fps${YOLO.sendIv > 170 ? '·720p' : ''} · <b>${((performance.now() - YOLO.lastT) / 1000).toFixed(1)}</b>s ago` : '');
 
     // 🔒 LOCKED-PLAYER ID CARD — the "prompt to ID on a locked person"
     const lc = document.getElementById('lockCard');
@@ -1939,6 +1946,21 @@ async function sampleLoad() {
     toast('✕ sample offline (node tunnel may have rotated) — use 📁 File instead', 6000);
   }
 }
+// 🎯/⚡ video-sync mode — drives the hidden vsyncChk the engine already reads
+function vsmSync() {
+  const on = document.getElementById('vsyncChk').checked;
+  document.querySelectorAll('#vidSyncOpts .opt').forEach(b => b.classList.toggle('sel', (b.dataset.vsm === 'aligned') === on));
+}
+document.getElementById('vidSyncOpts').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  const chk = document.getElementById('vsyncChk');
+  chk.checked = b.dataset.vsm === 'aligned';
+  chk.dispatchEvent(new Event('change'));
+  vsmSync();
+  toast(chk.checked ? '🎯 ALIGNED — video delayed to sit under the tracking' : '⚡ LIVE — raw video now, overlays trail by the round-trip', 3500);
+});
+vsmSync();
+
 // ⏯ file/link playback — pause HOLDS the frame (tracking + SAM keep running
 // on it, handy for studying masks); play resumes; restart seeks 0.
 // One toggle, two surfaces: the big on-video FAB + the panel row stay in sync.
@@ -2347,6 +2369,9 @@ function yoloOnMessage(e) {
       const rttRaw = (!CS.on && d.cts && t - d.cts > 0 && t - d.cts < 5000) ? t - d.cts : t - YOLO.lastSend;
       YOLO.rtt = rttRaw;
       YOLO.rttEma = YOLO.rttEma ? YOLO.rttEma * 0.85 + rttRaw * 0.15 : rttRaw;
+      // rtt FLOOR (slow-rising min): the uncongested path time. rtt above it
+      // = queueing in the node's residential downlink → back the send rate off
+      YOLO.baseRtt = Math.min((YOLO.baseRtt || 9999) * 1.0015, rttRaw);
       YOLO.lastT = t;
       // SCENE CUT: never interpolate/filter ACROSS a camera cut — poses teleport
       if (d.cut) { YOLO.prev = null; YOLO.tPrev = 0; YOLO.banks.clear(); YOLO.coast.clear(); YOLO.snaps = []; }
@@ -2504,12 +2529,21 @@ function yoloTick(now) {
   const win = Math.min(3, Math.max(1, Math.round((YOLO.rttEma || 0) / 60)));   // smoothed rtt → stable window, no 1↔3 flapping
   if (now - YOLO.lastSend >= 1500) YOLO.inFlight = 0;        // stuck-reply escape hatch
   if (YOLO.inFlight >= win) return;
-  if (YOLO.ws.bufferedAmount > 384000) return;               // uplink saturated — don't queue more
-  if (now - YOLO.lastSend < 40) return;                      // hard cap ~25fps
+  // ADAPTIVE PACING (delay-based congestion control): the node ingests frames
+  // over ~11Mbps residential broadband — blind 25fps×960px (≈3MB/s) SATURATES
+  // it and queues SECONDS of bufferbloat (the "horrible latency"). Pace sends
+  // so rtt stays near its uncongested floor: over-floor → slow down, near
+  // floor → speed up. Converges on whatever the pipe actually carries.
+  { const over = (YOLO.rttEma || 0) - (YOLO.baseRtt || 0);
+    YOLO.sendIv = Math.min(280, Math.max(50,
+      (YOLO.sendIv || 66) * (over > 140 ? 1.22 : over < 70 ? 0.93 : 1))); }
+  if (YOLO.ws.bufferedAmount > 131072) return;               // >1 frame queued locally = pipe full
+  if (now - YOLO.lastSend < YOLO.sendIv) return;
   const v = els.vid; if (!v.videoWidth) return;
   YOLO.inFlight++; YOLO.lastSend = now;
-  // 960px + q0.65 — the old 640/q0.5 turned far broadcast players into mush
-  const cw = 960, ch = Math.round(cw * v.videoHeight / v.videoWidth) || 540;
+  // resolution/quality follow the pace: a congested pipe gets 720px frames
+  // (≈45% fewer bytes) rather than fewer 960px ones — smoothness beats crispness
+  const cw = YOLO.sendIv > 170 ? 720 : 960, ch = Math.round(cw * v.videoHeight / v.videoWidth) || 540;
   YOLO.cv.width = cw; YOLO.cv.height = ch;
   YOLO.cv.getContext('2d').drawImage(v, 0, 0, cw, ch);
   const capT = now;   // frame capture time — echoed back by the server for EXACT vsync
@@ -2522,7 +2556,7 @@ function yoloTick(now) {
         YOLO.ws.send(out);
       });
     } else YOLO.inFlight = Math.max(0, YOLO.inFlight - 1);   // send aborted → free its slot
-  }, 'image/jpeg', 0.65);
+  }, 'image/jpeg', YOLO.sendIv > 170 ? 0.52 : 0.65);   // congested pipe → lighter frames
 }
 
 // Interpolated view of the two latest server snapshots — smooth 60fps render
