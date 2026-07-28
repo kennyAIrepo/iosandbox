@@ -137,6 +137,7 @@
       <button class="opt" data-src="screen">🖥 Screen</button>
       <button class="opt" data-src="url">🔗 URL</button>
       <button class="opt" data-src="file">📁 File</button>
+      <button class="opt" id="srcSampleBtn">🎬 NBA sample</button>
     </div>
     <div class="row" id="srcUrlRow">
       <input id="srcUrl" type="text" placeholder="any video link — 🧠 on = cloud fetch (YouTube ok)">
@@ -399,7 +400,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-16';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-17';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1914,8 +1915,30 @@ function srcEnterExternal(kind) {
 
 document.getElementById('srcOpts').addEventListener('click', (e) => {
   const b = e.target.closest('.opt'); if (!b) return;
+  if (b.id === 'srcSampleBtn') { sampleLoad(); return; }
   srcActivate(b.dataset.src);
 });
+// 🎬 PRELOADED SAMPLE — an NBA clip hosted on OUR node (Range+CORS via
+// serve_files.py + its tunnel), so any machine can test with one click. The
+// browser streams it progressively (plays in ~1-2s, buffers the 20MB behind
+// the playhead) — the fetch adds ZERO tracking latency: frames still leave
+// THIS device on the same lane as any local file. Direct-playback route on
+// purpose: works identically on the SAM2.1 and SAM3 lanes (no ☁ ingest dep).
+const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
+async function sampleLoad() {
+  if (!S.running) { toast('▶ START the lab first, then load the sample'); return; }
+  try {
+    srcStopExternal();
+    toast('🎬 loading the NBA sample from the cloud node…', 4000);
+    await srcRoute(SAMPLE_URL);
+    srcEnterExternal('url');
+    document.getElementById('srcSampleBtn').classList.add('sel');
+    toast('🎬 NBA sample — 🧠 + ⚓ to track & segment · ⏯ button to pause', 5000);
+  } catch (err) {
+    console.error(err);
+    toast('✕ sample offline (node tunnel may have rotated) — use 📁 File instead', 6000);
+  }
+}
 // ⏯ file/link playback — pause HOLDS the frame (tracking + SAM keep running
 // on it, handy for studying masks); play resumes; restart seeks 0.
 // One toggle, two surfaces: the big on-video FAB + the panel row stay in sync.
