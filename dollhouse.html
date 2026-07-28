@@ -143,6 +143,41 @@ const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 18, 14),
   new THREE.MeshStandardMaterial({ color: 0xff8a2a, roughness: .5 }));
 ballMesh.visible = false; scene.add(ballMesh);
 
+// ── 🧿 WORLD LAYER — SAM3 concept meshes streamed from mpgames (cs-12) ──
+// The sender projects each concept mask's outline to court-metres (needs 📐
+// calibration there). Floor arrives as flat translucent ground; walls/doors
+// extrude tall; furniture extrudes low. Rebuilds only when the object set
+// changes — orbit/zoom/drag then inspects a live 3D mesh of the real room.
+const WORLD = { grp: new THREE.Group(), sig: '' };
+scene.add(WORLD.grp);
+function cptHue(text) { let h = 0; for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) % 360; return h; }
+function worldUpdate(d) {
+  const sig = JSON.stringify([(d.floor || []).map(p => p.length),
+    (d.objects || []).map(o => [o.id, o.role, (o.court || []).map(p => p.length)])]);
+  if (sig === WORLD.sig) return;
+  WORLD.sig = sig;
+  WORLD.grp.clear();
+  const mk = (pts, color, height, opacity) => {
+    if (!pts || pts.length < 3) return;
+    // court (x,y) → scene (x, z): shape-y is negated so rotation lands on +z
+    const shape = new THREE.Shape(pts.map(([x, y]) => new THREE.Vector2(x, -y)));
+    const geo = height ? new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false })
+                       : new THREE.ShapeGeometry(shape);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({
+      color, transparent: true, opacity, roughness: .85, side: THREE.DoubleSide }));
+    mesh.rotation.x = -Math.PI / 2;
+    if (!height) mesh.position.y = 0.015;
+    WORLD.grp.add(mesh);
+  };
+  for (const pl of (d.floor || [])) mk(pl, new THREE.Color('hsl(213, 70%, 50%)'), 0, 0.16);
+  for (const o of (d.objects || [])) {
+    if (!o.court) continue;                       // sender had no 📐 calibration
+    const col = new THREE.Color(`hsl(${cptHue(o.role)}, 85%, 62%)`);
+    const h = o.role === 'wall' ? 2.5 : o.role === 'door' ? 2.1 : 0.8;
+    for (const pl of o.court) mk(pl, col, h, 0.3);
+  }
+}
+
 // ── LIVE mode — subscribe to the mpgames ROOM BUS (BroadcastChannel =
 // the v0 loopback transport of MULTIPLAYER_SYNC_ARCHITECTURES.md). Packets
 // are the recorder rows, live; render one interval behind between the two
@@ -158,6 +193,7 @@ function feedPresence(d) {           // one ingest point for BOTH transports
   LIVE.prev = LIVE.curr; LIVE.tPrev = LIVE.tCurr;
   LIVE.curr = d; LIVE.tCurr = now;
   if (d.cut) { LIVE.prev = null; LIVE.tPrev = 0; }
+  if (d.objects || d.floor) worldUpdate(d);   // 🧿 SAM3 concept meshes
 }
 
 // transport 1: same-machine tab (BroadcastChannel loopback)

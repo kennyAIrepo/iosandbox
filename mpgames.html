@@ -142,6 +142,23 @@
       <button class="opt" data-samrole="court">🟦 Court</button>
     </div>
     <div class="sname" id="samRoleHint" style="display:none">SAM PROMPTS — pick a role, TAP the video: 🏀 = segment + lock that player&#39;s identity · 🦓 = REMOVE that ref from tracking (whole stream) · 🟦 = mark the floor region</div>
+    <!-- 🧿 SAM3 CONCEPTS — text IS the prompt (needs the SAM3 tracking server) -->
+    <div class="sname" id="cptHead" style="display:none">🧿 CONCEPTS — type ANYTHING to track &amp; mesh it live (SAM3 server)</div>
+    <div class="row" id="cptChips" style="display:none; flex-wrap:wrap; gap:4px">
+      <button class="opt" data-cpt="floor">🟦 floor</button>
+      <button class="opt" data-cpt="wall">🧱 wall</button>
+      <button class="opt" data-cpt="chair">🪑 chair</button>
+      <button class="opt" data-cpt="desk">🗄 desk</button>
+      <button class="opt" data-cpt="tv">📺 TV</button>
+      <button class="opt" data-cpt="door">🚪 door</button>
+      <button class="opt" data-cpt="basketball">🏀 ball</button>
+    </div>
+    <div class="row" id="cptFreeRow" style="display:none">
+      <input id="cptText" type="text" placeholder="anything: hoop, red jersey, plant…" style="flex:1; background:#0d1420; color:#cfe6f2; border:1px solid #23324a; border-radius:6px; font:inherit; padding:4px 6px">
+      <button class="opt" id="cptGo" style="flex:0 0 auto">＋ Track</button>
+    </div>
+    <div class="sname" id="cptActive" style="display:none"></div>
+    <label class="chk" id="cptNameRow" style="display:none"><input id="cptNameChk" type="checkbox"> ✏️ name players — next tap on a body names them (badge shows it)</label>
     <div class="sname">🖥 = share a tab (YouTube / any live page) · video sources run un-mirrored</div>
     <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
     <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
@@ -368,7 +385,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-11';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-12';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -1400,8 +1417,10 @@ function loop() {
             octx.fillStyle = col;
             const age = yoloLive && YOLO.firstSeen.has(p.id)
               ? ' ·' + ((performance.now() - YOLO.firstSeen.get(p.id)) / 1000).toFixed(0) + 's' : '';
-            const tag = (SRC.lockedIds.has(p.id) ? '🔒' : '') + (p.tag || 'P' + p.id) +
-                        (p.team != null ? '·T' + p.team : '') + age;   // stable tag letter · T team · Ns duration
+            // ✏️ user-assigned name (by stable tag) beats the auto tag
+            const uname = NAMES.get(p.tag) || NAMES.get('P' + p.id);
+            const tag = (SRC.lockedIds.has(p.id) ? '🔒' : '') + (uname || (p.tag || 'P' + p.id)) +
+                        (p.team != null && !uname ? '·T' + p.team : '') + age;
             const tx = pr.ox + nose.x * pr.dw - 12;
             // the overlay canvas is CSS-flipped for external sources — flip the
             // TEXT back around its anchor so badges stay readable
@@ -1447,10 +1466,25 @@ function loop() {
       for (const poly of (YOLO.courtPoly || [])) drawPoly(poly, 'rgba(93,184,255,0.08)', 'rgba(93,184,255,0.45)', 1.5);
       for (const o of (YOLO.smasks || [])) {
         const isRef = o.role === 'ref';
-        const p = (YOLO.players || []).find(q => q.id === o.id);
-        const col = isRef ? '#ffb15d' : ((p && p.col) || '#5dff7d');
+        const isPlayer = o.role === 'player';
+        const p = isPlayer ? (YOLO.players || []).find(q => q.id === o.id) : null;
+        // 🧿 non-player roles are CONCEPTS ("wall", "chair", …) → stable hash color
+        const col = isRef ? '#ffb15d' : isPlayer ? ((p && p.col) || '#5dff7d') : cptColor(o.role);
         const locked = SRC.lockedIds.has(o.id);
-        for (const poly of o.polys) drawPoly(poly, col + (isRef ? '18' : '2e'), col, locked ? 4.5 : 2);
+        for (const poly of o.polys) drawPoly(poly, col + (isRef ? '18' : isPlayer ? '2e' : '22'), col, locked ? 4.5 : 2);
+        // concept label at the largest poly's centroid (flip-corrected like badges)
+        if (!isPlayer && !isRef && o.polys.length) {
+          const big = o.polys.reduce((a, b) => (b.length > a.length ? b : a));
+          let cx = 0, cy = 0; for (const [x, y] of big) { cx += x; cy += y; }
+          cx /= big.length; cy /= big.length;
+          const X = pr.ox + cx * pr.dw, Y = pr.oy + cy * pr.dh;
+          octx.font = 'bold 15px ui-monospace, Consolas, monospace';
+          octx.fillStyle = col;
+          if (document.body.classList.contains('ext-source')) {
+            octx.save(); octx.translate(X, 0); octx.scale(-1, 1);
+            octx.fillText(o.role, -octx.measureText(o.role).width / 2, Y); octx.restore();
+          } else octx.fillText(o.role, X - octx.measureText(o.role).width / 2, Y);
+        }
       }
       // tap markers (samlab-style dots, fade after 6s)
       const ROLE_DOT = { player: '#5dff7d', ref: '#ffb15d', court: '#5db8ff' };
@@ -1676,8 +1710,59 @@ function samUiSync() {
   const on = samActive();
   document.getElementById('samRoleRow').style.display = on ? 'flex' : 'none';
   document.getElementById('samRoleHint').style.display = on ? '' : 'none';
+  // 🧿 concept panel rides the same visibility (server ignores unknown cmds,
+  // so it is safe to show even against the SAM2.1 lane)
+  for (const id of ['cptHead', 'cptChips', 'cptFreeRow', 'cptActive', 'cptNameRow'])
+    document.getElementById(id).style.display = on ? (id === 'cptChips' || id === 'cptFreeRow' ? 'flex' : '') : 'none';
+  if (on) cptRender();
   if (!on) YOLO.smasks = [];
 }
+
+// ── 🧿 SAM3 CONCEPTS — the text prompt IS the tracker ─────────────────────
+const CPT = { active: new Set(JSON.parse(localStorage.getItem('hopeos-concepts') || '[]')) };
+function cptSend(text, on) {
+  const w = samWs();
+  if (w) { try { w.send(JSON.stringify({ cmd: 'concept', text, on: on ? 1 : 0 })); } catch (_) {} }
+  return !!w;
+}
+function cptToggle(text) {
+  text = text.trim().toLowerCase(); if (!text) return;
+  const on = !CPT.active.has(text);
+  if (on) CPT.active.add(text); else CPT.active.delete(text);
+  localStorage.setItem('hopeos-concepts', JSON.stringify([...CPT.active]));
+  const sent = cptSend(text, on);
+  toast(sent ? (on ? `🧿 tracking "${text}" — mask appears as SAM3 finds it…` : `🧿 "${text}" off`)
+             : '🧿 concepts need the 🧠 engine ON (SAM3 server)', 3500);
+  cptRender();
+}
+function cptRender() {
+  document.querySelectorAll('#cptChips .opt').forEach(b => b.classList.toggle('sel', CPT.active.has(b.dataset.cpt)));
+  const el = document.getElementById('cptActive');
+  el.innerHTML = CPT.active.size
+    ? 'tracking: ' + [...CPT.active].map(c => `<b style="color:${cptColor(c)}; cursor:pointer" data-rm="${c}">${c} ×</b>`).join(' · ')
+    : 'no concepts yet — tap a chip or type one';
+}
+// stable per-concept color: hash → hue (player masks keep identity colors)
+function cptColor(text) {
+  let h = 0; for (const ch of text) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h}, 85%, 62%)`;
+}
+// re-seed every active concept on a fresh socket (reconnects, engine toggles)
+function cptReseed() { for (const c of CPT.active) cptSend(c, 1); }
+document.getElementById('cptChips').addEventListener('click', (e) => {
+  const b = e.target.closest('.opt'); if (b) cptToggle(b.dataset.cpt);
+});
+document.getElementById('cptGo').addEventListener('click', () => {
+  const inp = document.getElementById('cptText');
+  cptToggle(inp.value); inp.value = '';
+});
+document.getElementById('cptText').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('cptGo').click(); });
+document.getElementById('cptActive').addEventListener('click', (e) => {
+  const rm = e.target.dataset?.rm; if (rm) cptToggle(rm);
+});
+// ✏️ player naming — stable-tag → name, survives reloads
+const NAMES = new Map(Object.entries(JSON.parse(localStorage.getItem('hopeos-player-names') || '{}')));
+function nameSave() { localStorage.setItem('hopeos-player-names', JSON.stringify(Object.fromEntries(NAMES))); }
 // the ws that carries SAM prompts: subscribe lane in ☁ URL mode, frame lane on 🖥
 function samWs() {
   const w = CS.on ? CS.ws : YOLO.ws;
@@ -1881,6 +1966,17 @@ addEventListener('pointerdown', (e) => {
   for (const p of players) {
     const b = p.bbox;
     if (mx >= b.x && mx <= b.x + b.w && ny >= b.y && ny <= b.y + b.h) {
+      // ✏️ naming mode: this tap NAMES the player instead of locking them
+      if (document.getElementById('cptNameChk')?.checked) {
+        const key = p.tag || 'P' + p.id;
+        const cur = NAMES.get(key) || '';
+        const name = window.prompt(`name for ${key}?`, cur);
+        if (name !== null) {
+          if (name.trim()) NAMES.set(key, name.trim()); else NAMES.delete(key);
+          nameSave(); toast(name.trim() ? `✏️ ${key} = "${name.trim()}"` : `✏️ ${key} name cleared`);
+        }
+        return;
+      }
       if (SRC.lockedIds.has(p.id)) SRC.lockedIds.delete(p.id);
       else {
         SRC.lockedIds.add(p.id);
@@ -2117,6 +2213,7 @@ function yoloConnect() {
     // on the fresh socket — the server keeps sam per-client, forgotten on close
     if (document.getElementById('samAssistChk')?.checked) {
       try { YOLO.ws.send(JSON.stringify({ cmd: 'sam', on: 1 })); } catch (_) {}
+      cptReseed();          // 🧿 active concepts re-prompt on every fresh socket
     }
     samUiSync();
   };
@@ -2190,7 +2287,16 @@ function yoloOnMessage(e) {
               box: [p.bbox.x, p.bbox.y, p.bbox.w, p.bbox.h],
               k: p.body2D.map(q => [q.x, q.y, q.score ?? 0])
             })),
-            balls: (YOLO.balls || []).map(b => ({ x: b.x, y: b.y, r: b.r, court: courtXY({ x: b.x, y: b.y + b.r }) }))
+            balls: (YOLO.balls || []).map(b => ({ x: b.x, y: b.y, r: b.r, court: courtXY({ x: b.x, y: b.y + b.r }) })),
+            // 🧿 WORLD OBJECTS → dollhouse: concept masks with their base line
+            // projected to court-metres (needs 📐 cal). Players excluded — they
+            // already travel as skeletons above.
+            objects: (YOLO.smasks || []).filter(o => o.role !== 'player' && o.role !== 'ref').map(o => ({
+              id: o.id, role: o.role,
+              polys: o.polys,
+              court: CAL.H ? o.polys.map(pl => pl.map(([x, y]) => { const c = courtXY({ x, y }); return c ? [+c.x.toFixed(2), +c.y.toFixed(2)] : null; }).filter(Boolean)) : null
+            })),
+            floor: CAL.H && YOLO.courtPoly ? YOLO.courtPoly.map(pl => pl.map(([x, y]) => { const c = courtXY({ x, y }); return c ? [+c.x.toFixed(2), +c.y.toFixed(2)] : null; }).filter(Boolean)) : null
           });
         } catch (_) {}
       }
