@@ -167,7 +167,47 @@ from last masks; identity registry bridges the reset.
 - **SAM License** — commercial use OK with restrictions; re-read before any
   hosted/paid launch.
 
-## 7. Sources
+## 7. "The user IS the avatar" — flesh-as-mesh design (added 2026-07-28)
+
+What the suite gives vs what we build:
+
+- **MHR ships the rig + mesh, NOT the user's appearance.** The suite includes:
+  parametric skeleton, watertight body mesh (LODs 595→73k verts), skinning
+  weights, pose correctives, face blendshapes, FBX/glTF export. It renders as
+  an untextured gray body. There is no per-user material — appearance is ours.
+- **The user's own pixels ARE the material** (the trick that makes "effects
+  grown on flesh" real): per frame we hold (a) the SAM person mask = exactly
+  which pixels are this body, (b) the posed MHR mesh, (c) `pred_cam_t` +
+  `focal_length` = the projection that lands the mesh ON those pixels.
+  **Projective texturing**: in the shader, each mesh fragment samples the
+  LIVE VIDEO at its projected screen position, clipped by the mask → the 3D
+  body wears the user's actual appearance, in motion, no texture capture step.
+- **Effects layer**: materials composite ON that surface in mesh space —
+  normals/curvature/UVs come from MHR, so "growing" effects (veins, armor,
+  fire, scan-lines) crawl along real anatomy and re-project onto the video
+  perfectly aligned. Screen-space effects clip by mask; surface effects live
+  on the mesh; both stay glued to the flesh.
+- **Occlusion + collision replace the holo-hand mock**: depth-render the posed
+  MHR mesh into the game scene's depth buffer → game objects pass behind
+  limbs correctly; collision = capsules auto-fitted per MHR bone (cheap,
+  robust) with the mesh available for precise contacts. HOPEOS_STATE gains
+  `body3d` (bone transforms + capsules) so every game reads one source.
+- **Texture permanence (later)**: accumulate the projective samples over time
+  into a UV texture (visibility-weighted) → a persistent personalized skin
+  that survives turning away from camera; hands stay MediaPipe-driven at the
+  wrist seam (MHR hand pose params accept our hand landmarks as refinement).
+- **Latency reality**: mesh pose refreshes at 5-10Hz server-side; the client
+  interpolates 204 pose floats (cheap, smooth) and the mask-warp (cs-13)
+  keeps the silhouette pinned between refreshes. Screen-space material
+  sampling is per-display-frame, so the SKIN never lags even when the rig
+  updates slowly.
+
+Build order: B1 rig lane (3DB on locked ids → mhr params in packet) → B2
+three.js MHR loader + projective-texture material → B3 depth-occlusion +
+bone capsules into the game collision layer → B4 UV accumulation + effect
+material library.
+
+## 8. Sources
 
 - https://github.com/facebookresearch/sam3 · https://huggingface.co/facebook/sam3
 - https://ai.meta.com/blog/segment-anything-model-3/ (SAM 3.1 / Object Multiplex)
