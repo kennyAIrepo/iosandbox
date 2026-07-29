@@ -106,7 +106,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-11';
+const BUILD = 'st-12';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -318,19 +318,23 @@ const IUV_FRAG = `
   void main(){
     vec3 skin = texture2D(uVid, vUv).rgb;
     vec4 iuv = texture2D(uIuv, vUv);
-    float part = floor(iuv.r * 255.0 / 10.0 + 0.5);
-    if (uHasIuv < 0.5 || part < 0.5) discard;          // background → untouched
+    float part = iuv.r * 25.5;                          // 0..24 (linear-filtered)
+    if (uHasIuv < 0.5 || part < 0.35) discard;           // background → untouched
 
     // surface coords of THIS pixel on THIS body part; part id offsets the
     // tile so neighbouring limbs don't share an identical patch
     vec2 suv = vec2(iuv.g, iuv.b);
-    vec2 tuv = suv * uScale + vec2(mod(part, 5.0) * 0.37, floor(part / 5.0) * 0.29);
+    float pid = floor(part + 0.5);
+    vec2 tuv = suv * uScale + vec2(mod(pid, 5.0) * 0.37, floor(pid / 5.0) * 0.29);
+    // surface-normal proxy from how UV changes across the screen → real contour shading
+    vec3 sn = normalize(vec3(dFdx(suv.y) - dFdy(suv.x), dFdy(suv.y) + dFdx(suv.x), 0.06));
 
     vec3 alb = texture2D(uTex, tuv).rgb;
     vec3 nt  = texture2D(uNrm, tuv).rgb * 2.0 - 1.0;
 
     // relief lit from the material's own normal map + surface-gradient shading
-    float lam  = clamp(0.45 + 0.55 * dot(normalize(nt), normalize(vec3(0.3, -0.5, 0.8))), 0.0, 1.0);
+    vec3 nrm = normalize(mix(sn, normalize(nt), 0.6));
+    float lam  = clamp(0.42 + 0.58 * dot(nrm, normalize(vec3(0.35, -0.45, 0.82))), 0.0, 1.0);
     float spec = pow(lam, 18.0);
     vec3 mat = overlay(skin, alb);
     mat = mix(mat, mat * (0.6 + 0.8 * lam), 0.7);
@@ -374,13 +378,16 @@ function iuvInit() {
   const c = document.getElementById('liuv');
   IUV.ren = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true });
   IUV.tex = new THREE.CanvasTexture(IUV.cv);
-  IUV.tex.minFilter = IUV.tex.magFilter = THREE.NearestFilter;   // part ids must not blend
+  // UV is DATA, not color: no sRGB transform, and LINEAR filtering so the
+  // surface coordinates interpolate smoothly instead of stair-stepping.
+  IUV.tex.colorSpace = THREE.NoColorSpace;
+  IUV.tex.minFilter = IUV.tex.magFilter = THREE.LinearFilter;
   const vtex = new THREE.VideoTexture(vid); vtex.colorSpace = THREE.SRGBColorSpace;
   const mat = new THREE.ShaderMaterial({ vertexShader: IUV_VERT, fragmentShader: IUV_FRAG,
     transparent: true, depthTest: false,
     uniforms: { uVid: { value: vtex }, uIuv: { value: IUV.tex },
                 uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
-                uTime: { value: 0 }, uGrow: { value: 0 }, uScale: { value: 2.2 },
+                uTime: { value: 0 }, uGrow: { value: 0 }, uScale: { value: 1.0 },
                 uHasIuv: { value: 0 }, uVidAspect: { value: new THREE.Vector2(1, 1) } } });
   IUV.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
   IUV.scn = new THREE.Scene(); IUV.scn.add(IUV.quad);
