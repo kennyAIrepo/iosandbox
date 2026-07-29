@@ -109,7 +109,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-43';
+const BUILD = 'st-44';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -872,13 +872,15 @@ const SHIRT2 = { on: localStorage.getItem('hopeos-shirt') === '1', mesh: null, h
 const SHIRT2_VERT = `
   attribute vec3 aPrev; attribute vec3 aPrevN;
   attribute vec4 aDress;                  // frozen body-coords + arm label + leg label
+  attribute float aDressZ;                // frozen depth (0 front … 1 back) — st-44
   uniform float uMix, uPuff;
   varying vec3 vN, vON, vP;
   varying vec4 vDress;
+  varying float vDressZ;
   void main(){
     vec3 p = mix(aPrev, position, uMix);
     vec3 n = normalize(mix(aPrevN, normal, uMix));
-    vP = p; vON = n; vN = normalMatrix * n; vDress = aDress;
+    vP = p; vON = n; vN = normalMatrix * n; vDress = aDress; vDressZ = aDressZ;
     p += n * uPuff;                       // cloth sits ~2.5cm off the skin
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }`;
@@ -886,6 +888,7 @@ const SHIRT2_FRAG = `
   precision highp float;
   varying vec3 vN, vON, vP;
   varying vec4 vDress;
+  varying float vDressZ;
   uniform sampler2D uDecal, uDecalB;
   uniform vec3 uCol;
   uniform float uMirr;
@@ -907,7 +910,10 @@ const SHIRT2_FRAG = `
     float hemY = mix(0.515, 0.305, szone);              // continuous hem curve
     float alpha = smoothstep(hemY, hemY - 0.010, ny);   // hem/sleeve feather
     alpha *= smoothstep(0.148, 0.158, ny);              // shoulder-top feather
-    vec2 nk = vec2((nx - 0.5) / 0.105, (ny - 0.148) / 0.062);
+    // st-44: REAL TEE COLLAR — low scoop on the FRONT only; the back collar
+    // stays high on the neck (frozen depth decides front vs back, any pose)
+    float backness = smoothstep(0.45, 0.60, vDressZ);
+    vec2 nk = vec2((nx - 0.5) / 0.105, (ny - 0.148) / mix(0.062, 0.026, backness));
     float nd = dot(nk, nk);                             // round neck opening
     alpha *= smoothstep(1.0, 1.14, nd);
     if (alpha < 0.02) discard;
@@ -928,7 +934,7 @@ const SHIRT2_FRAG = `
     // decal box measured off the reference: ~39% of torso width, aspect 2.6:1,
     // centred on the wearer's LEFT chest, 27% of shirt-length below the collar
     vec2 duv = vec2((nx - 0.576) / 0.17 + 0.5, (ny - 0.250) / 0.034 + 0.5);
-    if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && vON.z < -0.05) {
+    if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && vDressZ < 0.45) {
       duv.x = mix(duv.x, 1.0 - duv.x, uMirr);           // readable under mirror
       // st-30: sharpen the antialiased glyph edge and print with full ink
       float ink = smoothstep(0.30, 0.62, texture2D(uDecal, duv).a);
@@ -937,7 +943,7 @@ const SHIRT2_FRAG = `
     // st-32 BACK PRINT — large centred panel, ~19cm wide, below the shoulder
     // blades; printed panel takes the shirt's own lighting so it sits IN the
     // fabric instead of glowing on top of it
-    if (vON.z > 0.05) {
+    if (vDressZ > 0.55) {                               // st-44: BODY-back, not camera-back
       vec2 bd = vec2((nx - 0.5) / 0.30 + 0.5, (ny - 0.290) / 0.180 + 0.5);
       if (bd.x > 0.0 && bd.x < 1.0 && bd.y > 0.0 && bd.y < 1.0) {
         // st-35: BACK faces have opposite handedness to the front — the
@@ -1065,20 +1071,27 @@ function shirt2Build() {
   // shirt's shape/coloring/finish never regenerates or varies again.
   const fitKey = (() => { const s = S.rig.topoFaces || ''; let h = 5381;
     for (let i = 0; i < s.length; i += 97) h = ((h * 33) + s.charCodeAt(i)) >>> 0;
-    return 'hopeos-fit5-' + s.length + '-' + h.toString(36); })();   // v5: higher waist labels
-  let dress = null;
-  try { const cs = localStorage.getItem(fitKey);
-    if (cs) { const b = atob(cs), u = new Uint8Array(b.length);
+    return 'hopeos-fit6-' + s.length + '-' + h.toString(36); })();   // v6: +frozen depth
+  let dress = null, dressZ = null;
+  try { const cs = localStorage.getItem(fitKey), cz = localStorage.getItem(fitKey + 'z');
+    if (cs && cz) {
+      const b = atob(cs), u = new Uint8Array(b.length);
       for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i);
-      if (u.length === pos.count * 16) dress = new Float32Array(u.buffer); } } catch {}
+      const b2 = atob(cz), u2 = new Uint8Array(b2.length);
+      for (let i = 0; i < b2.length; i++) u2[i] = b2.charCodeAt(i);
+      if (u.length === pos.count * 16 && u2.length === pos.count * 4) {
+        dress = new Float32Array(u.buffer); dressZ = new Float32Array(u2.buffer); } } } catch {}
   if (!dress) {
     // POSE GATE: only ever dress from a standing-ish pose (bbox taller than
     // ~1.45× its width) — the one-time fit is never taken from a bad pose
     if ((bmax.y - bmin.y) / Math.max(bmax.x - bmin.x, 0.01) < 1.45) return;
     dress = new Float32Array(pos.count * 4);       // nx, ny, arm, leg per vertex
+    dressZ = new Float32Array(pos.count);          // frozen depth (front 0 … back 1)
+    const bsz = Math.max(bmax.z - bmin.z, 1e-4);
     for (let i = 0; i < pos.count; i++) {
       dress[i*4]   = (pos.array[i*3]   - bmin.x) / bsx;
       dress[i*4+1] = (pos.array[i*3+1] - bmin.y) / bsy;
+      dressZ[i]    = (pos.array[i*3+2] - bmin.z) / bsz;
     }
     // limb separation by CONNECTIVITY (below the chest band the torso is one
     // component; arms/hands are separate — they join only via the shoulders)
@@ -1133,9 +1146,11 @@ function shirt2Build() {
     let armN = 0;
     for (let i = 0; i < pos.count; i++) if (lb[i] > 0.5) armN++;
     if (armN < 120) return;
-    try { const u = new Uint8Array(dress.buffer); let s = '';
-      for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
-      localStorage.setItem(fitKey, btoa(s));       // the fit is now STATIC
+    try { const b64of = (arr) => { const u = new Uint8Array(arr.buffer); let s = '';
+        for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
+        return btoa(s); };
+      localStorage.setItem(fitKey, b64of(dress));  // the fit is now STATIC
+      localStorage.setItem(fitKey + 'z', b64of(dressZ));
     } catch {}
   }
   // vertex rule (matches the validator exactly); faces kept if ANY vertex
@@ -1157,6 +1172,7 @@ function shirt2Build() {
   geo.setAttribute('aPrev',    g.getAttribute('aPrev'));      // exactly with the
   geo.setAttribute('aPrevN',   g.getAttribute('aPrevN'));     // rig, zero copies
   geo.setAttribute('aDress',   new THREE.BufferAttribute(dress, 4));
+  geo.setAttribute('aDressZ',  new THREE.BufferAttribute(dressZ, 1));
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
   const mat = new THREE.ShaderMaterial({ vertexShader: SHIRT2_VERT, fragmentShader: SHIRT2_FRAG,
@@ -1174,6 +1190,7 @@ function shirt2Build() {
     const pgeo = new THREE.BufferGeometry();
     for (const an of ['position', 'normal', 'aPrev', 'aPrevN']) pgeo.setAttribute(an, g.getAttribute(an));
     pgeo.setAttribute('aDress', geo.getAttribute('aDress'));
+    pgeo.setAttribute('aDressZ', geo.getAttribute('aDressZ'));
     pgeo.setIndex(new THREE.BufferAttribute(new Uint32Array(keepP), 1));
     pgeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
     const pmat = new THREE.ShaderMaterial({ vertexShader: SHIRT2_VERT, fragmentShader: PANTS_FRAG,
