@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-29';
+const BUILD = 'st-30';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -904,15 +904,19 @@ const SHIRT2_FRAG = `
     vec2 duv = vec2((nx - 0.576) / 0.17 + 0.5, (ny - 0.250) / 0.034 + 0.5);
     if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && vON.z < -0.05) {
       duv.x = mix(duv.x, 1.0 - duv.x, uMirr);           // readable under mirror
-      col = mix(col, vec3(0.10), texture2D(uDecal, duv).a * 0.92);
+      // st-30: sharpen the antialiased glyph edge and print with full ink
+      float ink = smoothstep(0.30, 0.62, texture2D(uDecal, duv).a);
+      col = mix(col, vec3(0.07), ink);
     }
     gl_FragColor = vec4(col, 1.0);
   }`;
 function shirt2Tex() {
   if (SHIRT2.tex) return SHIRT2.tex;
   // proportions replicated from the reference photo (block aspect ≈ 2.6:1)
-  const c = document.createElement('canvas'); c.width = 640; c.height = 248;
-  const x = c.getContext('2d');
+  // st-30: drawn at 3× resolution + mipmaps + max anisotropy → crisp print at
+  // any zoom/angle, same physical size on the shirt
+  const c = document.createElement('canvas'); c.width = 1920; c.height = 744;
+  const x = c.getContext('2d'); x.scale(3, 3);
   x.fillStyle = '#1a1a1a'; x.textAlign = 'left';
   x.font = 'italic 46px Georgia, serif';       x.fillText('A Real', 28, 64);
   x.font = '54px Georgia, serif';              x.fillText('Quantum Hackathon', 28, 130);
@@ -920,7 +924,9 @@ function shirt2Tex() {
   x.fillText('New York City', 168, 182);
   SHIRT2.tex = new THREE.CanvasTexture(c);
   SHIRT2.tex.flipY = false;
-  SHIRT2.tex.minFilter = SHIRT2.tex.magFilter = THREE.LinearFilter;
+  SHIRT2.tex.minFilter = THREE.LinearMipmapLinearFilter;
+  SHIRT2.tex.magFilter = THREE.LinearFilter;
+  try { SHIRT2.tex.anisotropy = ren.capabilities.getMaxAnisotropy(); } catch {}
   return SHIRT2.tex;
 }
 function shirt2Build() {
