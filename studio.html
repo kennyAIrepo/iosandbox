@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-30';
+const BUILD = 'st-31';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -881,13 +881,16 @@ const SHIRT2_FRAG = `
     float nx = vDress.x, ny = vDress.y;                 // dress-time body coords
     // SMOOTH FINISHES (st-29): every visible edge is an iso-line cut inside
     // solid geometry — hem, sleeve ends, collar — never the mesh boundary
-    float sleeve = step(0.265, abs(nx - 0.5));          // 1 on the arms
-    float hemY = mix(0.515, 0.305, sleeve);             // torso hem vs sleeve end
+    float sleeveZone = step(0.28, abs(nx - 0.5));       // 1 on the arms
+    if (sleeveZone > 0.5 && ny >= 0.35) discard;        // arm below the sleeve end
+    float hemY = mix(0.515, 0.305, sleeveZone);         // torso hem vs sleeve end
     if (ny > hemY || ny < 0.148) discard;
     vec2 nk = vec2((nx - 0.5) / 0.105, (ny - 0.148) / 0.062);
     float nd = dot(nk, nk);                             // round neck opening
     if (nd < 1.0) discard;
-    vec3 n = normalize(vN);
+    // consistent shading inside and out (DoubleSide needs the normal flipped
+    // on backfaces or the interior shades wrong = blotchy colour)
+    vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
     float lam = clamp(0.35 + 0.65 * max(dot(n, normalize(vec3(0.4, 0.8, 0.5))), 0.0), 0.0, 1.0);
     // REAL CLOTH: soft large folds + cotton micro-weave + fabric sheen
     float fold  = fbm(vP.xy * 4.0 + vP.z * 2.0) - 0.5;
@@ -896,9 +899,9 @@ const SHIRT2_FRAG = `
     col += pow(1.0 - abs(n.z), 3.0) * 0.05;             // grazing-angle sheen
     // stitched finishing: folded hem/sleeve/collar bands with a stitch highlight
     float edgeD = min(hemY - ny, ny - 0.148);
-    if (edgeD < 0.012) col *= 0.85;
-    else if (edgeD < 0.017) col *= 1.06;
-    if (nd < 1.45) col *= 0.88;                         // ribbed collar ring
+    if (edgeD < 0.008) col *= 0.90;                     // narrower, subtler hem fold
+    else if (edgeD < 0.012) col *= 1.05;
+    if (nd < 1.45) col *= 0.90;                         // ribbed collar ring
     // decal box measured off the reference: ~39% of torso width, aspect 2.6:1,
     // centred on the wearer's LEFT chest, 27% of shirt-length below the collar
     vec2 duv = vec2((nx - 0.576) / 0.17 + 0.5, (ny - 0.250) / 0.034 + 0.5);
@@ -944,12 +947,10 @@ function shirt2Build() {
   for (let i = 0; i < pos.count; i++) {
     const nx = (pos.array[i*3] - bmin.x) / bsx, ny = (pos.array[i*3+1] - bmin.y) / bsy;
     dress[i*2] = nx; dress[i*2+1] = ny;
-    // st-29: shell kept LARGER than the visible shirt — all visible edges are
-    // cut per-pixel inside solid geometry (smooth iso-lines), never at the
-    // jagged triangle boundary of the subset
-    const torso  = ny > 0.09 && ny < 0.58 && Math.abs(nx - 0.5) < 0.28;
-    const sleeve = ny > 0.09 && ny < 0.35;
-    keepV[i] = (torso || sleeve) ? 1 : 0;
+    // st-31: shell = the WHOLE upper-body band, no width test — a width test
+    // excluded the side-torso under the arms (the underarm holes / side
+    // slits). All shaping is per-pixel in the fragment shader.
+    keepV[i] = (ny > 0.09 && ny < 0.60) ? 1 : 0;
   }
   const keep = [];
   for (let f = 0; f < idx.length; f += 3)
