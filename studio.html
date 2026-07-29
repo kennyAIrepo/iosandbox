@@ -103,7 +103,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-5';
+const BUILD = 'st-6';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -164,7 +164,7 @@ const SCALE_FRAG = `
     vec3 base = mix(vec3(0.03, 0.15, 0.07), vec3(0.14, 0.55, 0.23), lam);
     vec3 col = base + rim * vec3(0.55, 0.85, 0.6) * (0.35 + 0.65 * lam) + pow(lam, 8.0) * 0.22;
     float front = 1.1 - uGrow * 2.4;
-    float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
+    float on = smoothstep(front - 0.02, front + 0.12, vPos.y);
     col += smoothstep(0.1, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0)) * vec3(0.4, 1.0, 0.5);
     vec3 grey = vec3(0.55) * (0.25 + 0.75 * lam);
     gl_FragColor = vec4(mix(grey, col, on), 1.0);
@@ -227,7 +227,7 @@ const LFX_FRAG = `
     scaled += rim * vec3(0.30, 0.55, 0.33) * (0.4 + 0.6 * lam);
     scaled += pow(lam, 8.0) * 0.14;
     float front = 1.1 - uGrow * 2.4;
-    float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
+    float on = smoothstep(front - 0.02, front + 0.12, vPos.y);
     vec3 col = mix(skin, scaled, 0.30 + 0.70 * tile);
     col += smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0)) * vec3(0.35, 0.9, 0.45);
     float alpha = on * 0.96 * mclip;

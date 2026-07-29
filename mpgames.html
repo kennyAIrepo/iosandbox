@@ -411,7 +411,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-19';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-20';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -520,7 +520,7 @@ const RIG_FRAG = `
     col += pow(lam, 8.0) * 0.25;
     // GROWTH: front sweeps feet→head (body y is downward in camera space)
     float front = 1.1 - uGrow * 2.4;
-    float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
+    float on = smoothstep(front - 0.02, front + 0.12, vPos.y);
     float sparkle = smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0));
     col += sparkle * vec3(0.4, 1.0, 0.5);
     float alpha = (0.16 + 0.74 * tile) * on;
