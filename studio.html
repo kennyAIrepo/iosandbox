@@ -130,6 +130,15 @@ const FX_LANE = localStorage.getItem('hopeos-fx-server') || '';
 const _rl = localStorage.getItem('hopeos-rig-server');
 const RIG_LANE = _rl === 'off' ? ''
   : (_rl || 'wss://kennyairepo--hopeos-rig-rig-web.modal.run/ws');   // st-20 default
+// st-22 MULTIPLAYER ROLES — laptop A: ?room=abc (role=cam default) streams the
+// camera; laptop B: ?room=abc&role=dollhouse is a PURE REMOTE VIEWER (no
+// camera) rendering the same person's rig live from the cloud hub.
+const ROOM = new URLSearchParams(location.search).get('room') || '';
+const ROLE = new URLSearchParams(location.search).get('role') === 'dollhouse' ? 'dollhouse' : 'cam';
+const RIG_URL = RIG_LANE && ROOM
+  ? RIG_LANE + (RIG_LANE.includes('?') ? '&' : '?') + 'room=' + encodeURIComponent(ROOM)
+    + '&role=' + (ROLE === 'dollhouse' ? 'view' : 'cam')
+  : RIG_LANE;
 
 const vid = document.getElementById('vid'), lov = document.getElementById('lov');
 const lctx = lov.getContext('2d');
@@ -1020,7 +1029,7 @@ function connect() {
 const RIGWS = { ws: null, up: false, ms: 0, lastPkt: 0 };
 function rigLaneConnect() {
   if (!RIG_LANE) return;
-  try { RIGWS.ws = new WebSocket(RIG_LANE); } catch { return; }
+  try { RIGWS.ws = new WebSocket(RIG_URL); } catch { return; }
   RIGWS.ws.binaryType = 'arraybuffer';
   RIGWS.ws.onopen = () => {
     RIGWS.up = true;
@@ -1260,6 +1269,16 @@ async function boot(kind) {
 }
 document.getElementById('bootCam').addEventListener('click', () => boot('cam'));
 document.getElementById('bootSample').addEventListener('click', () => boot('sample'));
+// st-22: remote-viewer boot — no camera, no upload; full-screen dollhouse fed
+// by the room's rig packets from the hub
+if (ROLE === 'dollhouse') {
+  document.getElementById('boot').style.display = 'none';
+  document.getElementById('scrL').style.display = 'none';
+  const R = document.getElementById('scrR');
+  R.style.position = 'fixed'; R.style.inset = '0';
+  S.rigOn = true;
+  toast('🏠 REMOTE DOLLHOUSE — room "' + (ROOM || 'solo') + '" · rendering the producer\'s live rig', 7000);
+}
 
 // ── main loop ────────────────────────────────────────────────────────────
 function loop(now) {
