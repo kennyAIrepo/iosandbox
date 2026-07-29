@@ -109,7 +109,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-40';
+const BUILD = 'st-41';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -922,7 +922,7 @@ const SHIRT2_FRAG = `
     float edgeD = min(hemY - ny, ny - 0.148);
     if (edgeD < 0.008) col *= 0.90;                     // narrower, subtler hem fold
     else if (edgeD < 0.012) col *= 1.05;
-    if (nd < 1.45) col *= 0.90;                         // ribbed collar ring
+    // (collar rib removed per request — clean plain neckline)
     // decal box measured off the reference: ~39% of torso width, aspect 2.6:1,
     // centred on the wearer's LEFT chest, 27% of shirt-length below the collar
     vec2 duv = vec2((nx - 0.576) / 0.17 + 0.5, (ny - 0.250) / 0.034 + 0.5);
@@ -1031,7 +1031,7 @@ function shirt2Build() {
   // shirt's shape/coloring/finish never regenerates or varies again.
   const fitKey = (() => { const s = S.rig.topoFaces || ''; let h = 5381;
     for (let i = 0; i < s.length; i += 97) h = ((h * 33) + s.charCodeAt(i)) >>> 0;
-    return 'hopeos-fit2-' + s.length + '-' + h.toString(36); })();   // v2: smoothed limb field
+    return 'hopeos-fit3-' + s.length + '-' + h.toString(36); })();   // v3: arm-count gate
   let dress = null;
   try { const cs = localStorage.getItem(fitKey);
     if (cs) { const b = atob(cs), u = new Uint8Array(b.length);
@@ -1080,6 +1080,14 @@ function shirt2Build() {
       lb = next;
     }
     for (let i = 0; i < pos.count; i++) dress[i*3+2] = lb[i];
+    // st-41 FIT VALIDITY GATE: a real short-sleeve fit REQUIRES hanging arms
+    // (a healthy count of arm-labeled vertices below the chest band). Arms
+    // raised overhead passes the aspect test but yields ~zero arm labels —
+    // refuse that pose, wait for a proper standing frame. This is what makes
+    // "short sleeves, fixed length" hold at ALL times.
+    let armN = 0;
+    for (let i = 0; i < pos.count; i++) if (lb[i] > 0.5) armN++;
+    if (armN < 120) return;
     try { const u = new Uint8Array(dress.buffer); let s = '';
       for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
       localStorage.setItem(fitKey, btoa(s));       // the fit is now STATIC
