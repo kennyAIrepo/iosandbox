@@ -109,7 +109,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-42';
+const BUILD = 'st-43';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -981,19 +981,24 @@ const PANTS_FRAG = `
   float fbm(vec2 p){ return 0.55*noise(p)+0.28*noise(p*2.03)+0.17*noise(p*4.11); }
   void main(){
     float ny = vDress.y;
-    float alpha = smoothstep(0.495, 0.515, ny);         // waist (sits under the tee hem)
-    alpha *= smoothstep(0.962, 0.946, ny);              // ankle
+    // st-43: waistband fully SOLID well above the tee hem — no gap possible
+    float alpha = smoothstep(0.470, 0.490, ny);
+    alpha *= smoothstep(0.953, 0.941, ny);              // clean end above the feet
     alpha *= smoothstep(0.35, 0.60, vDress.w);          // legs only — never hands
     if (alpha < 0.02) discard;
     vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
     float lam = clamp(0.35 + 0.65 * max(dot(n, normalize(vec3(0.4, 0.8, 0.5))), 0.0), 0.0, 1.0);
-    float fold  = fbm(vP.xy * 5.0 + vP.z * 2.0) - 0.5;  // cloth folds
-    float twill = noise(vec2(vP.x * 150.0 + vP.y * 150.0, vP.y * 42.0)) * 0.06;  // denim weave
-    vec3 col = vec3(0.231, 0.345, 0.502) * (0.55 + 0.45 * lam + fold * 0.15 + twill);
-    col *= 0.92 + 0.16 * fbm(vP.xy * 2.0);              // stonewash variation
+    // st-43: subtle denim like the tee's fabric — fine weave, soft folds
+    float fold  = fbm(vP.xy * 5.0 + vP.z * 2.0) - 0.5;
+    float twill = noise(vec2(vP.x * 90.0 + vP.y * 90.0, vP.y * 30.0)) * 0.035
+                + noise(vP.xy * 240.0) * 0.02;
+    vec3 col = vec3(0.231, 0.345, 0.502) * (0.58 + 0.42 * lam + fold * 0.12 + twill);
+    col *= 0.95 + 0.10 * fbm(vP.xy * 2.0);              // gentle stonewash
     col += pow(1.0 - abs(n.z), 3.0) * 0.03;
-    float hd = 0.946 - ny;                              // ankle hem stitch
-    if (hd > 0.0 && hd < 0.008) col *= 0.88;
+    // st-43: rolled lighter CUFF at the ankle (pic-2 finish) with a seam line
+    float cuff = smoothstep(0.925, 0.932, ny);
+    col = mix(col, col * 1.22 + vec3(0.015), cuff);
+    if (abs(ny - 0.927) < 0.0025) col *= 0.85;
     gl_FragColor = vec4(col, alpha);
   }`;
 function shirt2TexBack() {
@@ -1060,7 +1065,7 @@ function shirt2Build() {
   // shirt's shape/coloring/finish never regenerates or varies again.
   const fitKey = (() => { const s = S.rig.topoFaces || ''; let h = 5381;
     for (let i = 0; i < s.length; i += 97) h = ((h * 33) + s.charCodeAt(i)) >>> 0;
-    return 'hopeos-fit4-' + s.length + '-' + h.toString(36); })();   // v4: +leg labels (pants)
+    return 'hopeos-fit5-' + s.length + '-' + h.toString(36); })();   // v5: higher waist labels
   let dress = null;
   try { const cs = localStorage.getItem(fitKey);
     if (cs) { const b = atob(cs), u = new Uint8Array(b.length);
@@ -1117,7 +1122,7 @@ function shirt2Build() {
       if (dress[i*4+1] > 0.70 && dress[i*4+1] < 0.90) { legL[i] = 1; st2.push(i); }
     while (st2.length) {
       const v = st2.pop(); const l = adj.get(v);
-      if (l) for (const w of l) if (!legL[w] && dress[w*4+1] > 0.48) { legL[w] = 1; st2.push(w); }
+      if (l) for (const w of l) if (!legL[w] && dress[w*4+1] > 0.44) { legL[w] = 1; st2.push(w); }
     }
     for (let i = 0; i < pos.count; i++) dress[i*4+3] = legL[i];
     // st-41 FIT VALIDITY GATE: a real short-sleeve fit REQUIRES hanging arms
