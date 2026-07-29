@@ -109,7 +109,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-39';
+const BUILD = 'st-40';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -256,7 +256,8 @@ const SCALE_FRAG = `
     float front = 1.15 - uGrow * 2.45 + warp;
     float on = smoothstep(front - 0.02, front + 0.14, vPos.y);
     col += smoothstep(0.06, 0.0, abs(vPos.y - front)) * (0.4 + 0.4 * sin(uTime * 7.0)) * vec3(0.25, 0.7, 0.3);
-    vec3 grey = vec3(0.55) * (0.25 + 0.75 * clamp(dot(n, normalize(vec3(0.4,0.8,0.5))), 0.0, 1.0));
+    // st-40: avatar base = skin tone (sampled from the reference swatch)
+    vec3 grey = vec3(0.937, 0.682, 0.518) * (0.30 + 0.70 * clamp(dot(n, normalize(vec3(0.4,0.8,0.5))), 0.0, 1.0));
     vec3 outc = mix(grey, col, on);
 
     // ── st-23 CLOSET: yellow tee over the upper torso + short sleeves ──────
