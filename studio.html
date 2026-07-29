@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-23';
+const BUILD = 'st-24';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -188,7 +188,9 @@ function dhBtn(txt, right, fn) {
 addEventListener('DOMContentLoaded', () => {
   dhBtn('🪞 mirror', 8, () => { if (!rigMesh) return;
     rigMesh.scale.x *= -1;
-    localStorage.setItem('hopeos-dh-mirror', rigMesh.scale.x < 0 ? '1' : '0'); });
+    const mir = rigMesh.scale.x < 0;
+    localStorage.setItem('hopeos-dh-mirror', mir ? '1' : '0');
+    if (rigMesh.material.uniforms.uMirr) rigMesh.material.uniforms.uMirr.value = mir ? 1 : 0; });
   // st-23 CLOSET — one item for now: the yellow hackathon tee
   dhBtn('👕 closet: yellow tee', 184, () => { if (!rigMesh) return;
     const u = rigMesh.material.uniforms.uShirt;
@@ -211,7 +213,7 @@ const SCALE_FRAG = `
   varying vec3 vPos; varying vec3 vNrm; varying vec3 vONrm;
   uniform sampler2D uTex, uNrm;
   uniform sampler2D uDecal;                     // st-23: chest-print (closet)
-  uniform float uTime, uGrow, uScale, uShirt;
+  uniform float uTime, uGrow, uScale, uShirt, uMirr;
   uniform vec3 uBMin, uBMax, uShirtCol;
   float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float noise(vec2 p){
@@ -256,6 +258,7 @@ const SCALE_FRAG = `
         // chest print — wearer's LEFT upper chest, front faces only
         vec2 duv = vec2((nx - 0.635) / 0.17 + 0.5, (ny - 0.235) / 0.19 + 0.5);
         if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && vONrm.z < -0.05) {
+          duv.x = mix(duv.x, 1.0 - duv.x, uMirr);   // st-24: stay readable under mirror
           float ink = texture2D(uDecal, duv).a;
           cloth = mix(cloth, vec3(0.06, 0.06, 0.07), ink * 0.92);
         }
@@ -839,6 +842,12 @@ function shirtDecalTex() {
   return _shirtTex;
 }
 function rigTopo(t) {
+  // st-24: topology may legitimately CHANGE (each hub container computes its
+  // own decimation map — mixing old faces with new vertex order weaves spike
+  // webs between the limbs). Rebuild cleanly whenever the signature differs.
+  S.rig.topoFaces = t.faces;
+  if (rigMesh) { scn.remove(rigMesh); rigMesh.geometry.dispose(); rigMesh.material.dispose(); rigMesh = null; }
+  if (lfxMesh) { lfxScn?.remove(lfxMesh); lfxMesh.geometry.dispose(); lfxMesh.material.dispose(); lfxMesh = null; }
   const mk = () => {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
@@ -849,6 +858,7 @@ function rigTopo(t) {
     uniforms: { uTime: { value: 0 }, uGrow: { value: 0 }, uMix: { value: 1 },
                 uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm }, uScale: { value: 5.5 },
                 uShirt: { value: localStorage.getItem('hopeos-shirt') === '1' ? 1 : 0 },
+                uMirr: { value: localStorage.getItem('hopeos-dh-mirror') === '0' ? 0 : 1 },
                 uShirtCol: { value: new THREE.Vector3(0.914, 0.898, 0.545) },  // photo yellow
                 uDecal: { value: shirtDecalTex() },
                 uBMin: { value: new THREE.Vector3(-0.4, -1.6, -0.35) },
@@ -1083,7 +1093,7 @@ function connect() {
     S.smasks = d.smasks || [];
     if (d.court) S.court = d.court;
     S.msGpu = d.ms || 0; S.samMs = d.sms || 0;
-    if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
+    if (d.rig_topo && d.rig_topo.faces !== S.rig.topoFaces) rigTopo(d.rig_topo);
     // st-21 SINGLE-SOURCE RULE: while the Modal lane is up, node rig packets
     // are DROPPED — two interleaved quantization ranges shredded the mesh 1/s
     if (d.rig && !RIGWS.up) rigPacket(d.rig);
@@ -1117,7 +1127,7 @@ function rigLaneConnect() {
     // st-22: cts is our capture stamp echoed back → TRUE camera→mesh latency
     if (d.cts && t - d.cts > 0 && t - d.cts < 10000) {
       RIGWS.e2e = RIGWS.e2e ? RIGWS.e2e * .8 + (t - d.cts) * .2 : t - d.cts; }
-    if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
+    if (d.rig_topo && d.rig_topo.faces !== S.rig.topoFaces) rigTopo(d.rig_topo);
     if (d.rig) rigPacket(d.rig);
     if (d.rigst === 'loading' && !S._mlt) { S._mlt = 1; toast('⚡ Modal rig GPU warming up…', 6000); }
   };
