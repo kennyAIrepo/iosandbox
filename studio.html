@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-33';
+const BUILD = 'st-34';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -1007,10 +1007,35 @@ function shirt2Build() {
   for (let i = 0; i < pos.count; i++) {
     const nx = (pos.array[i*3] - bmin.x) / bsx, ny = (pos.array[i*3+1] - bmin.y) / bsy;
     dress[i*2] = nx; dress[i*2+1] = ny;
-    // st-31: shell = the WHOLE upper-body band, no width test — a width test
-    // excluded the side-torso under the arms (the underarm holes / side
-    // slits). All shaping is per-pixel in the fragment shader.
-    keepV[i] = (ny > 0.09 && ny < 0.60) ? 1 : 0;
+    keepV[i] = 0;   // decided below (st-34 limb separation)
+  }
+  // st-34 LIMB SEPARATION: in the below-chest band the torso is ONE connected
+  // component of the mesh; hanging forearms/hands are SEPARATE components
+  // (they attach to the body via the shoulders, ABOVE the band). Flood-fill
+  // from core-torso seeds and keep only that component — fabric can never
+  // land on a hand again, in any pose.
+  const inBand = i => dress[i*2+1] > 0.30 && dress[i*2+1] < 0.62;
+  const adj = new Map();
+  const apush = (k, v) => { let l = adj.get(k); if (!l) { l = []; adj.set(k, l); } l.push(v); };
+  for (let f = 0; f < idx.length; f += 3) {
+    for (const [a, b] of [[idx[f], idx[f+1]], [idx[f+1], idx[f+2]], [idx[f], idx[f+2]]]) {
+      if (inBand(a) && inBand(b)) { apush(a, b); apush(b, a); }
+    }
+  }
+  const torsoLow = new Uint8Array(pos.count); const stack = [];
+  for (let i = 0; i < pos.count; i++) {
+    if (dress[i*2+1] > 0.32 && dress[i*2+1] < 0.55 && Math.abs(dress[i*2] - 0.5) < 0.15) {
+      torsoLow[i] = 1; stack.push(i);
+    }
+  }
+  while (stack.length) {
+    const v = stack.pop();
+    const l = adj.get(v);
+    if (l) for (const w of l) if (!torsoLow[w]) { torsoLow[w] = 1; stack.push(w); }
+  }
+  for (let i = 0; i < pos.count; i++) {
+    const ny = dress[i*2+1];
+    keepV[i] = ((ny > 0.09 && ny <= 0.30) || (ny > 0.30 && ny < 0.60 && torsoLow[i])) ? 1 : 0;
   }
   const keep = [];
   for (let f = 0; f < idx.length; f += 3)
