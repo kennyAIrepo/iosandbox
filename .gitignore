@@ -30,3 +30,6 @@ assets/audio/*.mp3
 
 # local-only footage samples — never deploy (source-video ToS + size)
 clips/
+tests/_frame_sample.jpg
+tests/_frame_768.jpg
+__pycache__/

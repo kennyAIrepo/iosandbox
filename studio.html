@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-21';
+const BUILD = 'st-22';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -220,11 +220,17 @@ const SCALE_FRAG = `
     vec3 grey = vec3(0.55) * (0.25 + 0.75 * clamp(dot(n, normalize(vec3(0.4,0.8,0.5))), 0.0, 1.0));
     gl_FragColor = vec4(mix(grey, col, on), 1.0);
   }`;
+// st-22: the dollhouse mesh INTERPOLATES between rig packets in the vertex
+// shader (aPrev→position over uMix), exactly the LIVE_EFFECTS_PLAN contract —
+// "client interpolates to 60" — instead of snapping at packet rate.
 const SCALE_VERT = `
+  attribute vec3 aPrev; attribute vec3 aPrevN;
+  uniform float uMix;
   varying vec3 vPos; varying vec3 vNrm;
   void main() {
-    vPos = position; vNrm = normalMatrix * normal;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec3 p = mix(aPrev, position, uMix);
+    vPos = p; vNrm = normalMatrix * normalize(mix(aPrevN, normal, uMix));
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }`;
 // LEFT-SCREEN EFFECT LAYER — the same mesh projected ONTO the live person
 // (pinhole projection in the vertex shader via cam_t/focal, exactly the
@@ -773,10 +779,16 @@ function rigTopo(t) {
     return geo;
   };
   const mat = new THREE.ShaderMaterial({ vertexShader: SCALE_VERT, fragmentShader: SCALE_FRAG,
-    uniforms: { uTime: { value: 0 }, uGrow: { value: 0 },
+    uniforms: { uTime: { value: 0 }, uGrow: { value: 0 }, uMix: { value: 1 },
                 uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm }, uScale: { value: 5.5 } },
     side: THREE.DoubleSide });
-  rigMesh = new THREE.Mesh(mk(), mat);
+  const rgeo = mk();
+  // st-22 interp targets: position/normal = latest packet, aPrev/aPrevN =
+  // where the mesh was displayed when that packet landed
+  rgeo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+  rgeo.setAttribute('aPrev',  new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+  rgeo.setAttribute('aPrevN', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+  rigMesh = new THREE.Mesh(rgeo, mat);
   rigMesh.frustumCulled = false;
   rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
   // st-21: selfie-mirror is a PREFERENCE (🪞 button flips live and persists);
@@ -808,13 +820,27 @@ function rigTopo(t) {
   S.rig.topo = t;
   toast('🦴 body reconstructed — scales on YOU (left) + orbitable mesh (right)');
 }
+function rigSpan() { return Math.max(120, Math.min(1000, S.rig.span || 400)); }
 function rigPacket(p) {
   if (!rigMesh) return;
+  const now = performance.now();
   const q = b64u16(p.q), n = p.nv;
-  const pos = rigMesh.geometry.getAttribute('position');
+  const geo = rigMesh.geometry;
+  const pos = geo.getAttribute('position'), nrm = geo.getAttribute('normal');
+  const prev = geo.getAttribute('aPrev'), prevN = geo.getAttribute('aPrevN');
   const lpos = lfxMesh && lfxMesh.geometry.getAttribute('position');
   const lprev = lfxMesh && lfxMesh.geometry.getAttribute('aPrev');
   if (lprev && lpos) { lprev.array.set(lpos.array); lprev.needsUpdate = true; }
+  // freeze the DISPLAYED (interpolated) state into aPrev/aPrevN so the new
+  // target blends from exactly where the mesh is on screen — no snap-back
+  if (S.rig.seen) {
+    const m = Math.min(1, (now - S.rig.lastPkt) / rigSpan());
+    const pa = prev.array, na = prevN.array, xa = pos.array, ta = nrm.array;
+    for (let i = 0; i < n * 3; i++) {
+      pa[i] += (xa[i] - pa[i]) * m;
+      na[i] += (ta[i] - na[i]) * m;
+    }
+  }
   for (let a = 0; a < 3; a++) { const mn = p.vmin[a], rg = p.vmax[a] - mn;
     for (let i = 0; i < n; i++) {
       const v = mn + q[i * 3 + a] / 65535 * rg;
@@ -822,13 +848,19 @@ function rigPacket(p) {
       if (lpos) lpos.array[i * 3 + a] = v;
     } }
   pos.needsUpdate = true;
-  rigMesh.geometry.computeVertexNormals();
+  geo.computeVertexNormals();
+  if (!S.rig.seen) {          // first packet: appear in place, no lerp-in
+    prev.array.set(pos.array); prevN.array.set(nrm.array); S.rig.seen = 1;
+  }
+  prev.needsUpdate = true; prevN.needsUpdate = true;
   if (lpos) { lpos.needsUpdate = true;
     const u = lfxMesh.material.uniforms;
     u.uCamT.value.set(p.cam_t[0], p.cam_t[1], p.cam_t[2]);
     u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih; }
-  S.rig.tPrev = S.rig.lastPkt || performance.now();
-  S.rig.lastPkt = performance.now(); S.rig.ms = p.ms;
+  const dt = now - (S.rig.lastPkt || now);
+  if (dt > 0 && dt < 3000) S.rig.span = S.rig.span ? S.rig.span * 0.7 + dt * 0.3 : dt;
+  S.rig.tPrev = S.rig.lastPkt || now;
+  S.rig.lastPkt = now; S.rig.ms = p.ms;
   S.rig.id = p.id;
   S.rig.box = [p.box[0] / p.iw, p.box[1] / p.ih, p.box[2] / p.iw, p.box[3] / p.ih];
   // growth does NOT auto-start: default = neutral body rig; effects start it
@@ -1004,13 +1036,49 @@ function rigLaneConnect() {
   };
   RIGWS.ws.onmessage = (e) => {
     let d; try { d = JSON.parse(e.data); } catch { return; }
-    RIGWS.lastPkt = performance.now(); RIGWS.ms = d.ms || RIGWS.ms;
+    const t = performance.now();
+    RIGWS.lastPkt = t; RIGWS.ms = d.ms || RIGWS.ms;
+    RIGWS.lastSend = 0;   // ping-pong: a finished inference invites a fresh frame NOW
+    // st-22: cts is our capture stamp echoed back → TRUE camera→mesh latency
+    if (d.cts && t - d.cts > 0 && t - d.cts < 10000) {
+      RIGWS.e2e = RIGWS.e2e ? RIGWS.e2e * .8 + (t - d.cts) * .2 : t - d.cts; }
     if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
     if (d.rig) rigPacket(d.rig);
     if (d.rigst === 'loading' && !S._mlt) { S._mlt = 1; toast('⚡ Modal rig GPU warming up…', 6000); }
   };
 }
 rigLaneConnect();
+// ── st-22: DEDICATED RIG PUMP ────────────────────────────────────────────
+// The rig lane used to piggyback on the node pump: frames went out only when
+// the node lane's adaptive cadence fired (tuned by OREGON's rtt), gated by
+// the NODE's in-flight counter, and not at all while the node socket was
+// down. Now the rig lane captures + paces its own frames: the Modal server
+// is latest-frame-wins, so we offer frames at ~2× the measured packet rate —
+// the frame it picks up is never older than ~half an inference.
+const rcv = document.createElement('canvas'); const rctx = rcv.getContext('2d');
+RIGWS.lastSend = 0; RIGWS.busy = false; RIGWS.e2e = 0;
+function rigPump(now) {
+  if (!RIGWS.up || !S.rigOn || RIGWS.busy || !vid.videoWidth) return;
+  if (RIGWS.ws.readyState !== 1 || RIGWS.ws.bufferedAmount > 131072) return;
+  const iv = Math.max(80, Math.min(300, (S.rig.span || 400) * 0.5));
+  if (now - RIGWS.lastSend < iv) return;
+  RIGWS.lastSend = now; RIGWS.busy = true;
+  // 768px is plenty: the model crops the person box and resizes to its own
+  // input — smaller jpeg = faster encode + upload + decode
+  const w = 768, h = Math.round(w * vid.videoHeight / vid.videoWidth) || 432;
+  rcv.width = w; rcv.height = h; rctx.drawImage(vid, 0, 0, w, h);
+  const capT = now;
+  rcv.toBlob(b => {
+    RIGWS.busy = false;
+    if (!b || !RIGWS.up || RIGWS.ws.readyState !== 1) return;
+    b.arrayBuffer().then(buf => {
+      const out = new ArrayBuffer(8 + buf.byteLength);
+      new DataView(out).setFloat64(0, capT, true);
+      new Uint8Array(out, 8).set(new Uint8Array(buf));
+      RIGWS.ws.send(out);
+    });
+  }, 'image/jpeg', 0.6);
+}
 function pump(now) {
   if (!S.ws || S.ws.readyState !== 1 || !vid.videoWidth) return;
   const over = S.rttEma - S.baseRtt;
@@ -1028,8 +1096,7 @@ function pump(now) {
       new DataView(out).setFloat64(0, capT, true);
       new Uint8Array(out, 8).set(new Uint8Array(buf));
       S.ws.send(out);
-      // st-19: same frame feeds the dedicated rig lane (keep its pipe shallow)
-      if (RIGWS.up && S.rigOn && RIGWS.ws.bufferedAmount < 262144) RIGWS.ws.send(out);
+      // (st-22) rig lane no longer piggybacks here — rigPump() owns its cadence
     });
   }, 'image/jpeg', 0.62);
 }
@@ -1198,6 +1265,7 @@ document.getElementById('bootSample').addEventListener('click', () => boot('samp
 function loop(now) {
   requestAnimationFrame(loop);
   pump(now);
+  rigPump(now);   // st-22: rig lane pumps itself — independent of the node lane
   fxPump(now);
   drawLive();
   drawLfx(now);
@@ -1207,13 +1275,18 @@ function loop(now) {
   if (rigMesh) {
     rigMesh.material.uniforms.uTime.value = now * .001;
     rigMesh.material.uniforms.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 5000) : 0;
+    // st-22: blend aPrev→target over the measured packet interval → smooth
+    // 60fps motion between rig refreshes instead of packet-rate snapping
+    rigMesh.material.uniforms.uMix.value =
+      S.rig.lastPkt ? Math.min(1, (now - S.rig.lastPkt) / rigSpan()) : 1;
   }
   sizeDH.once || (sizeDH(), sizeDH.once = 1);
   ren.render(scn, cam);
   statEl.textContent = (S.ws?.readyState === 1 ? '●' : '○') +
     ` ${BUILD} · rtt ${S.rtt.toFixed(0)}ms · gpu ${S.msGpu.toFixed(0)}ms` +
     (S.samMs ? ` · sam ${S.samMs.toFixed(0)}ms` : '') +
-    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') + (PX.ready ? ` · hand ${PX.ms.toFixed(1)}ms` : '') +
+    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` +
+      (RIGWS.e2e ? `/${RIGWS.e2e.toFixed(0)}e2e` : '') : '') + (PX.ready ? ` · hand ${PX.ms.toFixed(1)}ms` : '') +
     ` · ${S.players.length}p` +
     (FX.lastFrame && now - FX.lastFrame < 3000 ? ` · fx ${FX.ms.toFixed(0)}ms` : '');
 }
