@@ -106,7 +106,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-18';
+const BUILD = 'st-19';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -120,6 +120,14 @@ const SRV = localStorage.getItem('hopeos-studio-server') || SAM3_LANE;
 { const q = new URLSearchParams(location.search).get('fx');
   if (q) localStorage.setItem('hopeos-fx-server', q); }
 const FX_LANE = localStorage.getItem('hopeos-fx-server') || '';
+// st-19: DEDICATED RIG LANE — SAM 3D Body on Modal (us-east, ~10-20ms from
+// the user vs ~150ms to the Oregon node, and an unshared GPU). When it is
+// connected the node's rig duty-cycle is released; if it drops, the node
+// lane takes back over automatically. ?rig=<wss-url> to set, ?rig=off to clear.
+{ const q = new URLSearchParams(location.search).get('rig');
+  if (q === 'off') localStorage.removeItem('hopeos-rig-server');
+  else if (q) localStorage.setItem('hopeos-rig-server', q); }
+const RIG_LANE = localStorage.getItem('hopeos-rig-server') || '';
 
 const vid = document.getElementById('vid'), lov = document.getElementById('lov');
 const lctx = lov.getContext('2d');
@@ -947,6 +955,33 @@ function connect() {
     if (d.rigst === 'loading' && !S._lt) { S._lt = 1; toast('🦴 cloud is loading the 3D body model (~1 min)…', 8000); }
   };
 }
+// ── st-19: dedicated rig-lane socket (Modal) ─────────────────────────────
+const RIGWS = { ws: null, up: false, ms: 0, lastPkt: 0 };
+function rigLaneConnect() {
+  if (!RIG_LANE) return;
+  try { RIGWS.ws = new WebSocket(RIG_LANE); } catch { return; }
+  RIGWS.ws.binaryType = 'arraybuffer';
+  RIGWS.ws.onopen = () => {
+    RIGWS.up = true;
+    RIGWS.ws.send(JSON.stringify({ cmd: 'rig', on: 1 }));
+    // release the shared node's rig duty-cycle — Modal owns the rig now
+    S.ws?.send(JSON.stringify({ cmd: 'rig', on: 0 }));
+    toast('⚡ dedicated rig GPU connected (Modal) — dollhouse goes realtime', 5000);
+  };
+  RIGWS.ws.onclose = () => {
+    RIGWS.up = false;
+    if (S.rigOn) S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));   // node fallback
+    setTimeout(rigLaneConnect, 4000);
+  };
+  RIGWS.ws.onmessage = (e) => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    RIGWS.lastPkt = performance.now(); RIGWS.ms = d.ms || RIGWS.ms;
+    if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
+    if (d.rig) rigPacket(d.rig);
+    if (d.rigst === 'loading' && !S._mlt) { S._mlt = 1; toast('⚡ Modal rig GPU warming up…', 6000); }
+  };
+}
+rigLaneConnect();
 function pump(now) {
   if (!S.ws || S.ws.readyState !== 1 || !vid.videoWidth) return;
   const over = S.rttEma - S.baseRtt;
@@ -964,6 +999,8 @@ function pump(now) {
       new DataView(out).setFloat64(0, capT, true);
       new Uint8Array(out, 8).set(new Uint8Array(buf));
       S.ws.send(out);
+      // st-19: same frame feeds the dedicated rig lane (keep its pipe shallow)
+      if (RIGWS.up && S.rigOn && RIGWS.ws.bufferedAmount < 262144) RIGWS.ws.send(out);
     });
   }, 'image/jpeg', 0.62);
 }
@@ -1083,7 +1120,7 @@ function applyPrompt(raw) {
     // st-14: the live wrap is the OWN-PIXELS rig — client-side, no SAM crop.
     // The cloud rig stays only for the dollhouse (right screen).
     S.rigOn = true;
-    S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
+    if (!RIGWS.up) S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
     grow0 = performance.now();       // start the growth front NOW
     pxOn();
     if (FX_LANE) fxOn(raw.trim());
