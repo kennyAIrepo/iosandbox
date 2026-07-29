@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-25';
+const BUILD = 'st-26';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -940,6 +940,22 @@ function rigPacket(p) {
   geo.computeVertexNormals();
   if (!S.rig.seen) {          // first packet: appear in place, no lerp-in
     prev.array.set(pos.array); prevN.array.set(nrm.array); S.rig.seen = 1;
+    // st-26 SPIKE GUARD (validated against raw hub data: 304 face edges >30cm
+    // ship IN the topology itself — a server-side decimation-map fault). Any
+    // face with an impossible edge is cut from the index; geometry stays clean
+    // no matter what the server sends.
+    const idx = geo.index.array, va = pos.array, keep = [];
+    const el = (i, j) => Math.hypot(va[i*3]-va[j*3], va[i*3+1]-va[j*3+1], va[i*3+2]-va[j*3+2]);
+    for (let f = 0; f < idx.length; f += 3) {
+      const a = idx[f], b = idx[f+1], c2 = idx[f+2];
+      if (el(a, b) < 0.30 && el(b, c2) < 0.30 && el(a, c2) < 0.30) keep.push(a, b, c2);
+    }
+    if (keep.length < idx.length) {
+      const ki = new THREE.BufferAttribute(new Uint32Array(keep), 1);
+      geo.setIndex(ki);
+      if (lfxMesh) lfxMesh.geometry.setIndex(ki.clone());
+      console.log('spike guard: dropped', (idx.length - keep.length) / 3, 'bad faces');
+    }
   }
   prev.needsUpdate = true; prevN.needsUpdate = true;
   if (lpos) { lpos.needsUpdate = true;
