@@ -103,7 +103,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-2';
+const BUILD = 'st-3';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -179,24 +179,35 @@ const SCALE_VERT = `
 // mpgames cs-19 technique): the effect lives on YOUR BODY in the live view,
 // while the dollhouse shows it in orbitable 3D.
 const LFX_VERT = `
+  attribute vec3 aPrev;
+  uniform float uMix;
   uniform vec3 uCamT; uniform float uFocal, uIw, uIh;
   uniform vec4 uCover; uniform vec2 uCanvas;
-  varying vec3 vPos;
+  varying vec3 vPos; varying vec2 vUV;
   void main() {
-    vPos = position;
-    vec3 p = position + uCamT;
+    vec3 v = mix(aPrev, position, uMix);        // lerp between 2.5Hz refreshes
+    vPos = v;
+    vec3 p = v + uCamT;
     float sx = (uFocal * p.x / p.z + uIw * 0.5) / uIw;
     float sy = (uFocal * p.y / p.z + uIh * 0.5) / uIh;
+    vUV = vec2(sx, 1.0 - sy);                   // where THIS surface point sits in the video
     vec2 px = vec2(uCover.x + sx * uCover.z, uCover.y + sy * uCover.w);
     vec2 ndc = vec2(px.x / uCanvas.x * 2.0 - 1.0, -(px.y / uCanvas.y * 2.0 - 1.0));
     gl_Position = vec4(ndc, clamp(p.z / 80.0, 0.0, 0.95), 1.0);
   }`;
+// PROJECTIVE TEXTURING — the indistinguishable trick: the mesh's base color is
+// the LIVE VIDEO sampled at each fragment's own projected position, i.e. the
+// user's real pixels. The effect then MODULATES that skin (green-shift, rim,
+// relief) instead of painting over it — misalignment shows nearly-identical
+// neighboring skin pixels, not a wrong color, so it reads as real.
 const LFX_FRAG = `
   precision highp float;
-  varying vec3 vPos;
+  varying vec3 vPos; varying vec2 vUV;
+  uniform sampler2D uVid;
   uniform float uTime, uGrow;
   void main() {
     vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
+    vec3 skin = texture2D(uVid, vUV).rgb;
     vec2 g = vec2(vPos.x, vPos.y) * 28.0; g.y *= 1.62;
     vec2 id = floor(g); g.x += mod(id.y, 2.0) * 0.5;
     vec2 f = fract(g) - vec2(0.5, 0.0);
@@ -204,14 +215,18 @@ const LFX_FRAG = `
     float tile = smoothstep(0.55, 0.47, r);
     float rim = smoothstep(0.50, 0.44, r) - smoothstep(0.42, 0.34, r);
     float lam = clamp(dot(n, normalize(vec3(0.25, -0.35, -1.0))), 0.0, 1.0);
-    vec3 base = mix(vec3(0.03, 0.16, 0.07), vec3(0.13, 0.52, 0.22), lam);
-    vec3 col = base + rim * vec3(0.55, 0.85, 0.6) * (0.35 + 0.65 * lam) + pow(lam, 8.0) * 0.25;
+    // the scales are the user's own skin, green-shifted + shaded — not paint
+    vec3 scaled = skin * vec3(0.52, 1.08, 0.58);
+    scaled *= 0.72 + 0.55 * lam;
+    scaled += rim * vec3(0.30, 0.55, 0.33) * (0.4 + 0.6 * lam);
+    scaled += pow(lam, 8.0) * 0.14;
     float front = 1.1 - uGrow * 2.4;
     float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
-    col += smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0)) * vec3(0.4, 1.0, 0.5);
-    float alpha = (0.16 + 0.74 * tile) * on;
+    vec3 col = mix(skin, scaled, 0.30 + 0.70 * tile);
+    col += smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0)) * vec3(0.35, 0.9, 0.45);
+    float alpha = on * 0.96;
     if (alpha < 0.01) discard;
-    gl_FragColor = vec4(col, alpha * 0.92);
+    gl_FragColor = vec4(col, alpha);
   }`;
 let rigMesh = null, lfxMesh = null, lfxRen = null, lfxScn = null, lfxCam = null, grow0 = 0;
 function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
@@ -228,15 +243,20 @@ function rigTopo(t) {
   rigMesh.frustumCulled = false;
   rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
   scn.add(rigMesh);
-  // left-screen projected twin
+  // left-screen projected twin — textured with the USER'S OWN LIVE PIXELS
   try {
     lfxRen = lfxRen || new THREE.WebGLRenderer({ canvas: document.getElementById('lmesh'), alpha: true, antialias: true });
+    const vtex = new THREE.VideoTexture(vid);
+    vtex.colorSpace = THREE.SRGBColorSpace;
+    const lgeo = mk();
+    lgeo.setAttribute('aPrev', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
     const lmat = new THREE.ShaderMaterial({ vertexShader: LFX_VERT, fragmentShader: LFX_FRAG,
       transparent: true, depthWrite: true, side: THREE.DoubleSide,
-      uniforms: { uCamT: { value: new THREE.Vector3() }, uFocal: { value: 1000 }, uIw: { value: 960 },
+      uniforms: { uVid: { value: vtex }, uMix: { value: 1 },
+                  uCamT: { value: new THREE.Vector3() }, uFocal: { value: 1000 }, uIw: { value: 960 },
                   uIh: { value: 540 }, uCover: { value: new THREE.Vector4() },
                   uCanvas: { value: new THREE.Vector2() }, uTime: { value: 0 }, uGrow: { value: 0 } } });
-    lfxMesh = new THREE.Mesh(mk(), lmat);
+    lfxMesh = new THREE.Mesh(lgeo, lmat);
     lfxMesh.frustumCulled = false;
     lfxScn = new THREE.Scene(); lfxScn.add(lfxMesh);
     lfxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
@@ -249,6 +269,8 @@ function rigPacket(p) {
   const q = b64u16(p.q), n = p.nv;
   const pos = rigMesh.geometry.getAttribute('position');
   const lpos = lfxMesh && lfxMesh.geometry.getAttribute('position');
+  const lprev = lfxMesh && lfxMesh.geometry.getAttribute('aPrev');
+  if (lprev && lpos) { lprev.array.set(lpos.array); lprev.needsUpdate = true; }
   for (let a = 0; a < 3; a++) { const mn = p.vmin[a], rg = p.vmax[a] - mn;
     for (let i = 0; i < n; i++) {
       const v = mn + q[i * 3 + a] / 65535 * rg;
@@ -261,6 +283,7 @@ function rigPacket(p) {
     const u = lfxMesh.material.uniforms;
     u.uCamT.value.set(p.cam_t[0], p.cam_t[1], p.cam_t[2]);
     u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih; }
+  S.rig.tPrev = S.rig.lastPkt || performance.now();
   S.rig.lastPkt = performance.now(); S.rig.ms = p.ms;
   if (!grow0) grow0 = performance.now();
 }
@@ -283,6 +306,8 @@ function drawLfx(now) {
   u.uCanvas.value.set(r.width, r.height);
   u.uTime.value = now * .001;
   u.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 5000) : 0;
+  const span = Math.max(120, S.rig.lastPkt - (S.rig.tPrev || S.rig.lastPkt));
+  u.uMix.value = Math.min(1.2, (now - S.rig.lastPkt) / span);
   lfxRen.render(lfxScn, lfxCam);
 }
 function sizeDH() {
@@ -308,11 +333,20 @@ function drawLive() {
   const dw = vw * sc, dh2 = vh * sc, ox = (lov.width - dw) / 2, oy = (lov.height - dh2) / 2;
   const P = (x, y) => [ox + x * dw, oy + y * dh2];
   for (const o of S.smasks) {
-    const col = o.role === 'player' ? '#5dff7d' : cptColor(o.role);
+    const isP = o.role === 'player';
+    // rig on → the textured mesh IS the person layer; skip the mask fill noise
+    if (isP && S.rigOn && S.rig.lastPkt) continue;
+    // cs-13 MOTION WARP: re-pin person masks to the live skeleton every frame
+    let dx = 0, dy = 0;
+    if (isP && o.a) {
+      const p = S.players.find(q => q.id === o.id);
+      if (p) { dx = (p.bbox.x + p.bbox.w / 2) - o.a[0]; dy = (p.bbox.y + p.bbox.h / 2) - o.a[1]; }
+    }
+    const col = isP ? '#5dff7d' : cptColor(o.role);
     lctx.strokeStyle = col; lctx.fillStyle = col + '26'; lctx.lineWidth = 2;
     for (const poly of o.polys) {
       lctx.beginPath();
-      poly.forEach(([x, y], i) => { const [X, Y] = P(x, y); i ? lctx.lineTo(X, Y) : lctx.moveTo(X, Y); });
+      poly.forEach(([x, y], i) => { const [X, Y] = P(x + dx, y + dy); i ? lctx.lineTo(X, Y) : lctx.moveTo(X, Y); });
       lctx.closePath(); lctx.fill(); lctx.stroke();
     }
     if (o.role !== 'player' && o.polys[0]) {
