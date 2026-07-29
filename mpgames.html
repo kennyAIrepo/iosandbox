@@ -411,7 +411,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-20';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-21';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -2605,6 +2605,7 @@ async function csStart(url) {
   csStop();
   try { YOLO.ws?.close(); } catch (_) {}
   CS.on = true;
+  CS.url = url;                 // cs-21: remembered so a dropped stream can re-ingest
   toast('☁ cloud ingest starting — the GPU is fetching the stream…', 6000);
   // STRUCTURAL RULE: the overlay pipeline NEVER waits on the video element.
   // We resolve as soon as the cloud confirms the stream (first meta); the
@@ -2638,7 +2639,15 @@ async function csStart(url) {
       else if (d.type === 'eof') toast('☁ stream ended on the server');
       else if (d.type === 'ingest_error') toast('☁ ingest failed: ' + (d.msg || 'unknown'), 9000);
     };
-    ws.onclose = () => { if (!settled) { settled = true; rej(new Error('cloud connection failed — check the tracking-server URL')); } else if (CS.on) toast('☁ cloud stream disconnected'); };
+    ws.onclose = () => {
+      if (!settled) { settled = true; rej(new Error('cloud connection failed — check the tracking-server URL')); }
+      else if (CS.on) {
+        // cs-21: a dropped stream (e.g. server restart) used to strand the page
+        // in CS mode with no uploads AND no server ingest — reconnect + re-ingest
+        toast('☁ cloud stream dropped — reconnecting…', 4000);
+        setTimeout(() => { if (CS.on && CS.url) csStart(CS.url).catch(() => csStop()); }, 3000);
+      }
+    };
     setTimeout(() => { if (!settled) { settled = true; rej(new Error('no answer from the cloud in 30s')); } }, 30000);
   });
   YOLO.ws = CS.ws;                                  // HUD + tap-lock see a live socket
