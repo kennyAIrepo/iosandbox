@@ -103,7 +103,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-4';
+const BUILD = 'st-5';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -184,13 +184,14 @@ const LFX_VERT = `
   uniform float uMix;
   uniform vec3 uCamT; uniform float uFocal, uIw, uIh;
   uniform vec4 uCover; uniform vec2 uCanvas;
+  uniform vec2 uShift;                          // E1: pose-rate snap (live bbox − rig-time bbox)
   varying vec3 vPos; varying vec2 vUV;
   void main() {
     vec3 v = mix(aPrev, position, uMix);        // lerp between 2.5Hz refreshes
     vPos = v;
     vec3 p = v + uCamT;
-    float sx = (uFocal * p.x / p.z + uIw * 0.5) / uIw;
-    float sy = (uFocal * p.y / p.z + uIh * 0.5) / uIh;
+    float sx = (uFocal * p.x / p.z + uIw * 0.5) / uIw + uShift.x;
+    float sy = (uFocal * p.y / p.z + uIh * 0.5) / uIh + uShift.y;
     vUV = vec2(sx, 1.0 - sy);                   // where THIS surface point sits in the video
     vec2 px = vec2(uCover.x + sx * uCover.z, uCover.y + sy * uCover.w);
     vec2 ndc = vec2(px.x / uCanvas.x * 2.0 - 1.0, -(px.y / uCanvas.y * 2.0 - 1.0));
@@ -205,10 +206,14 @@ const LFX_FRAG = `
   precision highp float;
   varying vec3 vPos; varying vec2 vUV;
   uniform sampler2D uVid;
+  uniform sampler2D uMask;                      // E1: feathered person-mask clip
   uniform float uTime, uGrow;
   void main() {
     vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
     vec3 skin = texture2D(uVid, vUV).rgb;
+    // pixel-accurate silhouette adherence: the SAM mask clips the 3D mesh with
+    // a soft feather — scales can never spill onto the background or a hand
+    float mclip = smoothstep(0.15, 0.6, texture2D(uMask, vUV).r);
     vec2 g = vec2(vPos.x, vPos.y) * 28.0; g.y *= 1.62;
     vec2 id = floor(g); g.x += mod(id.y, 2.0) * 0.5;
     vec2 f = fract(g) - vec2(0.5, 0.0);
@@ -225,11 +230,15 @@ const LFX_FRAG = `
     float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
     vec3 col = mix(skin, scaled, 0.30 + 0.70 * tile);
     col += smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0)) * vec3(0.35, 0.9, 0.45);
-    float alpha = on * 0.96;
+    float alpha = on * 0.96 * mclip;
     if (alpha < 0.01) discard;
     gl_FragColor = vec4(col, alpha);
   }`;
 let rigMesh = null, lfxMesh = null, lfxRen = null, lfxScn = null, lfxCam = null, grow0 = 0;
+// E1: feathered person-mask → texture that clips the effect mesh
+const maskCv = document.createElement('canvas'); maskCv.width = 480; maskCv.height = 270;
+const maskCtx = maskCv.getContext('2d');
+let maskTex = null;
 function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
 function rigTopo(t) {
   const mk = () => {
@@ -251,9 +260,11 @@ function rigTopo(t) {
     vtex.colorSpace = THREE.SRGBColorSpace;
     const lgeo = mk();
     lgeo.setAttribute('aPrev', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+    maskTex = new THREE.CanvasTexture(maskCv);
     const lmat = new THREE.ShaderMaterial({ vertexShader: LFX_VERT, fragmentShader: LFX_FRAG,
       transparent: true, depthWrite: true, side: THREE.DoubleSide,
-      uniforms: { uVid: { value: vtex }, uMix: { value: 1 },
+      uniforms: { uVid: { value: vtex }, uMask: { value: maskTex }, uMix: { value: 1 },
+                  uShift: { value: new THREE.Vector2() },
                   uCamT: { value: new THREE.Vector3() }, uFocal: { value: 1000 }, uIw: { value: 960 },
                   uIh: { value: 540 }, uCover: { value: new THREE.Vector4() },
                   uCanvas: { value: new THREE.Vector2() }, uTime: { value: 0 }, uGrow: { value: 0 } } });
@@ -286,6 +297,8 @@ function rigPacket(p) {
     u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih; }
   S.rig.tPrev = S.rig.lastPkt || performance.now();
   S.rig.lastPkt = performance.now(); S.rig.ms = p.ms;
+  S.rig.id = p.id;
+  S.rig.box = [p.box[0] / p.iw, p.box[1] / p.ih, p.box[2] / p.iw, p.box[3] / p.ih];
   // growth does NOT auto-start: default = neutral body rig; effects start it
 }
 function drawLfx(now) {
@@ -309,6 +322,34 @@ function drawLfx(now) {
   u.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 5000) : 0;
   const span = Math.max(120, S.rig.lastPkt - (S.rig.tPrev || S.rig.lastPkt));
   u.uMix.value = Math.min(1.2, (now - S.rig.lastPkt) / span);
+  // E1a POSE-RATE SNAP: live pose bbox vs the bbox at rig-inference time —
+  // the mesh follows the body at skeleton rate between 2.5Hz rig refreshes
+  if (S.rig.box) {
+    const p = S.players.find(q => q.id === S.rig.id);
+    if (p) {
+      const rcx = (S.rig.box[0] + S.rig.box[2]) / 2, rcy = (S.rig.box[1] + S.rig.box[3]) / 2;
+      u.uShift.value.set((p.bbox.x + p.bbox.w / 2) - rcx, (p.bbox.y + p.bbox.h / 2) - rcy);
+    }
+  }
+  // E1b FEATHERED MASK: rasterize the (warped) person masks at low res → the
+  // shader clips the effect to the pixel-accurate silhouette with a soft edge
+  maskCtx.clearRect(0, 0, 480, 270);
+  let drew = false;
+  for (const o of S.smasks) {
+    if (o.role !== 'player') continue;
+    let dx = 0, dy = 0;
+    if (o.a) { const p = S.players.find(q => q.id === o.id);
+      if (p) { dx = (p.bbox.x + p.bbox.w / 2) - o.a[0]; dy = (p.bbox.y + p.bbox.h / 2) - o.a[1]; } }
+    maskCtx.filter = 'blur(3px)'; maskCtx.fillStyle = '#fff';
+    for (const poly of o.polys) {
+      maskCtx.beginPath();
+      poly.forEach(([x, y], i) => { const X = (x + dx) * 480, Y = (y + dy) * 270; i ? maskCtx.lineTo(X, Y) : maskCtx.moveTo(X, Y); });
+      maskCtx.closePath(); maskCtx.fill();
+    }
+    drew = true;
+  }
+  if (!drew) { maskCtx.filter = 'none'; maskCtx.fillStyle = '#fff'; maskCtx.fillRect(0, 0, 480, 270); }
+  if (maskTex) maskTex.needsUpdate = true;
   lfxRen.render(lfxScn, lfxCam);
 }
 function sizeDH() {
@@ -434,8 +475,9 @@ function applyPrompt(raw) {
     say('✕ effects & concepts cleared — body rig keeps tracking (that is the default)'); return;
   }
   if (/(scale|slime|skin|dragon|feather|armor|fire)/.test(p)) {
-    S.rigOn = true;
+    S.rigOn = true; S.sam = true;    // sam masks feed the E1 silhouette clip
     S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
+    S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
     grow0 = performance.now();       // start the growth front NOW
     say('🐉 growing the effect over your body — left = on your skin, right = on the rig'); return;
   }
