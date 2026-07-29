@@ -18,6 +18,8 @@
   #vid { width: 2px; height: 2px; opacity: 0; pointer-events: none; }
   #c { display: block; }
   #ov { display: block; pointer-events: none; z-index: 4; }   /* body-skeleton overlay — under the 3D hand canvas */
+  #rigc { position: fixed; inset: 0; pointer-events: none; z-index: 3; }  /* 🦴 3D body mesh — under 2D overlays */
+  body.ext-source #rigc { transform: scaleX(-1); }
   /* EXTERNAL SOURCE (screen share / URL / file): broadcast footage must show
      UN-flipped (readable text), but the whole tracking stack emits MIRRORED
      coords. Solved in the DISPLAY layer only: un-flip the video, CSS-flip the
@@ -100,6 +102,7 @@
 <video id="bgVid" autoplay playsinline muted></video>
 <video id="vid" autoplay playsinline muted></video>
 <canvas id="dvid"></canvas>
+<canvas id="rigc"></canvas>
 <canvas id="ov"></canvas>
 <canvas id="c"></canvas>
 <div id="lockCard"></div>
@@ -173,6 +176,7 @@
     </div>
     <div class="sname" id="cptActive" style="display:none"></div>
     <label class="chk" id="cptNameRow" style="display:none"><input id="cptNameChk" type="checkbox"> ✏️ name players — next tap on a body names them (badge shows it)</label>
+    <label class="chk" id="rigRow" style="display:none"><input id="rigChk" type="checkbox"> 🦴 3D BODY MESH — SAM-3D-Body rigs the biggest (or 🔒locked) body · 🐉 scale skin grows on it (first arm ≈1 min model load)</label>
     <div class="sname">🖥 = share a tab (YouTube / any live page) · video sources run un-mirrored</div>
     <label class="chk"><input id="skelOnlyChk" type="checkbox" checked> 🦴 skeleton only — NO hand mesh (video sources)</label>
     <label class="chk"><input id="lockChk" type="checkbox" checked> 🎯 tap a skeleton → LOCK tracking to that player</label>
@@ -407,7 +411,7 @@ const S = {
 // modes force it.
 const meshOnly = () => S.display !== 'lab';
 const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' ? true : S.body);
-const BUILD = 'cs-18';          // bumped every deploy — STALE CACHE DETECTOR
+const BUILD = 'cs-19';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
   ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
@@ -459,6 +463,136 @@ const YOLO = { on: false, ws: null, players: [], lastT: 0, lastSend: 0, cv: docu
                banks: new Map(),                      // per-id One-Euro banks — kills keypoint jitter
                coast: new Map() };                    // per-id last pose+time — bridge brief detection gaps (no blink)
 // (all referenced by loop() from its first frame — must live above the loop() call)
+// ── 🦴 3D BODY MESH (SAM-3D-Body → MHR) + 🐉 scale skin ────────────────────
+// Topology arrives ONCE (decimated faces); each refresh is ~2.7k quantized
+// verts in CAMERA space + (cam_t, focal). The VERTEX SHADER does the pinhole
+// projection into video-normalized coords (mirrored like every overlay; CSS
+// un-flips for ext sources), so the mesh sits ON the person. Between 2-4Hz
+// refreshes the shader lerps aPrev→position (uMix) — motion stays smooth.
+// The scale skin is procedural (scallop grid on body-space XY, screen-space
+// normals via dFdx/dFdy) with a GROWTH front sweeping up the body (uGrow).
+const RIG3 = { on: false, topo: null, geo: null, mesh: null, ren: null, scn: null, cam: null,
+               tPrev: 0, tCurr: 0, lastPkt: 0, grow0: 0 };
+function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
+function rigDequant(pkt) {
+  const q = b64u16(pkt.q), n = pkt.nv, out = new Float32Array(n * 3);
+  for (let a = 0; a < 3; a++) { const mn = pkt.vmin[a], rg = pkt.vmax[a] - mn;
+    for (let i = 0; i < n; i++) out[i * 3 + a] = mn + q[i * 3 + a] / 65535 * rg; }
+  return out;
+}
+const RIG_VERT = `
+  attribute vec3 aPrev;
+  uniform float uMix, uFocal, uIw, uIh;
+  uniform vec3 uCamT;
+  uniform vec4 uCover;           // ox, oy, dw, dh (px)
+  uniform vec2 uCanvas;          // px
+  varying vec3 vPos;
+  void main() {
+    vec3 v = mix(aPrev, position, uMix);
+    vPos = v;
+    vec3 p = v + uCamT;
+    float sx = (uFocal * p.x / p.z + uIw * 0.5) / uIw;
+    float sy = (uFocal * p.y / p.z + uIh * 0.5) / uIh;
+    sx = 1.0 - sx;               // overlay convention: mirrored space
+    vec2 px = vec2(uCover.x + sx * uCover.z, uCover.y + sy * uCover.w);
+    vec2 ndc = vec2(px.x / uCanvas.x * 2.0 - 1.0, -(px.y / uCanvas.y * 2.0 - 1.0));
+    gl_Position = vec4(ndc, clamp(p.z / 80.0, 0.0, 0.95), 1.0);
+  }`;
+const RIG_FRAG = `
+  precision highp float;
+  varying vec3 vPos;
+  uniform float uTime, uGrow;
+  void main() {
+    vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
+    // scallop grid over body-space (metres): ~28 scales per metre
+    vec2 g = vec2(vPos.x, vPos.y) * 28.0;
+    g.y *= 1.62;
+    vec2 id = floor(g);
+    g.x += mod(id.y, 2.0) * 0.5;
+    vec2 f = fract(g) - vec2(0.5, 0.0);
+    float r = length(f);
+    float tile = smoothstep(0.55, 0.47, r);
+    float rim = smoothstep(0.50, 0.44, r) - smoothstep(0.42, 0.34, r);
+    // lighting: headlight + rim spec
+    float lam = clamp(dot(n, normalize(vec3(0.25, -0.35, -1.0))), 0.0, 1.0);
+    vec3 base = mix(vec3(0.03, 0.16, 0.07), vec3(0.13, 0.52, 0.22), lam);
+    vec3 col = base + rim * vec3(0.55, 0.85, 0.6) * (0.35 + 0.65 * lam);
+    col += pow(lam, 8.0) * 0.25;
+    // GROWTH: front sweeps feet→head (body y is downward in camera space)
+    float front = 1.1 - uGrow * 2.4;
+    float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
+    float sparkle = smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0));
+    col += sparkle * vec3(0.4, 1.0, 0.5);
+    float alpha = (0.16 + 0.74 * tile) * on;
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(col, alpha * 0.92);
+  }`;
+function rigTopo(t) {
+  RIG3.topo = t;
+  const faces = b64u16(t.faces);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+  geo.setAttribute('aPrev', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(faces), 1));
+  const mat = new THREE.ShaderMaterial({
+    vertexShader: RIG_VERT, fragmentShader: RIG_FRAG, transparent: true,
+    depthTest: true, depthWrite: true, side: THREE.DoubleSide,
+    uniforms: { uMix: { value: 1 }, uFocal: { value: 1000 }, uIw: { value: 960 }, uIh: { value: 540 },
+                uCamT: { value: new THREE.Vector3() }, uCover: { value: new THREE.Vector4() },
+                uCanvas: { value: new THREE.Vector2() }, uTime: { value: 0 }, uGrow: { value: 0 } } });
+  try {
+    RIG3.geo = geo;
+    RIG3.mesh = new THREE.Mesh(geo, mat);
+    RIG3.mesh.frustumCulled = false;
+    const c = document.getElementById('rigc');
+    RIG3.ren = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true });
+    RIG3.scn = new THREE.Scene(); RIG3.scn.add(RIG3.mesh);
+    RIG3.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);   // shader emits clip coords
+    toast('🦴 body topology received — mesh building live', 3000);
+  } catch (err) {
+    console.error('rig renderer failed', err);
+    RIG3.mesh = null;
+    toast('🦴 could not create the mesh renderer on this device: ' + (err.message || err), 6000);
+  }
+}
+function rigPacket(p) {
+  if (!RIG3.geo) return;
+  const pos = RIG3.geo.getAttribute('position'), prv = RIG3.geo.getAttribute('aPrev');
+  prv.array.set(pos.array); prv.needsUpdate = true;
+  pos.array.set(rigDequant(p)); pos.needsUpdate = true;
+  const u = RIG3.mesh.material.uniforms;
+  u.uCamT.value.set(p.cam_t[0], p.cam_t[1], p.cam_t[2]);
+  u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih;
+  RIG3.tPrev = RIG3.tCurr || performance.now(); RIG3.tCurr = performance.now();
+  RIG3.lastPkt = RIG3.tCurr;
+  if (!RIG3.grow0) RIG3.grow0 = RIG3.tCurr;      // growth starts with first mesh
+  RIG3.samMs = p.ms;
+}
+function rigDraw(now) {
+  const c = document.getElementById('rigc');
+  const live = RIG3.on && RIG3.mesh && now - RIG3.lastPkt < 2500;
+  if (!live) { if (RIG3.ren && c.style.opacity !== '0') { RIG3.ren.clear(); c.style.opacity = '0'; } return; }
+  c.style.opacity = '1';
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  if (c.width !== Math.round(innerWidth * dpr)) { c.width = innerWidth * dpr; c.height = innerHeight * dpr; RIG3.ren.setSize(innerWidth, innerHeight, false); RIG3.ren.setPixelRatio(dpr); }
+  const pr = coverProj();
+  const u = RIG3.mesh.material.uniforms;
+  u.uCover.value.set(pr.ox, pr.oy, pr.dw, pr.dh);
+  u.uCanvas.value.set(innerWidth, innerHeight);
+  const span = Math.max(60, RIG3.tCurr - RIG3.tPrev);
+  u.uMix.value = Math.min(1.25, (now - RIG3.tCurr) / span + 0);
+  u.uTime.value = now * 0.001;
+  u.uGrow.value = Math.min(1, (now - RIG3.grow0) / 5000);       // 5s full-body growth
+  RIG3.ren.render(RIG3.scn, RIG3.cam);
+}
+document.getElementById('rigChk').addEventListener('change', (e) => {
+  RIG3.on = e.target.checked;
+  const w = samWs();
+  if (w) { try { w.send(JSON.stringify({ cmd: 'rig', on: RIG3.on ? 1 : 0, id: [...SRC.lockedIds][0] })); } catch (_) {} }
+  if (RIG3.on) { RIG3.grow0 = 0; toast(w ? '🦴 rigging your body on the cloud — first time loads the model (~1 min), then 🐉 scales grow' : '🦴 needs the 🧠 engine ON (SAM3 server)', 6000); }
+  else toast('🦴 body mesh off');
+});
+
 const VS = { buf: [], pool: [], delay: 160, dSm: 160, lastCap: 0, active: false };   // 🎬 vsync state
 const CAL = { pts: [], H: null, picking: false };                        // 📐 court homography
 const CAL_WORLD = [{ x: 0, y: 0 }, { x: 4.88, y: 0 }, { x: 4.88, y: 5.79 }, { x: 0, y: 5.79 }];
@@ -1344,6 +1478,7 @@ function loop() {
   //     player's MoveNet 17-pt lines; single: the MediaPipe 33-pt pose.
   yoloTick(now);   // 🧠 ship a frame to the YOLO server when engine on
   vsyncTick(now);  // 🎬 delayed-video sync (skeletons sit ON the players)
+  rigDraw(now);    // 🦴 3D body mesh + 🐉 scale skin (no-op unless armed)
   octx.clearRect(0, 0, innerWidth, innerHeight);
   // 📐 calibration crosses while picking corners
   if (CAL.picking && CAL.pts.length) {
@@ -1754,7 +1889,7 @@ function samUiSync() {
   document.getElementById('samRoleHint').style.display = on ? '' : 'none';
   // 🧿 concept panel rides the same visibility (server ignores unknown cmds,
   // so it is safe to show even against the SAM2.1 lane)
-  for (const id of ['cptHead', 'cptChips', 'cptFreeRow', 'cptActive', 'cptNameRow'])
+  for (const id of ['cptHead', 'cptChips', 'cptFreeRow', 'cptActive', 'cptNameRow', 'rigRow'])
     document.getElementById(id).style.display = on ? (id === 'cptChips' || id === 'cptFreeRow' ? 'flex' : '') : 'none';
   if (on) cptRender();
   if (!on) YOLO.smasks = [];
@@ -1805,6 +1940,8 @@ document.getElementById('cptActive').addEventListener('click', (e) => {
 // ✏️ player naming — stable-tag → name, survives reloads
 const NAMES = new Map(Object.entries(JSON.parse(localStorage.getItem('hopeos-player-names') || '{}')));
 function nameSave() { localStorage.setItem('hopeos-player-names', JSON.stringify(Object.fromEntries(NAMES))); }
+
+
 // the ws that carries SAM prompts: subscribe lane in ☁ URL mode, frame lane on 🖥
 function samWs() {
   const w = CS.on ? CS.ws : YOLO.ws;
@@ -2326,6 +2463,9 @@ function yoloConnect() {
       try { YOLO.ws.send(JSON.stringify({ cmd: 'sam', on: 1 })); } catch (_) {}
       cptReseed();          // 🧿 active concepts re-prompt on every fresh socket
     }
+    if (document.getElementById('rigChk')?.checked) {
+      try { YOLO.ws.send(JSON.stringify({ cmd: 'rig', on: 1 })); } catch (_) {}
+    }
     samUiSync();
   };
   YOLO.ws.onmessage = yoloOnMessage;
@@ -2352,6 +2492,10 @@ function yoloOnMessage(e) {
       YOLO.rej = (d.rej || []).map(b => ({ x: 1 - (b[0] + b[2] / 2), y: b[1] - b[3] / 2, w: b[2], h: b[3] }));
       YOLO.balls = (d.balls || []).map(b => ({ x: 1 - b[0], y: b[1], r: Math.max(b[2], b[3]) / 2 }));
       // 🎭 SAM segmentation: player masks + recognized court (mirrored like all overlays)
+      // 🦴 rig lane ingest
+      if (d.rig_topo && !RIG3.topo) rigTopo(d.rig_topo);
+      if (d.rig) rigPacket(d.rig);
+      if (d.rigst === 'loading' && !RIG3._loadToast) { RIG3._loadToast = 1; toast('🦴 cloud is loading the 3D body model…', 8000); }
       if (d.smasks) {
         const changed = JSON.stringify(d.smasks.map(o => o.id)) !== YOLO._smaskSig || (d.sms !== YOLO.samMs);
         YOLO.smasks = d.smasks.map(o => ({ id: o.id, role: o.role, a: o.a ? [1 - o.a[0], o.a[1]] : null,
