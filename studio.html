@@ -106,7 +106,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-17';
+const BUILD = 'st-18';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -744,6 +744,9 @@ function rigTopo(t) {
   rigMesh = new THREE.Mesh(mk(), mat);
   rigMesh.frustumCulled = false;
   rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
+  rigMesh.scale.x = -1;                     // st-18: selfie-mirror — raise your left
+                                            // hand, the rig raises the SAME side you
+                                            // see in the mirrored video
   scn.add(rigMesh);
   // left-screen projected twin — textured with the USER'S OWN LIVE PIXELS
   try {
