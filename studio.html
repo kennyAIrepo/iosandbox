@@ -73,7 +73,7 @@
     <canvas id="lov"></canvas>
   </div>
   <div class="screen" id="scrR">
-    <div class="slabel">DOLLHOUSE · drag to orbit · wheel to zoom</div>
+    <div class="slabel">DOLLHOUSE · your live body rig · drag to orbit · wheel to zoom</div>
     <canvas id="dh"></canvas>
   </div>
 </div>
@@ -103,7 +103,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-3';
+const BUILD = 'st-4';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -126,7 +126,8 @@ function toast(m, ms = 3200) {
 // ── state ────────────────────────────────────────────────────────────────
 const S = { ws: null, inFlight: 0, lastSend: 0, sendIv: 90, rtt: 0, rttEma: 0, baseRtt: 9999,
   players: [], smasks: [], court: null, samMs: 0, msGpu: 0, lastPkt: 0,
-  rig: { topo: null, lastPkt: 0, ms: 0 }, concepts: new Set(), sam: false, rigOn: false };
+  rig: { topo: null, lastPkt: 0, ms: 0 }, concepts: new Set(), sam: false,
+  rigOn: true };   // DEFAULT ON — the dollhouse tracks your body rig from the first frame
 
 // ── view toggle ──────────────────────────────────────────────────────────
 document.querySelectorAll('.vbtn[data-v]').forEach(b => b.addEventListener('click', () => {
@@ -285,7 +286,7 @@ function rigPacket(p) {
     u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih; }
   S.rig.tPrev = S.rig.lastPkt || performance.now();
   S.rig.lastPkt = performance.now(); S.rig.ms = p.ms;
-  if (!grow0) grow0 = performance.now();
+  // growth does NOT auto-start: default = neutral body rig; effects start it
 }
 function drawLfx(now) {
   const c = document.getElementById('lmesh');
@@ -427,17 +428,16 @@ function applyPrompt(raw) {
   const say = (m) => toast(m, 4000);
   if (/^(clear|reset|stop|off|✕ clear all)/.test(p) || p.includes('clear all')) {
     for (const c of S.concepts) S.ws?.send(JSON.stringify({ cmd: 'concept', text: c, on: 0 }));
-    S.concepts.clear(); S.sam = false; S.rigOn = false;
+    S.concepts.clear(); S.sam = false;
     S.ws?.send(JSON.stringify({ cmd: 'sam', on: 0 }));
-    S.ws?.send(JSON.stringify({ cmd: 'rig', on: 0 }));
-    if (rigMesh) { scn.remove(rigMesh); rigMesh = null; S.rig.topo = null; grow0 = 0; }
-    say('✕ cleared — masks, concepts and the body rig are off'); return;
+    grow0 = 0;                       // effects off — the body rig itself STAYS (default state)
+    say('✕ effects & concepts cleared — body rig keeps tracking (that is the default)'); return;
   }
-  if (/(scale|slime|skin|mesh|rig|body|dragon)/.test(p)) {
-    S.rigOn = true; S.sam = true; grow0 = 0;
-    S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
+  if (/(scale|slime|skin|dragon|feather|armor|fire)/.test(p)) {
+    S.rigOn = true;
     S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
-    say('🐉 rigging your body — scales grow on the dollhouse mesh (left-view skin: mpgames 🦴)'); return;
+    grow0 = performance.now();       // start the growth front NOW
+    say('🐉 growing the effect over your body — left = on your skin, right = on the rig'); return;
   }
   if (/(segment|people|everyone|mask)/.test(p)) {
     S.sam = true; S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
