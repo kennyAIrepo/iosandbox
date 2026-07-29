@@ -26,8 +26,9 @@
   .slabel { position: absolute; top: 10px; left: 12px; z-index: 5; font-size: 11px;
     letter-spacing: .18em; color: #5d7a94; background: #0a0f18cc; padding: 3px 8px; border-radius: 6px; }
   #vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-  #lov, #lmesh { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
-  body.nomirror #vid, body.nomirror #lov, body.nomirror #lmesh { transform: none; }
+  #lov, #lmesh, #lfx2 { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+  #lfx2 { opacity: 0; transition: opacity .3s; }   /* fades in over 300ms on first fx frame */
+  body.nomirror #vid, body.nomirror #lov, body.nomirror #lmesh, body.nomirror #lfx2 { transform: none; }
   #dh { position: absolute; inset: 0; width: 100%; height: 100%; }
   /* ── prompt bar ── */
   #bar { position: fixed; inset: auto 0 14px 0; display: flex; flex-direction: column;
@@ -70,6 +71,7 @@
     <div class="slabel">LIVE · your camera + effects</div>
     <video id="vid" muted playsinline></video>
     <canvas id="lmesh"></canvas>
+    <canvas id="lfx2"></canvas>
     <canvas id="lov"></canvas>
   </div>
   <div class="screen" id="scrR">
@@ -103,7 +105,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-7';
+const BUILD = 'st-8';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -112,6 +114,11 @@ const SAM3_LANE = 'wss://dubai-intelligence-micro-grad.trycloudflare.com';
 { const q = new URLSearchParams(location.search).get('server');
   if (q) localStorage.setItem('hopeos-studio-server', q); }
 const SRV = localStorage.getItem('hopeos-studio-server') || SAM3_LANE;
+// st-8: OPTIONAL generative-effect lane — a second socket, fully additive.
+// Empty FX_LANE = lane absent; the procedural effect stays the only path.
+{ const q = new URLSearchParams(location.search).get('fx');
+  if (q) localStorage.setItem('hopeos-fx-server', q); }
+const FX_LANE = localStorage.getItem('hopeos-fx-server') || '';
 
 const vid = document.getElementById('vid'), lov = document.getElementById('lov');
 const lctx = lov.getContext('2d');
@@ -467,6 +474,100 @@ function pump(now) {
   }, 'image/jpeg', 0.62);
 }
 
+// ── FX LANE (st-8): generative effect server — parallel, additive ────────
+// OUT binary: [f64 LE capture-ms][JPEG of the person crop] at ≤8fps.
+// OUT text:   {"cmd":"fx",on,prompt,strength} · {"cmd":"mask",png} every ~1s.
+// IN:         {"fx":{cts,jpg,ms}} → #lfx2 at the crop rect · {"fxst":"loading"}.
+const lfx2 = document.getElementById('lfx2'); const fx2Ctx = lfx2.getContext('2d');
+const fxCv = document.createElement('canvas'); const fxCtx = fxCv.getContext('2d');
+const FX = { ws: null, on: false, prompt: '', lastSend: 0, lastMask: 0, ms: 0,
+  lastFrame: 0, frame: null, shown: false, crops: new Map() };
+function fxConnect() {
+  if (!FX_LANE) return;
+  try { FX.ws = new WebSocket(FX_LANE); } catch { return; }
+  FX.ws.binaryType = 'arraybuffer';
+  FX.ws.onopen = () => {       // reconnect mid-effect → re-arm the server
+    if (FX.on) FX.ws.send(JSON.stringify({ cmd: 'fx', on: 1, prompt: FX.prompt, strength: 0.45 }));
+  };
+  FX.ws.onclose = () => setTimeout(fxConnect, 2000);
+  FX.ws.onmessage = (e) => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    if (d.fxst === 'loading' && !FX._lt) { FX._lt = 1; toast('🎨 generative effect model loading on the GPU…', 8000); }
+    if (d.fx && d.fx.jpg) fxFrame(d.fx);
+  };
+}
+function fxTarget() {          // rig target if set, else biggest bbox
+  let p = S.rig.id != null ? S.players.find(q => q.id === S.rig.id) : null;
+  if (!p) for (const q of S.players) if (!p || q.bbox.w * q.bbox.h > p.bbox.w * p.bbox.h) p = q;
+  return p;
+}
+function fxPump(now) {
+  if (!FX.ws || FX.ws.readyState !== 1 || !FX.on) return;
+  if (now - FX.lastMask > 1000) {          // ~1s: ship the feathered person mask
+    FX.lastMask = now;
+    try { FX.ws.send(JSON.stringify({ cmd: 'mask', png: maskCv.toDataURL('image/png').split(',')[1] })); } catch {}
+  }
+  if (!vid.videoWidth || now - FX.lastSend < 125 || FX.ws.bufferedAmount > 262144) return;
+  const p = fxTarget(); if (!p) return;
+  const vw = vid.videoWidth, vh = vid.videoHeight;
+  let w = p.bbox.w * 1.15, h = p.bbox.h * 1.15;                   // expand 15%
+  let x = p.bbox.x + (p.bbox.w - w) / 2, y = p.bbox.y + (p.bbox.h - h) / 2;
+  x = Math.max(0, x); y = Math.max(0, y);
+  w = Math.min(1 - x, w); h = Math.min(1 - y, h);                 // clamp to frame
+  const pw = Math.round(w * vw), ph = Math.round(h * vh);
+  if (pw < 16 || ph < 16) return;
+  const scl = Math.min(1, 512 / Math.max(pw, ph));                // long side ≤ 512
+  FX.lastSend = now;
+  fxCv.width = Math.max(2, Math.round(pw * scl)); fxCv.height = Math.max(2, Math.round(ph * scl));
+  fxCtx.drawImage(vid, x * vw, y * vh, pw, ph, 0, 0, fxCv.width, fxCv.height);
+  const capT = now;
+  FX.crops.set(capT, { x, y, w, h });                             // cts → crop rect
+  for (const k of FX.crops.keys()) if (capT - k > 5000) FX.crops.delete(k);
+  fxCv.toBlob(b => {
+    if (!b || !FX.ws || FX.ws.readyState !== 1) return;
+    b.arrayBuffer().then(buf => {
+      const out = new ArrayBuffer(8 + buf.byteLength);
+      new DataView(out).setFloat64(0, capT, true);
+      new Uint8Array(out, 8).set(new Uint8Array(buf));
+      FX.ws.send(out);
+    });
+  }, 'image/jpeg', 0.7);
+}
+function fxFrame(f) {
+  let rect = FX.crops.get(f.cts);
+  if (!rect) {                 // float64 cts didn't round-trip bit-exact → nearest
+    let bd = 34;
+    for (const [k, v] of FX.crops) { const dd = Math.abs(k - f.cts); if (dd < bd) { bd = dd; rect = v; } }
+  }
+  if (!rect) return;
+  const img = new Image();
+  img.onload = () => {
+    FX.frame = { img, rect }; FX.ms = f.ms || 0; FX.lastFrame = performance.now();
+    if (!FX.shown) { FX.shown = true; lfx2.style.opacity = '1'; }  // CSS fades in 300ms
+  };
+  img.src = 'data:image/jpeg;base64,' + f.jpg;
+}
+function drawFx2() {
+  const r = document.getElementById('scrL').getBoundingClientRect();
+  if (lfx2.width !== Math.round(r.width)) { lfx2.width = Math.round(r.width); lfx2.height = Math.round(r.height); }
+  fx2Ctx.clearRect(0, 0, lfx2.width, lfx2.height);
+  if (!FX.on || !FX.frame || performance.now() - FX.lastFrame > 2500) return;
+  // cover-projection of the source frame into the screen rect (same as drawLive)
+  const vw = vid.videoWidth || 960, vh = vid.videoHeight || 540;
+  const sc = Math.max(lfx2.width / vw, lfx2.height / vh);
+  const dw = vw * sc, dh2 = vh * sc, ox = (lfx2.width - dw) / 2, oy = (lfx2.height - dh2) / 2;
+  const { img, rect } = FX.frame;
+  fx2Ctx.drawImage(img, ox + rect.x * dw, oy + rect.y * dh2, rect.w * dw, rect.h * dh2);
+}
+function fxOn(prompt) {
+  FX.on = true; FX.prompt = prompt;
+  if (FX.ws?.readyState === 1) FX.ws.send(JSON.stringify({ cmd: 'fx', on: 1, prompt, strength: 0.45 }));
+}
+function fxOff() {
+  FX.on = false; FX.frame = null; FX.shown = false; lfx2.style.opacity = '0';
+  if (FX.ws?.readyState === 1) FX.ws.send(JSON.stringify({ cmd: 'fx', on: 0 }));
+}
+
 // ── the PROMPT — primary input, routes intent to the lanes ───────────────
 function applyPrompt(raw) {
   const p = raw.trim().toLowerCase();
@@ -477,6 +578,7 @@ function applyPrompt(raw) {
     S.concepts.clear(); S.sam = false;
     S.ws?.send(JSON.stringify({ cmd: 'sam', on: 0 }));
     grow0 = 0;                       // effects off — the body rig itself STAYS (default state)
+    if (FX_LANE) fxOff();            // st-8: also stop the generative lane
     say('✕ effects & concepts cleared — body rig keeps tracking (that is the default)'); return;
   }
   if (/(scale|slime|skin|dragon|feather|armor|fire)/.test(p)) {
@@ -484,6 +586,9 @@ function applyPrompt(raw) {
     S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
     S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
     grow0 = performance.now();       // start the growth front NOW
+    // st-8: ADDITIVE — same prompt also drives the generative fx lane when
+    // present; rig + procedural layer above stay untouched as the fallback
+    if (FX_LANE) fxOn(raw.trim());
     say('🐉 growing the effect over your body — left = on your skin, right = on the rig'); return;
   }
   if (/(segment|people|everyone|mask)/.test(p)) {
@@ -520,6 +625,7 @@ async function boot(kind) {
   }
   await vid.play().catch(() => {});
   connect();
+  fxConnect();                                   // no-op when FX_LANE is empty
 }
 document.getElementById('bootCam').addEventListener('click', () => boot('cam'));
 document.getElementById('bootSample').addEventListener('click', () => boot('sample'));
@@ -528,8 +634,10 @@ document.getElementById('bootSample').addEventListener('click', () => boot('samp
 function loop(now) {
   requestAnimationFrame(loop);
   pump(now);
+  fxPump(now);
   drawLive();
   drawLfx(now);
+  drawFx2();
   orbit.update();
   if (rigMesh) {
     rigMesh.material.uniforms.uTime.value = now * .001;
@@ -541,7 +649,8 @@ function loop(now) {
     ` ${BUILD} · rtt ${S.rtt.toFixed(0)}ms · gpu ${S.msGpu.toFixed(0)}ms` +
     (S.samMs ? ` · sam ${S.samMs.toFixed(0)}ms` : '') +
     (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') +
-    ` · ${S.players.length}p`;
+    ` · ${S.players.length}p` +
+    (FX.lastFrame && now - FX.lastFrame < 3000 ? ` · fx ${FX.ms.toFixed(0)}ms` : '');
 }
 requestAnimationFrame(loop);
 </script>
