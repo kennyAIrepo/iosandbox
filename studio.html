@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS · STUDIO — prompt the world</title>
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #06090f; color: #cfe6f2;
+    font: 14px/1.45 ui-monospace, Consolas, monospace; overflow: hidden; }
+  #top { position: fixed; inset: 0 0 auto 0; height: 52px; display: flex; align-items: center;
+    gap: 14px; padding: 0 16px; z-index: 20; background: linear-gradient(#0a0f18ee, #0a0f1800); }
+  #top b { color: #5db8ff; letter-spacing: .14em; }
+  #stat { color: #5d7a94; font-size: 12px; margin-left: auto; white-space: nowrap; }
+  .vbtn { background: #0d1420; color: #cfe6f2; border: 1px solid #23324a; border-radius: 8px;
+    padding: 6px 12px; font: inherit; cursor: pointer; }
+  .vbtn.sel { border-color: #5db8ff; color: #5db8ff; }
+  /* ── the two screens ── */
+  #screens { position: fixed; inset: 52px 10px 96px 10px; display: grid; gap: 10px;
+    grid-template-columns: 1fr 1fr; }
+  #screens.left  { grid-template-columns: 1fr 0fr; }
+  #screens.right { grid-template-columns: 0fr 1fr; }
+  .screen { position: relative; border-radius: 14px; overflow: hidden; background: #000;
+    border: 1px solid #16233a; min-width: 0; transition: all .25s ease; }
+  #screens.left #scrR, #screens.right #scrL { opacity: 0; pointer-events: none; border: none; }
+  .slabel { position: absolute; top: 10px; left: 12px; z-index: 5; font-size: 11px;
+    letter-spacing: .18em; color: #5d7a94; background: #0a0f18cc; padding: 3px 8px; border-radius: 6px; }
+  #vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+  #lov { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+  body.nomirror #vid, body.nomirror #lov { transform: none; }
+  #dh { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* ── prompt bar ── */
+  #bar { position: fixed; inset: auto 0 14px 0; display: flex; flex-direction: column;
+    align-items: center; gap: 8px; z-index: 20; }
+  #chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+  .chip { background: #0d1420cc; border: 1px solid #23324a; color: #9fc0d8; border-radius: 999px;
+    padding: 4px 12px; font: inherit; font-size: 12px; cursor: pointer; }
+  .chip:hover { border-color: #5db8ff; color: #cfe6f2; }
+  #prow { display: flex; gap: 8px; width: min(720px, 92vw); }
+  #pin { flex: 1; background: #0d1420ee; border: 1px solid #23324a; border-radius: 12px;
+    color: #e8f4ff; font: inherit; font-size: 15px; padding: 13px 16px; outline: none; }
+  #pin:focus { border-color: #5db8ff; }
+  #pgo { background: #5db8ff; color: #041018; border: 0; border-radius: 12px; width: 52px;
+    font-size: 19px; cursor: pointer; }
+  #boot { position: fixed; inset: 0; z-index: 40; display: flex; flex-direction: column; gap: 14px;
+    align-items: center; justify-content: center; background: #06090fee; }
+  #boot button { font-size: 16px; padding: 14px 30px; }
+  #toast { position: fixed; bottom: 106px; left: 50%; transform: translateX(-50%); z-index: 30;
+    background: #0d1420ee; border: 1px solid #23324a; border-radius: 10px; padding: 8px 14px;
+    max-width: 80vw; opacity: 0; transition: opacity .2s; pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="top">
+  <b>hopeOS STUDIO</b>
+  <button class="vbtn" data-v="left">◧ live</button>
+  <button class="vbtn sel" data-v="split">▣ split</button>
+  <button class="vbtn" data-v="right">◨ dollhouse</button>
+  <span id="stat">connecting…</span>
+</div>
+<div id="screens">
+  <div class="screen" id="scrL">
+    <div class="slabel">LIVE · your camera + effects</div>
+    <video id="vid" muted playsinline></video>
+    <canvas id="lov"></canvas>
+  </div>
+  <div class="screen" id="scrR">
+    <div class="slabel">DOLLHOUSE · drag to orbit · wheel to zoom</div>
+    <canvas id="dh"></canvas>
+  </div>
+</div>
+<div id="bar">
+  <div id="chips">
+    <button class="chip">🐉 scales on me</button>
+    <button class="chip">🟦 track the floor</button>
+    <button class="chip">🧱 track the wall</button>
+    <button class="chip">🪑 track the chair</button>
+    <button class="chip">🎭 segment people</button>
+    <button class="chip">✕ clear all</button>
+  </div>
+  <div id="prow">
+    <input id="pin" placeholder="type what you want: scales on my arm · track the desk · segment everyone…" autocomplete="off">
+    <button id="pgo">➤</button>
+  </div>
+</div>
+<div id="boot">
+  <b style="letter-spacing:.2em; color:#5db8ff">hopeOS STUDIO</b>
+  <div style="color:#5d7a94; max-width:420px; text-align:center">two screens: your LIVE camera with effects on the left, the live 3D DOLLHOUSE reconstruction on the right. One prompt box drives both.</div>
+  <button class="vbtn" id="bootCam">📷 start with camera</button>
+  <button class="vbtn" id="bootSample">🎬 start with the NBA sample</button>
+</div>
+<div id="toast"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const BUILD = 'st-1';
+const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
+{ const q = new URLSearchParams(location.search).get('server');
+  if (q) localStorage.setItem('hopeos-yolo-server', q); }
+const SRV = localStorage.getItem('hopeos-yolo-server') || 'ws://localhost:8766';
+
+const vid = document.getElementById('vid'), lov = document.getElementById('lov');
+const lctx = lov.getContext('2d');
+const statEl = document.getElementById('stat');
+let toastT = 0;
+function toast(m, ms = 3200) {
+  const t = document.getElementById('toast');
+  t.textContent = m; t.style.opacity = 1;
+  clearTimeout(toastT); toastT = setTimeout(() => t.style.opacity = 0, ms);
+}
+
+// ── state ────────────────────────────────────────────────────────────────
+const S = { ws: null, inFlight: 0, lastSend: 0, sendIv: 90, rtt: 0, rttEma: 0, baseRtt: 9999,
+  players: [], smasks: [], court: null, samMs: 0, msGpu: 0, lastPkt: 0,
+  rig: { topo: null, lastPkt: 0, ms: 0 }, concepts: new Set(), sam: false, rigOn: false };
+
+// ── view toggle ──────────────────────────────────────────────────────────
+document.querySelectorAll('.vbtn[data-v]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('.vbtn[data-v]').forEach(x => x.classList.toggle('sel', x === b));
+  document.getElementById('screens').className = b.dataset.v === 'split' ? '' : b.dataset.v;
+  sizeDH();
+}));
+
+// ── DOLLHOUSE (right): orbitable live reconstruction ─────────────────────
+const ren = new THREE.WebGLRenderer({ canvas: document.getElementById('dh'), antialias: true, alpha: true });
+const scn = new THREE.Scene();
+scn.background = new THREE.Color(0x0a0f16);
+const cam = new THREE.PerspectiveCamera(46, 1, 0.05, 200);
+cam.position.set(0.4, 0.7, 3.2);
+const orbit = new OrbitControls(cam, ren.domElement);
+orbit.target.set(0, 0, 0); orbit.enableDamping = true;
+scn.add(new THREE.HemisphereLight(0xbfe8ff, 0x0a1220, 1.15));
+const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(3, 6, 4); scn.add(sun);
+const grid = new THREE.GridHelper(8, 32, 0x2e4a6e, 0x16233a); grid.position.y = -1.05; scn.add(grid);
+
+const SCALE_FRAG = `
+  precision highp float;
+  varying vec3 vPos; varying vec3 vNrm;
+  uniform float uTime, uGrow;
+  void main() {
+    vec3 n = normalize(vNrm);
+    vec2 g = vec2(vPos.x, vPos.y) * 28.0; g.y *= 1.62;
+    vec2 id = floor(g); g.x += mod(id.y, 2.0) * 0.5;
+    vec2 f = fract(g) - vec2(0.5, 0.0);
+    float r = length(f);
+    float tile = smoothstep(0.55, 0.47, r);
+    float rim = smoothstep(0.50, 0.44, r) - smoothstep(0.42, 0.34, r);
+    float lam = clamp(dot(n, normalize(vec3(0.4, 0.8, 0.5))), 0.0, 1.0);
+    vec3 base = mix(vec3(0.03, 0.15, 0.07), vec3(0.14, 0.55, 0.23), lam);
+    vec3 col = base + rim * vec3(0.55, 0.85, 0.6) * (0.35 + 0.65 * lam) + pow(lam, 8.0) * 0.22;
+    float front = 1.1 - uGrow * 2.4;
+    float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
+    col += smoothstep(0.1, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0)) * vec3(0.4, 1.0, 0.5);
+    vec3 grey = vec3(0.55) * (0.25 + 0.75 * lam);
+    gl_FragColor = vec4(mix(grey, col, on), 1.0);
+  }`;
+const SCALE_VERT = `
+  varying vec3 vPos; varying vec3 vNrm;
+  void main() {
+    vPos = position; vNrm = normalMatrix * normal;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`;
+let rigMesh = null, grow0 = 0;
+function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
+function rigTopo(t) {
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(b64u16(t.faces)), 1));
+  const mat = new THREE.ShaderMaterial({ vertexShader: SCALE_VERT, fragmentShader: SCALE_FRAG,
+    uniforms: { uTime: { value: 0 }, uGrow: { value: 0 } }, side: THREE.DoubleSide });
+  rigMesh = new THREE.Mesh(geo, mat);
+  rigMesh.frustumCulled = false;
+  rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
+  scn.add(rigMesh);
+  S.rig.topo = t;
+  toast('🦴 body reconstructed — drag the dollhouse to orbit it');
+}
+function rigPacket(p) {
+  if (!rigMesh) return;
+  const q = b64u16(p.q), n = p.nv, pos = rigMesh.geometry.getAttribute('position');
+  for (let a = 0; a < 3; a++) { const mn = p.vmin[a], rg = p.vmax[a] - mn;
+    for (let i = 0; i < n; i++) pos.array[i * 3 + a] = mn + q[i * 3 + a] / 65535 * rg; }
+  pos.needsUpdate = true;
+  rigMesh.geometry.computeVertexNormals();
+  S.rig.lastPkt = performance.now(); S.rig.ms = p.ms;
+  if (!grow0) grow0 = performance.now();
+}
+function sizeDH() {
+  const r = document.getElementById('scrR').getBoundingClientRect();
+  if (r.width < 4) return;
+  ren.setSize(r.width, r.height, false);
+  ren.setPixelRatio(Math.min(devicePixelRatio, 2));
+  cam.aspect = r.width / r.height; cam.updateProjectionMatrix();
+}
+addEventListener('resize', sizeDH);
+
+// ── LIVE overlay (left): masks + skeletons on the video ──────────────────
+const EDGES = [[5,7],[7,9],[6,8],[8,10],[5,6],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16]];
+function cptColor(t) { let h = 0; for (const c of t) h = (h * 31 + c.charCodeAt(0)) % 360; return `hsl(${h},85%,62%)`; }
+function drawLive() {
+  const r = document.getElementById('scrL').getBoundingClientRect();
+  if (lov.width !== Math.round(r.width)) { lov.width = r.width; lov.height = r.height; }
+  lctx.clearRect(0, 0, lov.width, lov.height);
+  if (performance.now() - S.lastPkt > 2000) return;
+  // cover-projection of the raw video into the screen rect
+  const vw = vid.videoWidth || 960, vh = vid.videoHeight || 540;
+  const sc = Math.max(lov.width / vw, lov.height / vh);
+  const dw = vw * sc, dh2 = vh * sc, ox = (lov.width - dw) / 2, oy = (lov.height - dh2) / 2;
+  const P = (x, y) => [ox + x * dw, oy + y * dh2];
+  for (const o of S.smasks) {
+    const col = o.role === 'player' ? '#5dff7d' : cptColor(o.role);
+    lctx.strokeStyle = col; lctx.fillStyle = col + '26'; lctx.lineWidth = 2;
+    for (const poly of o.polys) {
+      lctx.beginPath();
+      poly.forEach(([x, y], i) => { const [X, Y] = P(x, y); i ? lctx.lineTo(X, Y) : lctx.moveTo(X, Y); });
+      lctx.closePath(); lctx.fill(); lctx.stroke();
+    }
+    if (o.role !== 'player' && o.polys[0]) {
+      const big = o.polys.reduce((a, b) => b.length > a.length ? b : a);
+      let cx = 0, cy = 0; for (const [x, y] of big) { cx += x; cy += y; }
+      const [X, Y] = P(cx / big.length, cy / big.length);
+      lctx.font = 'bold 14px ui-monospace'; lctx.fillStyle = col;
+      lctx.save(); lctx.translate(X, Y); lctx.scale(-1, 1);   // canvas is CSS-mirrored
+      lctx.fillText(o.role, -lctx.measureText(o.role).width / 2, 0); lctx.restore();
+    }
+  }
+  for (const p of S.players) {
+    lctx.strokeStyle = '#9fc0d8'; lctx.lineWidth = 2.5; lctx.lineCap = 'round';
+    for (const [a, b] of EDGES) {
+      const ka = p.body2D[a], kb = p.body2D[b];
+      if (!ka || !kb || (ka.score ?? 0) < .3 || (kb.score ?? 0) < .3) continue;
+      const [x1, y1] = P(ka.x, ka.y), [x2, y2] = P(kb.x, kb.y);
+      lctx.beginPath(); lctx.moveTo(x1, y1); lctx.lineTo(x2, y2); lctx.stroke();
+    }
+  }
+}
+
+// ── cloud connection: frame pump + ingest (same wire as mpgames) ─────────
+const cv = document.createElement('canvas'); const cctx = cv.getContext('2d');
+function connect() {
+  try { S.ws = new WebSocket(SRV); } catch { statEl.textContent = 'bad server url'; return; }
+  S.ws.binaryType = 'arraybuffer';
+  S.ws.onopen = () => {
+    statEl.textContent = 'connected · ' + SRV.replace(/^wss?:\/\//, '').slice(0, 34);
+    S.ws.send(JSON.stringify({ profile: 'general' }));
+    if (S.sam) S.ws.send(JSON.stringify({ cmd: 'sam', on: 1 }));
+    for (const c of S.concepts) S.ws.send(JSON.stringify({ cmd: 'concept', text: c, on: 1 }));
+    if (S.rigOn) S.ws.send(JSON.stringify({ cmd: 'rig', on: 1 }));
+  };
+  S.ws.onclose = () => { S.inFlight = 0; statEl.textContent = 'reconnecting…'; setTimeout(connect, 2000); };
+  S.ws.onmessage = (e) => {
+    let d; try { d = JSON.parse(e.data); } catch { return; }
+    S.inFlight = Math.max(0, S.inFlight - 1);
+    const t = performance.now();
+    if (d.cts && t - d.cts > 0 && t - d.cts < 5000) { S.rtt = t - d.cts;
+      S.rttEma = S.rttEma ? S.rttEma * .85 + S.rtt * .15 : S.rtt;
+      S.baseRtt = Math.min(S.baseRtt * 1.0015, S.rtt); }
+    S.lastPkt = t;
+    S.players = d.players || [];
+    S.smasks = d.smasks || [];
+    if (d.court) S.court = d.court;
+    S.msGpu = d.ms || 0; S.samMs = d.sms || 0;
+    if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
+    if (d.rig) rigPacket(d.rig);
+    if (d.rigst === 'loading' && !S._lt) { S._lt = 1; toast('🦴 cloud is loading the 3D body model (~1 min)…', 8000); }
+  };
+}
+function pump(now) {
+  if (!S.ws || S.ws.readyState !== 1 || !vid.videoWidth) return;
+  const over = S.rttEma - S.baseRtt;
+  S.sendIv = Math.min(280, Math.max(66, S.sendIv * (over > 140 ? 1.2 : over < 70 ? .94 : 1)));
+  if (now - S.lastSend >= 1500) S.inFlight = 0;
+  if (S.inFlight >= 2 || S.ws.bufferedAmount > 131072 || now - S.lastSend < S.sendIv) return;
+  S.inFlight++; S.lastSend = now;
+  const w = 960, h = Math.round(w * vid.videoHeight / vid.videoWidth) || 540;
+  cv.width = w; cv.height = h; cctx.drawImage(vid, 0, 0, w, h);
+  const capT = now;
+  cv.toBlob(b => {
+    if (!b || !S.ws || S.ws.readyState !== 1) { S.inFlight = Math.max(0, S.inFlight - 1); return; }
+    b.arrayBuffer().then(buf => {
+      const out = new ArrayBuffer(8 + buf.byteLength);
+      new DataView(out).setFloat64(0, capT, true);
+      new Uint8Array(out, 8).set(new Uint8Array(buf));
+      S.ws.send(out);
+    });
+  }, 'image/jpeg', 0.62);
+}
+
+// ── the PROMPT — primary input, routes intent to the lanes ───────────────
+function applyPrompt(raw) {
+  const p = raw.trim().toLowerCase();
+  if (!p) return;
+  const say = (m) => toast(m, 4000);
+  if (/^(clear|reset|stop|off|✕ clear all)/.test(p) || p.includes('clear all')) {
+    for (const c of S.concepts) S.ws?.send(JSON.stringify({ cmd: 'concept', text: c, on: 0 }));
+    S.concepts.clear(); S.sam = false; S.rigOn = false;
+    S.ws?.send(JSON.stringify({ cmd: 'sam', on: 0 }));
+    S.ws?.send(JSON.stringify({ cmd: 'rig', on: 0 }));
+    if (rigMesh) { scn.remove(rigMesh); rigMesh = null; S.rig.topo = null; grow0 = 0; }
+    say('✕ cleared — masks, concepts and the body rig are off'); return;
+  }
+  if (/(scale|slime|skin|mesh|rig|body|dragon)/.test(p)) {
+    S.rigOn = true; S.sam = true; grow0 = 0;
+    S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
+    S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
+    say('🐉 rigging your body — scales grow on the dollhouse mesh (left-view skin: mpgames 🦴)'); return;
+  }
+  if (/(segment|people|everyone|mask)/.test(p)) {
+    S.sam = true; S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
+    say('🎭 segmenting everyone — masks appear as SAM3 finds them'); return;
+  }
+  // anything else = a CONCEPT to find & track ("track the floor" → floor)
+  const text = p.replace(/^(track|find|add|show|segment)\s+(the\s+)?/, '').trim();
+  if (!text) return;
+  S.concepts.add(text); S.sam = true;
+  S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
+  S.ws?.send(JSON.stringify({ cmd: 'concept', text, on: 1 }));
+  say(`🧿 tracking "${text}" — mask + label appear as SAM3 locks on`);
+}
+document.getElementById('pgo').addEventListener('click', () => {
+  const i = document.getElementById('pin'); applyPrompt(i.value); i.value = '';
+});
+document.getElementById('pin').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('pgo').click(); });
+document.getElementById('chips').addEventListener('click', (e) => {
+  const c = e.target.closest('.chip'); if (c) applyPrompt(c.textContent.replace(/^[^\s]+\s/, ''));
+});
+
+// ── boot ─────────────────────────────────────────────────────────────────
+async function boot(kind) {
+  document.getElementById('boot').style.display = 'none';
+  if (kind === 'cam') {
+    try {
+      const st = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false });
+      vid.srcObject = st;
+    } catch (e) { toast('camera blocked: ' + e.message, 6000); return; }
+  } else {
+    document.body.classList.add('nomirror');       // footage shows unmirrored
+    vid.crossOrigin = 'anonymous'; vid.src = SAMPLE_URL; vid.loop = true;
+  }
+  await vid.play().catch(() => {});
+  connect();
+}
+document.getElementById('bootCam').addEventListener('click', () => boot('cam'));
+document.getElementById('bootSample').addEventListener('click', () => boot('sample'));
+
+// ── main loop ────────────────────────────────────────────────────────────
+function loop(now) {
+  requestAnimationFrame(loop);
+  pump(now);
+  drawLive();
+  orbit.update();
+  if (rigMesh) {
+    rigMesh.material.uniforms.uTime.value = now * .001;
+    rigMesh.material.uniforms.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 5000) : 0;
+  }
+  sizeDH.once || (sizeDH(), sizeDH.once = 1);
+  ren.render(scn, cam);
+  statEl.textContent = (S.ws?.readyState === 1 ? '●' : '○') +
+    ` ${BUILD} · rtt ${S.rtt.toFixed(0)}ms · gpu ${S.msGpu.toFixed(0)}ms` +
+    (S.samMs ? ` · sam ${S.samMs.toFixed(0)}ms` : '') +
+    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') +
+    ` · ${S.players.length}p`;
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
