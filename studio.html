@@ -105,8 +105,9 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-20';
+const BUILD = 'st-21';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -160,6 +161,31 @@ scn.background = new THREE.Color(0x0a0f16);
 const cam = new THREE.PerspectiveCamera(46, 1, 0.05, 200);
 cam.position.set(0.4, 0.7, 3.2);
 const orbit = new OrbitControls(cam, ren.domElement);
+// st-21: dollhouse gizmo (translate/rotate/scale the rig) + mirror toggle
+const tc = new TransformControls(cam, ren.domElement);
+tc.addEventListener('dragging-changed', e => { orbit.enabled = !e.value; });
+scn.add(tc);
+let tcMode = 0;
+function dhBtn(txt, right, fn) {
+  const b = document.createElement('button');
+  b.textContent = txt;
+  b.style.cssText = 'position:absolute;top:30px;right:' + right +
+    'px;z-index:9;background:#0c1622cc;color:#9fc0dd;border:1px solid #274058;' +
+    'border-radius:6px;padding:4px 9px;cursor:pointer;font:11px monospace';
+  b.onclick = fn;
+  document.getElementById('scrR').appendChild(b);
+  return b;
+}
+addEventListener('DOMContentLoaded', () => {
+  dhBtn('🪞 mirror', 8, () => { if (!rigMesh) return;
+    rigMesh.scale.x *= -1;
+    localStorage.setItem('hopeos-dh-mirror', rigMesh.scale.x < 0 ? '1' : '0'); });
+  const gz = dhBtn('🎛 gizmo', 96, () => { if (!rigMesh) return;
+    tcMode = (tcMode + 1) % 4;
+    if (tcMode === 0) { tc.detach(); gz.textContent = '🎛 gizmo'; }
+    else { const m = ['translate', 'rotate', 'scale'][tcMode - 1];
+           tc.attach(rigMesh); tc.setMode(m); gz.textContent = '🎛 ' + m; } });
+});
 orbit.target.set(0, 0, 0); orbit.enableDamping = true;
 scn.add(new THREE.HemisphereLight(0xbfe8ff, 0x0a1220, 1.15));
 const sun = new THREE.DirectionalLight(0xffffff, 1.1); sun.position.set(3, 6, 4); scn.add(sun);
@@ -753,9 +779,9 @@ function rigTopo(t) {
   rigMesh = new THREE.Mesh(mk(), mat);
   rigMesh.frustumCulled = false;
   rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
-  rigMesh.scale.x = -1;                     // st-18: selfie-mirror — raise your left
-                                            // hand, the rig raises the SAME side you
-                                            // see in the mirrored video
+  // st-21: selfie-mirror is a PREFERENCE (🪞 button flips live and persists);
+  // default flipped so the rig matches the mirrored video
+  rigMesh.scale.x = localStorage.getItem('hopeos-dh-mirror') === '0' ? 1 : -1;
   scn.add(rigMesh);
   // left-screen projected twin — textured with the USER'S OWN LIVE PIXELS
   try {
@@ -935,7 +961,7 @@ function connect() {
     S.ws.send(JSON.stringify({ profile: 'general' }));
     if (S.sam) S.ws.send(JSON.stringify({ cmd: 'sam', on: 1 }));
     for (const c of S.concepts) S.ws.send(JSON.stringify({ cmd: 'concept', text: c, on: 1 }));
-    if (S.rigOn) S.ws.send(JSON.stringify({ cmd: 'rig', on: 1 }));
+    if (S.rigOn && !RIGWS.up) S.ws.send(JSON.stringify({ cmd: 'rig', on: 1 }));
   };
   S.ws.onclose = () => { S.inFlight = 0; statEl.textContent = 'reconnecting…'; setTimeout(connect, 2000); };
   S.ws.onmessage = (e) => {
@@ -951,7 +977,9 @@ function connect() {
     if (d.court) S.court = d.court;
     S.msGpu = d.ms || 0; S.samMs = d.sms || 0;
     if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
-    if (d.rig) rigPacket(d.rig);
+    // st-21 SINGLE-SOURCE RULE: while the Modal lane is up, node rig packets
+    // are DROPPED — two interleaved quantization ranges shredded the mesh 1/s
+    if (d.rig && !RIGWS.up) rigPacket(d.rig);
     // (st-14) d.dp DensePose packets are ignored — the live wrap is client-side now
     if (d.rigst === 'loading' && !S._lt) { S._lt = 1; toast('🦴 cloud is loading the 3D body model (~1 min)…', 8000); }
   };
