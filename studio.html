@@ -105,7 +105,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-8';
+const BUILD = 'st-9';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -158,22 +158,30 @@ const grid = new THREE.GridHelper(8, 32, 0x2e4a6e, 0x16233a); grid.position.y = 
 const SCALE_FRAG = `
   precision highp float;
   varying vec3 vPos; varying vec3 vNrm;
-  uniform float uTime, uGrow;
+  uniform sampler2D uTex, uNrm;
+  uniform float uTime, uGrow, uScale;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p){
+    vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
+    return mix(mix(hash(i), hash(i+vec2(1,0)), f.x), mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+  }
+  float fbm(vec2 p){ return 0.55*noise(p) + 0.28*noise(p*2.03) + 0.17*noise(p*4.11); }
+  vec3 triplanar(sampler2D s, vec3 pos, vec3 n, float sc){
+    vec3 b = pow(abs(n), vec3(4.0)); b /= max(dot(b, vec3(1.0)), 1e-4);
+    return texture2D(s, pos.yz*sc).rgb*b.x + texture2D(s, pos.xz*sc).rgb*b.y + texture2D(s, pos.xy*sc).rgb*b.z;
+  }
   void main() {
     vec3 n = normalize(vNrm);
-    vec2 g = vec2(vPos.x, vPos.y) * 28.0; g.y *= 1.62;
-    vec2 id = floor(g); g.x += mod(id.y, 2.0) * 0.5;
-    vec2 f = fract(g) - vec2(0.5, 0.0);
-    float r = length(f);
-    float tile = smoothstep(0.55, 0.47, r);
-    float rim = smoothstep(0.50, 0.44, r) - smoothstep(0.42, 0.34, r);
-    float lam = clamp(dot(n, normalize(vec3(0.4, 0.8, 0.5))), 0.0, 1.0);
-    vec3 base = mix(vec3(0.03, 0.15, 0.07), vec3(0.14, 0.55, 0.23), lam);
-    vec3 col = base + rim * vec3(0.55, 0.85, 0.6) * (0.35 + 0.65 * lam) + pow(lam, 8.0) * 0.22;
-    float front = 1.1 - uGrow * 2.4;
-    float on = smoothstep(front - 0.02, front + 0.12, vPos.y);
-    col += smoothstep(0.1, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0)) * vec3(0.4, 1.0, 0.5);
-    vec3 grey = vec3(0.55) * (0.25 + 0.75 * lam);
+    vec3 alb = triplanar(uTex, vPos, n, uScale);
+    vec3 nt  = triplanar(uNrm, vPos, n, uScale) * 2.0 - 1.0;
+    vec3 nn  = normalize(n + nt * 0.85);
+    float lam = clamp(dot(nn, normalize(vec3(0.4, 0.8, 0.5))), 0.0, 1.0);
+    vec3 col = alb * (0.42 + 0.85 * lam) + pow(lam, 20.0) * 0.3;
+    float warp  = (fbm(vPos.xy * 9.0 + uTime * 0.05) - 0.5) * 0.16;
+    float front = 1.15 - uGrow * 2.45 + warp;
+    float on = smoothstep(front - 0.02, front + 0.14, vPos.y);
+    col += smoothstep(0.06, 0.0, abs(vPos.y - front)) * (0.4 + 0.4 * sin(uTime * 7.0)) * vec3(0.25, 0.7, 0.3);
+    vec3 grey = vec3(0.55) * (0.25 + 0.75 * clamp(dot(n, normalize(vec3(0.4,0.8,0.5))), 0.0, 1.0));
     gl_FragColor = vec4(mix(grey, col, on), 1.0);
   }`;
 const SCALE_VERT = `
@@ -209,41 +217,107 @@ const LFX_VERT = `
 // user's real pixels. The effect then MODULATES that skin (green-shift, rim,
 // relief) instead of painting over it — misalignment shows nearly-identical
 // neighboring skin pixels, not a wrong color, so it reads as real.
+// PHOTOREAL MATERIAL SHADER — the user's own pixels, re-lit as scales.
+//  · TRIPLANAR mapping of the AI-generated tileable texture onto the BODY MESH
+//    in its own object space, so the material sticks to anatomy (no screen-door
+//    sliding) and never stretches on sideways-facing surfaces.
+//  · OVERLAY blend: skin luminance is preserved and the scale albedo modulates
+//    it — your arm's real lighting/shadow/form survives, which is what sells it.
+//  · NORMAL MAP (Sobel-derived on the node) perturbs a light term for real
+//    relief, so scales catch highlights.
+//  · ORGANIC GROWTH: the boundary is fbm-noise warped, not a straight sweep,
+//    and passes through a partial "tinted skin" zone before full scales —
+//    that gradient is the skin→scale transition of the reference photo.
 const LFX_FRAG = `
   precision highp float;
   varying vec3 vPos; varying vec2 vUV;
   uniform sampler2D uVid;
   uniform sampler2D uMask;                      // E1: feathered person-mask clip
-  uniform float uTime, uGrow;
+  uniform sampler2D uTex;                       // AI albedo (tileable)
+  uniform sampler2D uNrm;                       // derived normal map
+  uniform float uTime, uGrow, uHasTex, uScale;
+
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p){
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
+               mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
+  }
+  float fbm(vec2 p){ return 0.55*noise(p) + 0.28*noise(p*2.03) + 0.17*noise(p*4.11); }
+
+  vec3 triplanar(sampler2D s, vec3 pos, vec3 n, float sc){
+    vec3 b = pow(abs(n), vec3(4.0));
+    b /= max(dot(b, vec3(1.0)), 1e-4);
+    return texture2D(s, pos.yz * sc).rgb * b.x
+         + texture2D(s, pos.xz * sc).rgb * b.y
+         + texture2D(s, pos.xy * sc).rgb * b.z;
+  }
+  vec3 overlay(vec3 base, vec3 top){
+    return mix(2.0 * base * top, 1.0 - 2.0 * (1.0 - base) * (1.0 - top), step(0.5, base));
+  }
+
   void main() {
-    // never sample outside the video frame (was: clamped black triangles)
     if (vUV.x < 0.002 || vUV.x > 0.998 || vUV.y < 0.002 || vUV.y > 0.998) discard;
     vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
     vec3 skin = texture2D(uVid, vUV).rgb;
-    // pixel-accurate silhouette adherence: the SAM mask clips the 3D mesh with
-    // a soft feather — scales can never spill onto the background or a hand
     float mclip = smoothstep(0.15, 0.6, texture2D(uMask, vUV).r);
-    vec2 g = vec2(vPos.x, vPos.y) * 28.0; g.y *= 1.62;
-    vec2 id = floor(g); g.x += mod(id.y, 2.0) * 0.5;
-    vec2 f = fract(g) - vec2(0.5, 0.0);
-    float r = length(f);
-    float tile = smoothstep(0.55, 0.47, r);
-    float rim = smoothstep(0.50, 0.44, r) - smoothstep(0.42, 0.34, r);
-    float lam = clamp(dot(n, normalize(vec3(0.25, -0.35, -1.0))), 0.0, 1.0);
-    // the scales are the user's own skin, green-shifted + shaded — not paint
-    vec3 scaled = skin * vec3(0.52, 1.08, 0.58);
-    scaled *= 0.72 + 0.55 * lam;
-    scaled += rim * vec3(0.30, 0.55, 0.33) * (0.4 + 0.6 * lam);
-    scaled += pow(lam, 8.0) * 0.14;
-    float front = 1.1 - uGrow * 2.4;
-    float on = smoothstep(front - 0.02, front + 0.12, vPos.y);
-    vec3 col = mix(skin, scaled, 0.30 + 0.70 * tile);
-    col += smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0)) * vec3(0.35, 0.9, 0.45);
-    float alpha = on * 0.96 * mclip;
+
+    // ---- material -------------------------------------------------------
+    vec3 alb = triplanar(uTex, vPos, n, uScale);
+    vec3 nt  = triplanar(uNrm, vPos, n, uScale) * 2.0 - 1.0;   // tangent-ish
+    vec3 nn  = normalize(n + nt * 0.85);                        // perturbed
+    float lam  = clamp(dot(nn, normalize(vec3(0.25, -0.35, -1.0))), 0.0, 1.0);
+    float spec = pow(lam, 22.0);
+
+    // keep the PERSON's luminance, take the MATERIAL's color+detail
+    float skinLum = dot(skin, vec3(0.299, 0.587, 0.114));
+    vec3 mat = overlay(skin, alb);
+    mat = mix(mat, mat * (0.55 + 0.85 * lam), 0.75);            // relief shading
+    mat += spec * 0.35;                                          // wet highlight
+    mat = mix(vec3(skinLum) * vec3(0.72, 1.0, 0.78), mat, 0.88); // bind to skin light
+
+    // ---- organic growth boundary ----------------------------------------
+    float warp  = (fbm(vPos.xy * 9.0 + uTime * 0.05) - 0.5) * 0.16;
+    float front = 1.15 - uGrow * 2.45 + warp;
+    float edge  = vPos.y - front;
+    float full  = smoothstep(0.0, 0.16, edge);      // full scales
+    float part  = smoothstep(-0.13, 0.03, edge);    // tinted-skin lead-in
+    float grain = smoothstep(0.35, 0.75, fbm(vPos.xy * 26.0)); // patchy onset
+    float amt   = clamp(full + part * grain * 0.55, 0.0, 1.0);
+
+    vec3 col = mix(skin, mat, amt * uHasTex + amt * (1.0 - uHasTex));
+    // live growth edge shimmer
+    col += smoothstep(0.05, 0.0, abs(edge)) * (0.35 + 0.35 * sin(uTime * 7.0 + vPos.x * 30.0)) * vec3(0.20, 0.55, 0.26);
+
+    float alpha = clamp(part * 1.05, 0.0, 1.0) * 0.97 * mclip;
     if (alpha < 0.01) discard;
     gl_FragColor = vec4(col, alpha);
   }`;
 let rigMesh = null, lfxMesh = null, lfxRen = null, lfxScn = null, lfxCam = null, grow0 = 0;
+// ── AI-GENERATED MATERIAL (node: SDXL 30-step, tileable, + Sobel normal map) ──
+// Fetched from the node's file tunnel; swapping material = swapping these two
+// URLs, which is exactly what a texgen prompt will do later.
+const TEX_BASE = localStorage.getItem('hopeos-tex-base')
+  || 'https://speeches-restaurant-laugh-capability.trycloudflare.com';
+const MATTEX = { alb: null, nrm: null, name: 'snake' };
+{
+  const L = new THREE.TextureLoader(); L.setCrossOrigin('anonymous');
+  const wrap = (t) => { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.SRGBColorSpace; return t; };
+  MATTEX.alb = wrap(L.load(`${TEX_BASE}/tex_snake.jpg`));
+  MATTEX.nrm = L.load(`${TEX_BASE}/nrm_snake.jpg`);
+  MATTEX.nrm.wrapS = MATTEX.nrm.wrapT = THREE.RepeatWrapping;   // linear, not sRGB
+}
+function matSwap(name) {
+  const L = new THREE.TextureLoader(); L.setCrossOrigin('anonymous');
+  const a = L.load(`${TEX_BASE}/tex_${name}.jpg`); a.wrapS = a.wrapT = THREE.RepeatWrapping; a.colorSpace = THREE.SRGBColorSpace;
+  const n = L.load(`${TEX_BASE}/nrm_${name}.jpg`); n.wrapS = n.wrapT = THREE.RepeatWrapping;
+  MATTEX.alb = a; MATTEX.nrm = n; MATTEX.name = name;
+  for (const m of [lfxMesh, rigMesh]) if (m && m.material.uniforms.uTex) {
+    m.material.uniforms.uTex.value = a; m.material.uniforms.uNrm.value = n;
+  }
+  toast(`🎨 material → ${name}`);
+}
 // E1: feathered person-mask → texture that clips the effect mesh
 const maskCv = document.createElement('canvas'); maskCv.width = 480; maskCv.height = 270;
 const maskCtx = maskCv.getContext('2d');
@@ -257,7 +331,9 @@ function rigTopo(t) {
     return geo;
   };
   const mat = new THREE.ShaderMaterial({ vertexShader: SCALE_VERT, fragmentShader: SCALE_FRAG,
-    uniforms: { uTime: { value: 0 }, uGrow: { value: 0 } }, side: THREE.DoubleSide });
+    uniforms: { uTime: { value: 0 }, uGrow: { value: 0 },
+                uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm }, uScale: { value: 5.5 } },
+    side: THREE.DoubleSide });
   rigMesh = new THREE.Mesh(mk(), mat);
   rigMesh.frustumCulled = false;
   rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
@@ -276,7 +352,9 @@ function rigTopo(t) {
                   uShift: { value: new THREE.Vector2() },
                   uCamT: { value: new THREE.Vector3() }, uFocal: { value: 1000 }, uIw: { value: 960 },
                   uIh: { value: 540 }, uCover: { value: new THREE.Vector4() },
-                  uCanvas: { value: new THREE.Vector2() }, uTime: { value: 0 }, uGrow: { value: 0 } } });
+                  uCanvas: { value: new THREE.Vector2() }, uTime: { value: 0 }, uGrow: { value: 0 },
+                  uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
+                  uHasTex: { value: 1 }, uScale: { value: 5.5 } } });
     lfxMesh = new THREE.Mesh(lgeo, lmat);
     lfxMesh.frustumCulled = false;
     lfxScn = new THREE.Scene(); lfxScn.add(lfxMesh);
@@ -581,7 +659,10 @@ function applyPrompt(raw) {
     if (FX_LANE) fxOff();            // st-8: also stop the generative lane
     say('✕ effects & concepts cleared — body rig keeps tracking (that is the default)'); return;
   }
-  if (/(scale|slime|skin|dragon|feather|armor|fire)/.test(p)) {
+  // material switch: "snake skin" / "dragon scales" / "fish" / "lizard"
+  { const m = p.match(/\b(snake|dragon|fish|lizard)\b/);
+    if (m && MATTEX.name !== m[1]) matSwap(m[1]); }
+  if (/(scale|slime|skin|dragon|feather|armor|fire|snake|lizard|fish)/.test(p)) {
     S.rigOn = true; S.sam = true;    // sam masks feed the E1 silhouette clip
     S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
     S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
