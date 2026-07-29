@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-35';
+const BUILD = 'st-36';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -881,13 +881,18 @@ const SHIRT2_FRAG = `
     float nx = vDress.x, ny = vDress.y;                 // dress-time body coords
     // SMOOTH FINISHES (st-29): every visible edge is an iso-line cut inside
     // solid geometry — hem, sleeve ends, collar — never the mesh boundary
-    float sleeveZone = step(0.28, abs(nx - 0.5));       // 1 on the arms
-    if (sleeveZone > 0.5 && ny >= 0.35) discard;        // arm below the sleeve end
-    float hemY = mix(0.515, 0.305, sleeveZone);         // torso hem vs sleeve end
-    if (ny > hemY || ny < 0.148) discard;
+    // st-36 SMOOTH EDGES EVERYWHERE: no hard pixel cliffs. The sleeve and
+    // torso hems BLEND into one continuous curved underarm line (like a real
+    // tee), and every edge fades over a small band — antialiased across the
+    // coarse triangles, so the finish stays smooth on every re-dress.
+    float szone = smoothstep(0.26, 0.30, abs(nx - 0.5));
+    float hemY = mix(0.515, 0.305, szone);              // continuous hem curve
+    float alpha = smoothstep(hemY, hemY - 0.010, ny);   // hem/sleeve feather
+    alpha *= smoothstep(0.148, 0.158, ny);              // shoulder-top feather
     vec2 nk = vec2((nx - 0.5) / 0.105, (ny - 0.148) / 0.062);
     float nd = dot(nk, nk);                             // round neck opening
-    if (nd < 1.0) discard;
+    alpha *= smoothstep(1.0, 1.14, nd);
+    if (alpha < 0.02) discard;
     // consistent shading inside and out (DoubleSide needs the normal flipped
     // on backfaces or the interior shades wrong = blotchy colour)
     vec3 n = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
@@ -925,7 +930,7 @@ const SHIRT2_FRAG = `
         col = mix(col, bp.rgb * (0.72 + 0.38 * lam), bp.a);
       }
     }
-    gl_FragColor = vec4(col, 1.0);
+    gl_FragColor = vec4(col, alpha);
   }`;
 function shirt2Tex() {
   if (SHIRT2.tex) return SHIRT2.tex;
@@ -1053,7 +1058,7 @@ function shirt2Build() {
   geo.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
   const mat = new THREE.ShaderMaterial({ vertexShader: SHIRT2_VERT, fragmentShader: SHIRT2_FRAG,
-    side: THREE.DoubleSide,
+    side: THREE.DoubleSide, transparent: true,          // st-36: feathered edges
     uniforms: { uMix: { value: 1 }, uPuff: { value: 0.025 }, uDecal: { value: shirt2Tex() },
                 uDecalB: { value: shirt2TexBack() },
                 uMirr: { value: 0 }, uCol: { value: new THREE.Vector3(0.87, 0.71, 0.30) } } });
