@@ -29,7 +29,9 @@
   #lov, #lmesh, #lfx2, #liuv { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
   #lfx2 { opacity: 0; transition: opacity .3s; }   /* fades in over 300ms on first fx frame */
   body.nomirror #vid, body.nomirror #lov, body.nomirror #lmesh, body.nomirror #lfx2, body.nomirror #liuv { transform: none; }
-  #dh { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* touch-action:none → the browser hands pinch/drag to the 3D controls
+     instead of page-zooming (st-37) */
+  #dh { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
   /* ── prompt bar ── */
   #bar { position: fixed; inset: auto 0 14px 0; display: flex; flex-direction: column;
     align-items: center; gap: 8px; z-index: 20; }
@@ -107,7 +109,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-36';
+const BUILD = 'st-37';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -174,6 +176,15 @@ scn.background = new THREE.Color(0x0a0f16);
 const cam = new THREE.PerspectiveCamera(46, 1, 0.05, 200);
 cam.position.set(0.4, 0.7, 3.2);
 const orbit = new OrbitControls(cam, ren.domElement);
+// st-37 TOUCH: one finger orbits · PINCH zooms in/out · two-finger drag pans.
+// Damping makes pinch/orbit glide naturally; distance clamps keep the scene
+// from being lost by over-zooming.
+orbit.enableZoom = true;
+orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+orbit.minDistance = 0.6;
+orbit.maxDistance = 60;
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.12;
 // st-21: dollhouse gizmo (translate/rotate/scale the rig) + mirror toggle
 const tc = new TransformControls(cam, ren.domElement);
 tc.addEventListener('dragging-changed', e => { orbit.enabled = !e.value; });
