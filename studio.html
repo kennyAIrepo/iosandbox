@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-26';
+const BUILD = 'st-27';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -133,9 +133,9 @@ const RIG_LANE = _rl === 'off' ? ''
 // st-22 MULTIPLAYER ROLES — laptop A: ?room=abc (role=cam default) streams the
 // camera; laptop B: ?room=abc&role=dollhouse is a PURE REMOTE VIEWER (no
 // camera) rendering the same person's rig live from the cloud hub.
-// st-25: shirt defaults OFF (one-time reset of the stored preference)
-if (!localStorage.getItem('hopeos-shirt-v2')) {
-  localStorage.setItem('hopeos-shirt', '0'); localStorage.setItem('hopeos-shirt-v2', '1');
+// st-27: garment relaunch — shirt starts ON once (new freeze-safe layer)
+if (!localStorage.getItem('hopeos-shirt-v3')) {
+  localStorage.setItem('hopeos-shirt', '1'); localStorage.setItem('hopeos-shirt-v3', '1');
 }
 const ROOM = new URLSearchParams(location.search).get('room') || '';
 const ROLE = new URLSearchParams(location.search).get('role') === 'dollhouse' ? 'dollhouse' : 'cam';
@@ -196,11 +196,10 @@ addEventListener('DOMContentLoaded', () => {
     localStorage.setItem('hopeos-dh-mirror', mir ? '1' : '0');
     if (rigMesh.material.uniforms.uMirr) rigMesh.material.uniforms.uMirr.value = mir ? 1 : 0; });
   // st-23 CLOSET — one item for now: the yellow hackathon tee
-  dhBtn('👕 closet: yellow tee', 184, () => { if (!rigMesh) return;
-    const u = rigMesh.material.uniforms.uShirt;
-    u.value = u.value ? 0 : 1;
-    localStorage.setItem('hopeos-shirt', u.value ? '1' : '0');
-    toast(u.value ? '👕 wearing: A Real Quantum Hackathon tee' : '👕 shirt off'); });
+  dhBtn('👕 closet: yellow tee', 184, () => {
+    SHIRT2.on = !SHIRT2.on;                       // st-27: garment layer, rig untouched
+    localStorage.setItem('hopeos-shirt', SHIRT2.on ? '1' : '0');
+    toast(SHIRT2.on ? '👕 wearing: A Real Quantum Hackathon tee' : '👕 shirt off'); });
   const gz = dhBtn('🎛 gizmo', 96, () => { if (!rigMesh) return;
     tcMode = (tcMode + 1) % 4;
     if (tcMode === 0) { tc.detach(); gz.textContent = '🎛 gizmo'; }
@@ -845,6 +844,119 @@ function shirtDecalTex() {
   _shirtTex.minFilter = _shirtTex.magFilter = THREE.LinearFilter;
   return _shirtTex;
 }
+// ══ st-27 GARMENT LAYER — freeze-safe: READS the rig, never edits it ══════
+// The shirt is a separate mesh that SHARES the rig's vertex buffers (so it
+// moves + interpolates identically, for free), keeps only torso/upper-arm
+// faces as its shell, and puffs outward along the normal like worn cloth.
+const SHIRT2 = { on: localStorage.getItem('hopeos-shirt') === '1', mesh: null, host: null, tex: null };
+const SHIRT2_VERT = `
+  attribute vec3 aPrev; attribute vec3 aPrevN;
+  uniform float uMix, uPuff;
+  varying vec3 vN, vON, vP;
+  void main(){
+    vec3 p = mix(aPrev, position, uMix);
+    vec3 n = normalize(mix(aPrevN, normal, uMix));
+    vP = p; vON = n; vN = normalMatrix * n;
+    p += n * uPuff;                       // cloth sits ~2.5cm off the skin
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }`;
+const SHIRT2_FRAG = `
+  precision highp float;
+  varying vec3 vN, vON, vP;
+  uniform sampler2D uDecal;
+  uniform vec3 uBMin, uBMax, uCol;
+  uniform float uMirr;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
+  float fbm(vec2 p){ return 0.55*noise(p)+0.28*noise(p*2.03)+0.17*noise(p*4.11); }
+  void main(){
+    vec3 bs = max(uBMax - uBMin, vec3(1e-4));
+    float nx = (vP.x - uBMin.x) / bs.x, ny = (vP.y - uBMin.y) / bs.y;
+    if (ny < 0.135 || ny > 0.525) discard;              // shoulder + hem trim
+    if (ny < 0.175 && abs(nx - 0.5) < 0.085) discard;   // hollow neckline
+    vec3 n = normalize(vN);
+    float lam = clamp(0.35 + 0.65 * max(dot(n, normalize(vec3(0.4, 0.8, 0.5))), 0.0), 0.0, 1.0);
+    float wr = fbm(vP.xy * 14.0 + vP.z * 5.0) - 0.5;    // cotton wrinkle
+    vec3 col = uCol * (0.62 + 0.42 * lam + wr * 0.12);
+    col += pow(lam, 9.0) * 0.04;
+    vec2 duv = vec2((nx - 0.635) / 0.20 + 0.5, (ny - 0.235) / 0.16 + 0.5);
+    if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && vON.z < -0.05) {
+      duv.x = mix(duv.x, 1.0 - duv.x, uMirr);           // readable under mirror
+      col = mix(col, vec3(0.10), texture2D(uDecal, duv).a * 0.92);
+    }
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+function shirt2Tex() {
+  if (SHIRT2.tex) return SHIRT2.tex;
+  const c = document.createElement('canvas'); c.width = 512; c.height = 256;
+  const x = c.getContext('2d');
+  x.fillStyle = '#1a1a1a'; x.textAlign = 'left';
+  x.font = 'italic 44px Georgia, serif';       x.fillText('A Real', 30, 70);
+  x.font = '47px Georgia, serif';              x.fillText('Quantum Hackathon', 30, 132);
+  x.font = 'bold 26px Arial, sans-serif';      x.fillText('2026', 34, 188);
+  x.fillText('New York City', 150, 188);
+  SHIRT2.tex = new THREE.CanvasTexture(c);
+  SHIRT2.tex.flipY = false;
+  SHIRT2.tex.minFilter = SHIRT2.tex.magFilter = THREE.LinearFilter;
+  return SHIRT2.tex;
+}
+function shirt2Build() {
+  if (!rigMesh || !S.rig.seen) return;
+  const g = rigMesh.geometry, ru = rigMesh.material.uniforms;
+  if (!ru.uBMin) return;
+  const bmin = ru.uBMin.value, bmax = ru.uBMax.value;
+  const pos = g.getAttribute('position'), idx = g.index.array;
+  const bsx = Math.max(bmax.x - bmin.x, 1e-4), bsy = Math.max(bmax.y - bmin.y, 1e-4);
+  // classify vertices ONCE (fit to the wearer's measurements at dress time):
+  // torso band any width, arms only above the elbow — the subset then follows
+  // the body forever because vertex correspondence is stable
+  const keepV = new Uint8Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    const nx = (pos.array[i*3] - bmin.x) / bsx, ny = (pos.array[i*3+1] - bmin.y) / bsy;
+    const torso  = ny > 0.13 && ny < 0.53 && Math.abs(nx - 0.5) < 0.26;
+    const sleeve = ny > 0.13 && ny < 0.30;
+    keepV[i] = (torso || sleeve) ? 1 : 0;
+  }
+  const keep = [];
+  for (let f = 0; f < idx.length; f += 3)
+    if (keepV[idx[f]] && keepV[idx[f+1]] && keepV[idx[f+2]]) keep.push(idx[f], idx[f+1], idx[f+2]);
+  if (!keep.length) return;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', g.getAttribute('position'));   // SHARED buffers —
+  geo.setAttribute('normal',   g.getAttribute('normal'));     // the shirt moves
+  geo.setAttribute('aPrev',    g.getAttribute('aPrev'));      // exactly with the
+  geo.setAttribute('aPrevN',   g.getAttribute('aPrevN'));     // rig, zero copies
+  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+  geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);
+  const mat = new THREE.ShaderMaterial({ vertexShader: SHIRT2_VERT, fragmentShader: SHIRT2_FRAG,
+    side: THREE.DoubleSide,
+    uniforms: { uMix: { value: 1 }, uPuff: { value: 0.025 }, uDecal: { value: shirt2Tex() },
+                uBMin: { value: new THREE.Vector3() }, uBMax: { value: new THREE.Vector3() },
+                uMirr: { value: 0 }, uCol: { value: new THREE.Vector3(0.87, 0.71, 0.30) } } });
+  SHIRT2.mesh = new THREE.Mesh(geo, mat);
+  SHIRT2.mesh.frustumCulled = false;
+  SHIRT2.mesh.renderOrder = 2;
+  rigMesh.add(SHIRT2.mesh);            // child: mirror/gizmo transforms ride along
+  SHIRT2.host = rigMesh;
+}
+function shirt2Tick() {
+  if (!SHIRT2.on) {
+    if (SHIRT2.mesh) { SHIRT2.host?.remove(SHIRT2.mesh); SHIRT2.mesh = null; }
+    return;
+  }
+  if (!rigMesh) return;
+  if (!SHIRT2.mesh || SHIRT2.host !== rigMesh) {        // rig rebuilt → re-dress
+    if (SHIRT2.mesh && SHIRT2.host) SHIRT2.host.remove(SHIRT2.mesh);
+    SHIRT2.mesh = null;
+    shirt2Build();
+  }
+  if (!SHIRT2.mesh) return;
+  const ru = rigMesh.material.uniforms, su = SHIRT2.mesh.material.uniforms;
+  if (ru.uMix)  su.uMix.value = ru.uMix.value;          // identical interpolation
+  if (ru.uBMin) { su.uBMin.value.copy(ru.uBMin.value); su.uBMax.value.copy(ru.uBMax.value); }
+  su.uMirr.value = rigMesh.scale.x < 0 ? 1 : 0;
+}
 function rigTopo(t) {
   // st-24: topology may legitimately CHANGE (each hub container computes its
   // own decimation map — mixing old faces with new vertex order weaves spike
@@ -1388,6 +1500,7 @@ function loop(now) {
   drawLive();
   drawLfx(now);
   pxDraw(now);    // st-14 own-pixels hand rig — client-side, zero-latency wrap
+  shirt2Tick();   // st-27 garment layer — dresses the rig without touching it
   drawFx2();
   orbit.update();
   if (rigMesh) {
