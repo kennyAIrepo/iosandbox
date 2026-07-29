@@ -103,7 +103,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-6';
+const BUILD = 'st-7';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -209,6 +209,8 @@ const LFX_FRAG = `
   uniform sampler2D uMask;                      // E1: feathered person-mask clip
   uniform float uTime, uGrow;
   void main() {
+    // never sample outside the video frame (was: clamped black triangles)
+    if (vUV.x < 0.002 || vUV.x > 0.998 || vUV.y < 0.002 || vUV.y > 0.998) discard;
     vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
     vec3 skin = texture2D(uVid, vUV).rgb;
     // pixel-accurate silhouette adherence: the SAM mask clips the 3D mesh with
@@ -348,8 +350,11 @@ function drawLfx(now) {
     }
     drew = true;
   }
-  if (!drew) { maskCtx.filter = 'none'; maskCtx.fillStyle = '#fff'; maskCtx.fillRect(0, 0, 480, 270); }
+  // STRICT: no person mask yet → mask stays BLACK → the effect is hidden
+  // until segmentation locks on (was: full-white fallback = scales sprayed
+  // across the background while SAM warmed up)
   if (maskTex) maskTex.needsUpdate = true;
+  if (!drew && grow0) grow0 = performance.now();   // growth waits for the mask
   lfxRen.render(lfxScn, lfxCam);
 }
 function sizeDH() {
