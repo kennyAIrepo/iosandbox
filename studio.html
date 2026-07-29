@@ -26,8 +26,8 @@
   .slabel { position: absolute; top: 10px; left: 12px; z-index: 5; font-size: 11px;
     letter-spacing: .18em; color: #5d7a94; background: #0a0f18cc; padding: 3px 8px; border-radius: 6px; }
   #vid { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-  #lov { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
-  body.nomirror #vid, body.nomirror #lov { transform: none; }
+  #lov, #lmesh { position: absolute; inset: 0; width: 100%; height: 100%; transform: scaleX(-1); }
+  body.nomirror #vid, body.nomirror #lov, body.nomirror #lmesh { transform: none; }
   #dh { position: absolute; inset: 0; width: 100%; height: 100%; }
   /* ── prompt bar ── */
   #bar { position: fixed; inset: auto 0 14px 0; display: flex; flex-direction: column;
@@ -63,11 +63,13 @@
   <button class="vbtn sel" data-v="split">▣ split</button>
   <button class="vbtn" data-v="right">◨ dollhouse</button>
   <span id="stat">connecting…</span>
+  <a class="vbtn" style="text-decoration:none" href="mpgames.html">⚙ playground</a>
 </div>
 <div id="screens">
   <div class="screen" id="scrL">
     <div class="slabel">LIVE · your camera + effects</div>
     <video id="vid" muted playsinline></video>
+    <canvas id="lmesh"></canvas>
     <canvas id="lov"></canvas>
   </div>
   <div class="screen" id="scrR">
@@ -101,11 +103,15 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-1';
+const BUILD = 'st-2';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
+// STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
+// NOT shared with mpgames' key, whose saved value may point at the SAM2.1
+// lane (no concepts, no rig) and silently gut this page.
+const SAM3_LANE = 'wss://dubai-intelligence-micro-grad.trycloudflare.com';
 { const q = new URLSearchParams(location.search).get('server');
-  if (q) localStorage.setItem('hopeos-yolo-server', q); }
-const SRV = localStorage.getItem('hopeos-yolo-server') || 'ws://localhost:8766';
+  if (q) localStorage.setItem('hopeos-studio-server', q); }
+const SRV = localStorage.getItem('hopeos-studio-server') || SAM3_LANE;
 
 const vid = document.getElementById('vid'), lov = document.getElementById('lov');
 const lctx = lov.getContext('2d');
@@ -168,30 +174,116 @@ const SCALE_VERT = `
     vPos = position; vNrm = normalMatrix * normal;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }`;
-let rigMesh = null, grow0 = 0;
+// LEFT-SCREEN EFFECT LAYER — the same mesh projected ONTO the live person
+// (pinhole projection in the vertex shader via cam_t/focal, exactly the
+// mpgames cs-19 technique): the effect lives on YOUR BODY in the live view,
+// while the dollhouse shows it in orbitable 3D.
+const LFX_VERT = `
+  uniform vec3 uCamT; uniform float uFocal, uIw, uIh;
+  uniform vec4 uCover; uniform vec2 uCanvas;
+  varying vec3 vPos;
+  void main() {
+    vPos = position;
+    vec3 p = position + uCamT;
+    float sx = (uFocal * p.x / p.z + uIw * 0.5) / uIw;
+    float sy = (uFocal * p.y / p.z + uIh * 0.5) / uIh;
+    vec2 px = vec2(uCover.x + sx * uCover.z, uCover.y + sy * uCover.w);
+    vec2 ndc = vec2(px.x / uCanvas.x * 2.0 - 1.0, -(px.y / uCanvas.y * 2.0 - 1.0));
+    gl_Position = vec4(ndc, clamp(p.z / 80.0, 0.0, 0.95), 1.0);
+  }`;
+const LFX_FRAG = `
+  precision highp float;
+  varying vec3 vPos;
+  uniform float uTime, uGrow;
+  void main() {
+    vec3 n = normalize(cross(dFdx(vPos), dFdy(vPos)));
+    vec2 g = vec2(vPos.x, vPos.y) * 28.0; g.y *= 1.62;
+    vec2 id = floor(g); g.x += mod(id.y, 2.0) * 0.5;
+    vec2 f = fract(g) - vec2(0.5, 0.0);
+    float r = length(f);
+    float tile = smoothstep(0.55, 0.47, r);
+    float rim = smoothstep(0.50, 0.44, r) - smoothstep(0.42, 0.34, r);
+    float lam = clamp(dot(n, normalize(vec3(0.25, -0.35, -1.0))), 0.0, 1.0);
+    vec3 base = mix(vec3(0.03, 0.16, 0.07), vec3(0.13, 0.52, 0.22), lam);
+    vec3 col = base + rim * vec3(0.55, 0.85, 0.6) * (0.35 + 0.65 * lam) + pow(lam, 8.0) * 0.25;
+    float front = 1.1 - uGrow * 2.4;
+    float on = smoothstep(front + 0.12, front - 0.02, vPos.y);
+    col += smoothstep(0.10, 0.0, abs(vPos.y - front)) * (0.5 + 0.5 * sin(uTime * 9.0 + vPos.x * 40.0)) * vec3(0.4, 1.0, 0.5);
+    float alpha = (0.16 + 0.74 * tile) * on;
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(col, alpha * 0.92);
+  }`;
+let rigMesh = null, lfxMesh = null, lfxRen = null, lfxScn = null, lfxCam = null, grow0 = 0;
 function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
 function rigTopo(t) {
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
-  geo.setIndex(new THREE.BufferAttribute(new Uint32Array(b64u16(t.faces)), 1));
+  const mk = () => {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(t.nv * 3), 3));
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(b64u16(t.faces)), 1));
+    return geo;
+  };
   const mat = new THREE.ShaderMaterial({ vertexShader: SCALE_VERT, fragmentShader: SCALE_FRAG,
     uniforms: { uTime: { value: 0 }, uGrow: { value: 0 } }, side: THREE.DoubleSide });
-  rigMesh = new THREE.Mesh(geo, mat);
+  rigMesh = new THREE.Mesh(mk(), mat);
   rigMesh.frustumCulled = false;
   rigMesh.rotation.x = Math.PI;             // camera-space y-down → scene y-up
   scn.add(rigMesh);
+  // left-screen projected twin
+  try {
+    lfxRen = lfxRen || new THREE.WebGLRenderer({ canvas: document.getElementById('lmesh'), alpha: true, antialias: true });
+    const lmat = new THREE.ShaderMaterial({ vertexShader: LFX_VERT, fragmentShader: LFX_FRAG,
+      transparent: true, depthWrite: true, side: THREE.DoubleSide,
+      uniforms: { uCamT: { value: new THREE.Vector3() }, uFocal: { value: 1000 }, uIw: { value: 960 },
+                  uIh: { value: 540 }, uCover: { value: new THREE.Vector4() },
+                  uCanvas: { value: new THREE.Vector2() }, uTime: { value: 0 }, uGrow: { value: 0 } } });
+    lfxMesh = new THREE.Mesh(mk(), lmat);
+    lfxMesh.frustumCulled = false;
+    lfxScn = new THREE.Scene(); lfxScn.add(lfxMesh);
+    lfxCam = new THREE.OrthographicCamera(-1, 1, 1, -1, -1, 1);
+  } catch (e) { console.error('left fx layer failed', e); }
   S.rig.topo = t;
-  toast('🦴 body reconstructed — drag the dollhouse to orbit it');
+  toast('🦴 body reconstructed — scales on YOU (left) + orbitable mesh (right)');
 }
 function rigPacket(p) {
   if (!rigMesh) return;
-  const q = b64u16(p.q), n = p.nv, pos = rigMesh.geometry.getAttribute('position');
+  const q = b64u16(p.q), n = p.nv;
+  const pos = rigMesh.geometry.getAttribute('position');
+  const lpos = lfxMesh && lfxMesh.geometry.getAttribute('position');
   for (let a = 0; a < 3; a++) { const mn = p.vmin[a], rg = p.vmax[a] - mn;
-    for (let i = 0; i < n; i++) pos.array[i * 3 + a] = mn + q[i * 3 + a] / 65535 * rg; }
+    for (let i = 0; i < n; i++) {
+      const v = mn + q[i * 3 + a] / 65535 * rg;
+      pos.array[i * 3 + a] = v;
+      if (lpos) lpos.array[i * 3 + a] = v;
+    } }
   pos.needsUpdate = true;
   rigMesh.geometry.computeVertexNormals();
+  if (lpos) { lpos.needsUpdate = true;
+    const u = lfxMesh.material.uniforms;
+    u.uCamT.value.set(p.cam_t[0], p.cam_t[1], p.cam_t[2]);
+    u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih; }
   S.rig.lastPkt = performance.now(); S.rig.ms = p.ms;
   if (!grow0) grow0 = performance.now();
+}
+function drawLfx(now) {
+  const c = document.getElementById('lmesh');
+  const live = lfxMesh && S.rigOn && now - S.rig.lastPkt < 2500;
+  if (!lfxRen) return;
+  if (!live) { c.style.opacity = '0'; return; }
+  c.style.opacity = '1';
+  const r = document.getElementById('scrL').getBoundingClientRect();
+  if (r.width < 4) return;
+  if (c.width !== Math.round(r.width * Math.min(devicePixelRatio, 2))) {
+    lfxRen.setSize(r.width, r.height, false); lfxRen.setPixelRatio(Math.min(devicePixelRatio, 2));
+  }
+  const vw = vid.videoWidth || 960, vh = vid.videoHeight || 540;
+  const sc = Math.max(r.width / vw, r.height / vh);
+  const dw = vw * sc, dh2 = vh * sc;
+  const u = lfxMesh.material.uniforms;
+  u.uCover.value.set((r.width - dw) / 2, (r.height - dh2) / 2, dw, dh2);
+  u.uCanvas.value.set(r.width, r.height);
+  u.uTime.value = now * .001;
+  u.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 5000) : 0;
+  lfxRen.render(lfxScn, lfxCam);
 }
 function sizeDH() {
   const r = document.getElementById('scrR').getBoundingClientRect();
@@ -356,6 +448,7 @@ function loop(now) {
   requestAnimationFrame(loop);
   pump(now);
   drawLive();
+  drawLfx(now);
   orbit.update();
   if (rigMesh) {
     rigMesh.material.uniforms.uTime.value = now * .001;
