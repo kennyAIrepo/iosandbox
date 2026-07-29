@@ -106,7 +106,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-12';
+const BUILD = 'st-13';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -308,18 +308,37 @@ const IUV_FRAG = `
   uniform sampler2D uVid, uIuv, uTex, uNrm;
   uniform float uTime, uGrow, uScale, uHasIuv;
   uniform vec2 uVidAspect;
+  uniform vec2 uPx;                 // one canvas pixel in vUv units
+  uniform vec2 uOff;                // stale-map motion offset (st-13 flow-lock lite)
+  uniform vec3 uAmb;                // scene ambient colour sampled from the live frame
+  uniform vec3 uLdir;               // dominant light direction estimated from the frame
 
   float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
   float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
     return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
   float fbm(vec2 p){ return 0.55*noise(p)+0.28*noise(p*2.03)+0.17*noise(p*4.11); }
   vec3 overlay(vec3 b, vec3 t){ return mix(2.0*b*t, 1.0-2.0*(1.0-b)*(1.0-t), step(0.5,b)); }
+  float partAt(vec2 p){ return texture2D(uIuv, p).r * 25.5; }
+  float lumAt(vec2 p){ return dot(texture2D(uVid, p).rgb, vec3(0.299, 0.587, 0.114)); }
 
   void main(){
     vec3 skin = texture2D(uVid, vUv).rgb;
-    vec4 iuv = texture2D(uIuv, vUv);
+    vec2 iuvUv = vUv + uOff;                            // look up the stale map where this pixel WAS
+    vec4 iuv = texture2D(uIuv, iuvUv);
     float part = iuv.r * 25.5;                          // 0..24 (linear-filtered)
-    if (uHasIuv < 0.5 || part < 0.35) discard;           // background → untouched
+    if (uHasIuv < 0.5) discard;
+
+    // SOFT MATTE (fix 2): coverage from a 5-tap neighbourhood → feathered
+    // edge instead of a hard segmentation cliff
+    float cov = step(0.35, part)
+              + step(0.35, partAt(iuvUv + vec2( uPx.x*2.0, 0.0)))
+              + step(0.35, partAt(iuvUv + vec2(-uPx.x*2.0, 0.0)))
+              + step(0.35, partAt(iuvUv + vec2(0.0,  uPx.y*2.0)))
+              + step(0.35, partAt(iuvUv + vec2(0.0, -uPx.y*2.0)));
+    cov *= 0.2;
+    if (cov < 0.05) discard;
+    float matte = smoothstep(0.25, 0.9, cov);
+    if (part < 0.35) { part = 1.0; }                    // fringe pixels borrow nearest part
 
     // surface coords of THIS pixel on THIS body part; part id offsets the
     // tile so neighbouring limbs don't share an identical patch
@@ -328,17 +347,33 @@ const IUV_FRAG = `
     vec2 tuv = suv * uScale + vec2(mod(pid, 5.0) * 0.37, floor(pid / 5.0) * 0.29);
     // surface-normal proxy from how UV changes across the screen → real contour shading
     vec3 sn = normalize(vec3(dFdx(suv.y) - dFdy(suv.x), dFdy(suv.y) + dFdx(suv.x), 0.06));
+    // grazing-angle fade: strongly foreshortened surface → the real silhouette wins
+    float gr = fwidth(suv.x) + fwidth(suv.y);
+    float graze = 1.0 - smoothstep(0.035, 0.09, gr);
 
     vec3 alb = texture2D(uTex, tuv).rgb;
     vec3 nt  = texture2D(uNrm, tuv).rgb * 2.0 - 1.0;
 
-    // relief lit from the material's own normal map + surface-gradient shading
+    // CAMERA-FED LIGHTING (fix 3): lit by the room, not a canned light —
+    // dominant direction + ambient tint are estimated from the live frame
     vec3 nrm = normalize(mix(sn, normalize(nt), 0.6));
-    float lam  = clamp(0.42 + 0.58 * dot(nrm, normalize(vec3(0.35, -0.45, 0.82))), 0.0, 1.0);
+    float lam  = clamp(0.42 + 0.58 * dot(nrm, normalize(uLdir)), 0.0, 1.0);
     float spec = pow(lam, 18.0);
+    vec3 ambT = uAmb / max(dot(uAmb, vec3(0.3333)), 0.15);
     vec3 mat = overlay(skin, alb);
     mat = mix(mat, mat * (0.6 + 0.8 * lam), 0.7);
-    mat += spec * 0.28;
+    mat *= mix(vec3(1.0), ambT, 0.30);
+    mat += spec * 0.28 * mix(vec3(1.0), ambT, 0.5);
+
+    // FREQUENCY-SPLIT DETAIL TRANSFER (fix 1): the material carries the
+    // low band; the live frame's high band (pores, creases, micro-shading,
+    // real AO) is re-injected on top — this is what makes it read as ON skin
+    float lum  = lumAt(vUv);
+    float blur = ( lumAt(vUv + vec2( uPx.x*2.0, 0.0)) + lumAt(vUv + vec2(-uPx.x*2.0, 0.0))
+                 + lumAt(vUv + vec2(0.0,  uPx.y*2.0)) + lumAt(vUv + vec2(0.0, -uPx.y*2.0))
+                 + lumAt(vUv + vec2( uPx.x*4.0,  uPx.y*4.0)) + lumAt(vUv + vec2(-uPx.x*4.0,  uPx.y*4.0))
+                 + lumAt(vUv + vec2( uPx.x*4.0, -uPx.y*4.0)) + lumAt(vUv + vec2(-uPx.x*4.0, -uPx.y*4.0)) ) * 0.125;
+    mat = clamp(mat + (lum - blur) * 1.35, 0.0, 1.0);
 
     // growth sweeps up the BODY SURFACE (V runs along each part), so it
     // creeps along limbs rather than cutting a flat screen-space line
@@ -352,7 +387,7 @@ const IUV_FRAG = `
 
     vec3 col = mix(skin, mat, amt);
     col += smoothstep(0.05, 0.0, abs(edge)) * (0.3 + 0.3 * sin(uTime * 7.0 + suv.x * 20.0)) * vec3(0.18, 0.5, 0.24);
-    float a = clamp(lead * 1.1, 0.0, 1.0);
+    float a = clamp(lead * 1.1, 0.0, 1.0) * matte * mix(0.35, 1.0, graze);
     if (a < 0.01) discard;
     gl_FragColor = vec4(col, a);
   }`;
@@ -388,10 +423,40 @@ function iuvInit() {
     uniforms: { uVid: { value: vtex }, uIuv: { value: IUV.tex },
                 uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
                 uTime: { value: 0 }, uGrow: { value: 0 }, uScale: { value: 1.0 },
-                uHasIuv: { value: 0 }, uVidAspect: { value: new THREE.Vector2(1, 1) } } });
+                uHasIuv: { value: 0 }, uVidAspect: { value: new THREE.Vector2(1, 1) },
+                uPx: { value: new THREE.Vector2(1 / 960, 1 / 540) },
+                uOff: { value: new THREE.Vector2(0, 0) },
+                uAmb: { value: new THREE.Vector3(1, 1, 1) },
+                uLdir: { value: new THREE.Vector3(0.35, -0.45, 0.82) } } });
   IUV.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
   IUV.scn = new THREE.Scene(); IUV.scn.add(IUV.quad);
   IUV.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+}
+// st-13 CAMERA-FED LIGHT PROBE: every ~250 ms, average the live frame on an
+// 8×8 grid → ambient colour + dominant light direction (brightness centroid).
+const PROBE = { cv: document.createElement('canvas'), t: 0,
+                amb: [1, 1, 1], dir: [0.35, -0.45, 0.82] };
+PROBE.cv.width = PROBE.cv.height = 8;
+const probeCtx = PROBE.cv.getContext('2d', { willReadFrequently: true });
+function probeLight(now) {
+  if (now - PROBE.t < 250 || !vid.videoWidth) return;
+  PROBE.t = now;
+  try {
+    probeCtx.drawImage(vid, 0, 0, 8, 8);
+    const d = probeCtx.getImageData(0, 0, 8, 8).data;
+    let r = 0, g = 0, b = 0, wsum = 0, cx = 0, cy = 0;
+    for (let i = 0; i < 64; i++) {
+      const R = d[i * 4], G = d[i * 4 + 1], B = d[i * 4 + 2];
+      r += R; g += G; b += B;
+      const lum = 0.299 * R + 0.587 * G + 0.114 * B;
+      wsum += lum; cx += (i % 8) * lum; cy += Math.floor(i / 8) * lum;
+    }
+    PROBE.amb = [Math.max(r, 8) / 64 / 255, Math.max(g, 8) / 64 / 255, Math.max(b, 8) / 64 / 255];
+    if (wsum > 1) {                                     // brightness centroid → light dir
+      const lx = (cx / wsum / 7 - 0.5) * 1.6, ly = (cy / wsum / 7 - 0.5) * 1.6;
+      PROBE.dir = [lx, -ly, 0.82];                      // image y-down → shader y-up
+    }
+  } catch {}
 }
 function iuvDraw(now) {
   const c = document.getElementById('liuv');
@@ -403,11 +468,28 @@ function iuvDraw(now) {
   if (r.width < 4) return;
   const dpr = Math.min(devicePixelRatio, 2);
   if (c.width !== Math.round(r.width * dpr)) { IUV.ren.setPixelRatio(dpr); IUV.ren.setSize(r.width, r.height, false); }
+  probeLight(now);
   const u = IUV.quad.material.uniforms;
   u.uTime.value = now * 0.001;
   u.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 4500) : 0;
   u.uHasIuv.value = IUV.has;
   u.uTex.value = MATTEX.alb; u.uNrm.value = MATTEX.nrm;
+  u.uPx.value.set(1 / Math.max(c.width, 2), 1 / Math.max(c.height, 2));
+  u.uAmb.value.set(PROBE.amb[0], PROBE.amb[1], PROBE.amb[2]);
+  u.uLdir.value.set(PROBE.dir[0], PROBE.dir[1], PROBE.dir[2]);
+  // FLOW-LOCK LITE (fix 4): shift the stale IUV map by how far the tracked
+  // player moved since it was computed — same trick as the rig's E1a snap
+  let ox = 0, oy = 0;
+  if (IUV.a) {
+    let p = S.players.find(q => q.id === IUV.pid);
+    if (!p) for (const q of S.players) if (!p || q.bbox.w * q.bbox.h > p.bbox.w * p.bbox.h) p = q;
+    if (p) {
+      const dx = (p.bbox.x + p.bbox.w / 2) - IUV.a[0];
+      const dy = (p.bbox.y + p.bbox.h / 2) - IUV.a[1];
+      ox = -dx; oy = dy;                                // image y-down → vUv y-up
+    }
+  }
+  u.uOff.value.set(ox, oy);
   IUV.ren.render(IUV.scn, IUV.cam);
 }
 
@@ -650,7 +732,9 @@ function connect() {
     S.msGpu = d.ms || 0; S.samMs = d.sms || 0;
     if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
     if (d.rig) rigPacket(d.rig);
-    if (d.dp) { iuvInit(); IUV.ms = d.dp.ms || 0; iuvImg.src = 'data:image/png;base64,' + d.dp.png; }
+    if (d.dp) { iuvInit(); IUV.ms = d.dp.ms || 0;
+      IUV.a = d.dp.a || null; IUV.pid = d.dp.id;        // anchor at compute time (st-13)
+      iuvImg.src = 'data:image/png;base64,' + d.dp.png; }
     if (d.rigst === 'loading' && !S._lt) { S._lt = 1; toast('🦴 cloud is loading the 3D body model (~1 min)…', 8000); }
   };
 }
