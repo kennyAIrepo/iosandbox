@@ -106,7 +106,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-13';
+const BUILD = 'st-14';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -396,42 +396,11 @@ const IUV_VERT = `
   void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
 
 const LFX_MESH_ON = new URLSearchParams(location.search).get('mesh2d') === '1';
-const IUV = { cv: document.createElement('canvas'), tex: null, ren: null, scn: null,
-              cam: null, quad: null, has: 0, lastPkt: 0, ms: 0 };
-IUV.cv.width = 512; IUV.cv.height = 288;
-const iuvCtx = IUV.cv.getContext('2d');
-const iuvImg = new Image();
-iuvImg.onload = () => {
-  IUV.cv.width = iuvImg.width; IUV.cv.height = iuvImg.height;
-  iuvCtx.clearRect(0, 0, IUV.cv.width, IUV.cv.height);
-  iuvCtx.drawImage(iuvImg, 0, 0);
-  if (IUV.tex) IUV.tex.needsUpdate = true;
-  IUV.has = 1; IUV.lastPkt = performance.now();
-};
-function iuvInit() {
-  if (IUV.ren) return;
-  const c = document.getElementById('liuv');
-  IUV.ren = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true });
-  IUV.tex = new THREE.CanvasTexture(IUV.cv);
-  // UV is DATA, not color: no sRGB transform, and LINEAR filtering so the
-  // surface coordinates interpolate smoothly instead of stair-stepping.
-  IUV.tex.colorSpace = THREE.NoColorSpace;
-  IUV.tex.minFilter = IUV.tex.magFilter = THREE.LinearFilter;
-  const vtex = new THREE.VideoTexture(vid); vtex.colorSpace = THREE.SRGBColorSpace;
-  const mat = new THREE.ShaderMaterial({ vertexShader: IUV_VERT, fragmentShader: IUV_FRAG,
-    transparent: true, depthTest: false,
-    uniforms: { uVid: { value: vtex }, uIuv: { value: IUV.tex },
-                uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
-                uTime: { value: 0 }, uGrow: { value: 0 }, uScale: { value: 1.0 },
-                uHasIuv: { value: 0 }, uVidAspect: { value: new THREE.Vector2(1, 1) },
-                uPx: { value: new THREE.Vector2(1 / 960, 1 / 540) },
-                uOff: { value: new THREE.Vector2(0, 0) },
-                uAmb: { value: new THREE.Vector3(1, 1, 1) },
-                uLdir: { value: new THREE.Vector3(0.35, -0.45, 0.82) } } });
-  IUV.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
-  IUV.scn = new THREE.Scene(); IUV.scn.add(IUV.quad);
-  IUV.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-}
+// (st-14) The DensePose/IUV screen-space wrap is RETIRED — it painted a stale
+// cloud-computed crop over the body and could never track. Its replacement is
+// the OWN-PIXELS HAND RIG below: client-side MediaPipe + HoloHandRig, zero
+// cloud in the motion path. The IUV shader strings above are kept only as
+// reference until the next structural cleanup.
 // st-13 CAMERA-FED LIGHT PROBE: every ~250 ms, average the live frame on an
 // 8×8 grid → ambient colour + dominant light direction (brightness centroid).
 const PROBE = { cv: document.createElement('canvas'), t: 0,
@@ -458,39 +427,225 @@ function probeLight(now) {
     }
   } catch {}
 }
-function iuvDraw(now) {
-  const c = document.getElementById('liuv');
-  const live = IUV.ren && S.rigOn && grow0 && now - IUV.lastPkt < 4000;
-  if (!IUV.ren) { c.style.opacity = '0'; return; }
-  if (!live) { c.style.opacity = '0'; return; }
-  c.style.opacity = '1';
-  const r = document.getElementById('scrL').getBoundingClientRect();
-  if (r.width < 4) return;
-  const dpr = Math.min(devicePixelRatio, 2);
-  if (c.width !== Math.round(r.width * dpr)) { IUV.ren.setPixelRatio(dpr); IUV.ren.setSize(r.width, r.height, false); }
-  probeLight(now);
-  const u = IUV.quad.material.uniforms;
-  u.uTime.value = now * 0.001;
-  u.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 4500) : 0;
-  u.uHasIuv.value = IUV.has;
-  u.uTex.value = MATTEX.alb; u.uNrm.value = MATTEX.nrm;
-  u.uPx.value.set(1 / Math.max(c.width, 2), 1 / Math.max(c.height, 2));
-  u.uAmb.value.set(PROBE.amb[0], PROBE.amb[1], PROBE.amb[2]);
-  u.uLdir.value.set(PROBE.dir[0], PROBE.dir[1], PROBE.dir[2]);
-  // FLOW-LOCK LITE (fix 4): shift the stale IUV map by how far the tracked
-  // player moved since it was computed — same trick as the rig's E1a snap
-  let ox = 0, oy = 0;
-  if (IUV.a) {
-    let p = S.players.find(q => q.id === IUV.pid);
-    if (!p) for (const q of S.players) if (!p || q.bbox.w * q.bbox.h > p.bbox.w * p.bbox.h) p = q;
-    if (p) {
-      const dx = (p.bbox.x + p.bbox.w / 2) - IUV.a[0];
-      const dy = (p.bbox.y + p.bbox.h / 2) - IUV.a[1];
-      ox = -dx; oy = dy;                                // image y-down → vUv y-up
+// ══ OWN-PIXELS HAND RIG (st-14) ══════════════════════════════════════════
+// The ghost-hand stack pointed at reality: MediaPipe tracks 21 landmarks per
+// hand IN THE BROWSER at frame rate; HoloHandRig (sdk/core/hand-rig.js) poses
+// a real 3D mesh whose fingertips land exactly on the tracked points; the
+// mesh is textured with the user's OWN live pixels (projective sampling), so
+// unmodified it is invisible against the video — and effects are materials +
+// displacement on geometry we own, never a screen-space crop. The cloud is
+// completely out of the motion path.
+const PX = { on: false, ready: false, loading: false, ren: null, scn: null,
+             cam: null, tracker: null, rigs: {}, fore: {}, mats: [], vtex: null,
+             buildFrame: null, ms: 0,
+             dbg: new URLSearchParams(location.search).has('pxtest') };
+
+const PX_VERT = `
+  precision highp float;
+  uniform vec2 uVP;                 // pane size in px
+  uniform float uDisp, uGrow;
+  uniform mat4 uLoc;                // pane space → hand-local (texture sticks to the hand)
+  uniform sampler2D uTex;
+  varying vec3 vLoc, vLocN, vNrm;
+  varying vec2 vScr;
+  void main(){
+    vec3 p = position;
+    vLoc  = (uLoc * vec4(p, 1.0)).xyz;
+    vLocN = normalize(mat3(uLoc) * normal);
+    vNrm  = normal;
+    // displacement: scales physically raise off the skin as they grow
+    float h = texture2D(uTex, vLoc.xy * 0.8).g;
+    p += normal * h * uDisp * uGrow;
+    vScr = p.xy;
+    gl_Position = vec4(p.x / uVP.x * 2.0 - 1.0, 1.0 - p.y / uVP.y * 2.0,
+                       clamp(p.z / 2000.0, -0.95, 0.95), 1.0);
+  }`;
+const PX_FRAG = `
+  precision highp float;
+  uniform sampler2D uVid, uTex, uNrm;
+  uniform vec4 uCov;                // cover-map: ox, oy, 1/(vw*s), 1/(vh*s)
+  uniform float uTime, uGrow, uFx, uDbg, uTexScale;
+  uniform vec3 uAmb, uLdir;
+  varying vec3 vLoc, vLocN, vNrm;
+  varying vec2 vScr;
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
+  float fbm(vec2 p){ return 0.55*noise(p)+0.28*noise(p*2.03)+0.17*noise(p*4.11); }
+  vec3 overlay(vec3 b, vec3 t){ return mix(2.0*b*t, 1.0-2.0*(1.0-b)*(1.0-t), step(0.5,b)); }
+  void main(){
+    // base skin: the live video sampled at this fragment's OWN screen spot —
+    // with no effect the mesh reproduces the video exactly (invisibility test)
+    vec2 vuv = vec2((vScr.x - uCov.x) * uCov.z, (vScr.y - uCov.y) * uCov.w);
+    vec3 skin = texture2D(uVid, vec2(vuv.x, 1.0 - vuv.y)).rgb;
+
+    // triplanar material in HAND-LOCAL space (forged mesh has no UV atlas;
+    // the local frame makes the texture stick to the hand instead of swimming)
+    vec3 tw = abs(vLocN); tw /= (tw.x + tw.y + tw.z + 1e-5);
+    vec2 cx = vLoc.zy * uTexScale, cy = vLoc.xz * uTexScale, cz = vLoc.xy * uTexScale;
+    vec3 alb = texture2D(uTex, cx).rgb * tw.x + texture2D(uTex, cy).rgb * tw.y + texture2D(uTex, cz).rgb * tw.z;
+    vec3 ntx = (texture2D(uNrm, cx).rgb * tw.x + texture2D(uNrm, cy).rgb * tw.y + texture2D(uNrm, cz).rgb * tw.z) * 2.0 - 1.0;
+
+    // lit by the ROOM (st-13 probe) on TRUE 3D mesh normals
+    vec3 n  = normalize(vNrm * vec3(1.0, -1.0, -1.0));   // pane y-down → light y-up
+    vec3 nb = normalize(n + ntx * 0.55);
+    float lam = clamp(0.40 + 0.60 * dot(nb, normalize(uLdir)), 0.0, 1.0);
+    vec3 ambT = uAmb / max(dot(uAmb, vec3(0.3333)), 0.15);
+    vec3 mat = overlay(skin, alb);
+    mat = mat * (0.55 + 0.85 * lam) * mix(vec3(1.0), ambT, 0.30);
+    mat += pow(lam, 20.0) * 0.35;
+
+    // organic growth: a patchy front over the hand-local noise field
+    float g = fbm(vLoc.xy * 2.6 + vLoc.z * 1.3);
+    float amt = smoothstep(0.0, 0.22, uGrow * 1.3 - g) * uFx;
+
+    vec3 col = mix(skin, mat, amt);
+    col = mix(col, vec3(0.2, 1.0, 0.4), uDbg * 0.22);    // ?pxtest alignment tint
+    // silhouette melt: fade at grazing angles so MediaPipe's few-px edge
+    // error dissolves instead of showing a cut edge
+    float rim = pow(1.0 - abs(n.z), 3.0);
+    float a = 1.0 - rim * 0.85;
+    gl_FragColor = vec4(col, a);
+  }`;
+
+function makePixelSkin() {
+  const m = new THREE.ShaderMaterial({
+    vertexShader: PX_VERT, fragmentShader: PX_FRAG,
+    transparent: true, side: THREE.DoubleSide,
+    uniforms: {
+      uVid: { value: PX.vtex }, uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
+      uVP: { value: new THREE.Vector2(1, 1) }, uCov: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uLoc: { value: new THREE.Matrix4() }, uDisp: { value: 9.0 }, uGrow: { value: 0 },
+      uFx: { value: 0 }, uDbg: { value: PX.dbg ? 1 : 0 }, uTexScale: { value: 1.4 },
+      uTime: { value: 0 }, uAmb: { value: new THREE.Vector3(1, 1, 1) },
+      uLdir: { value: new THREE.Vector3(0.35, 0.45, 0.82) } } });
+  PX.mats.push(m); return m;
+}
+
+// chirality is MEASURED from the landmarks (labels are unreliable): the palm
+// tetrahedron wrist/indexMCP/pinkyMCP/thumbBase has opposite signed volume
+// for left vs right hands, in any pose (same trick as sdk hand-views.js)
+const _ta = new THREE.Vector3(), _tb = new THREE.Vector3(), _tc = new THREE.Vector3();
+function pxTetra(lm) {
+  _ta.subVectors(lm[5], lm[0]); _tb.subVectors(lm[17], lm[0]); _tc.subVectors(lm[1], lm[0]);
+  return _ta.cross(_tb).dot(_tc);
+}
+
+async function pxInit() {
+  if (PX.ready || PX.loading) return;
+  PX.loading = true;
+  toast('🖐 loading hand tracking (runs on YOUR device — zero cloud latency)…', 5000);
+  try {
+    const [trk, rigM, handsM] = await Promise.all([
+      import('./sdk/core/tracking.js'),
+      import('./sdk/core/hand-rig.js'),
+      import('./sdk/core/hands.js')]);
+    PX.buildFrame = handsM.buildFrame;
+    PX.tracker = await trk.initTracking(vid, { numHands: 2, enableFace: false });
+    const c = document.getElementById('liuv');
+    PX.ren = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true });
+    PX.scn = new THREE.Scene(); PX.cam = new THREE.Camera();
+    PX.vtex = new THREE.VideoTexture(vid); PX.vtex.colorSpace = THREE.SRGBColorSpace;
+    for (const [k, rest] of [['R', handsM.REST_R42], ['L', handsM.REST_L42]]) {
+      const rig = new rigM.HoloHandRig(rest, PX.scn, {});
+      rig.build();
+      rig.mesh.material.dispose();
+      rig.mesh.material = makePixelSkin();
+      rig.sign = Math.sign(pxTetra(rig.rest));
+      PX.rigs[k] = rig;
+      const cap = new THREE.Mesh(new THREE.CapsuleGeometry(1, 2.4, 6, 14), makePixelSkin());
+      cap.visible = false; cap.frustumCulled = false; PX.scn.add(cap); PX.fore[k] = cap;
     }
+    PX.ready = true;
+    toast('🖐 hand rig live — your own pixels ARE the mesh now', 4500);
+  } catch (e) {
+    console.error('pxInit failed', e);
+    toast('⚠ hand tracking failed to load: ' + (e.message || e), 6000);
   }
-  u.uOff.value.set(ox, oy);
-  IUV.ren.render(IUV.scn, IUV.cam);
+  PX.loading = false;
+}
+function pxOn() { PX.on = true; if (!PX.ready) pxInit(); }
+function pxOff() {
+  PX.on = false;
+  for (const k of ['R', 'L']) { PX.rigs[k]?.pose(null); if (PX.fore[k]) PX.fore[k].visible = false; }
+  const c = document.getElementById('liuv'); if (c) c.style.opacity = '0';
+}
+
+const _capM = new THREE.Matrix4(), _capX = new THREE.Vector3(), _capY = new THREE.Vector3(),
+      _capZ = new THREE.Vector3(), _capMid = new THREE.Vector3(), _yUnit = new THREE.Vector3(0, 1, 0);
+function pxDraw(now) {
+  const c = document.getElementById('liuv');
+  if (!PX.on || !PX.ready) { if (PX.ren) c.style.opacity = '0'; return; }
+  const r = document.getElementById('scrL').getBoundingClientRect();
+  if (r.width < 4 || !vid.videoWidth) return;
+  const dpr = Math.min(devicePixelRatio, 2);
+  if (c.width !== Math.round(r.width * dpr)) { PX.ren.setPixelRatio(dpr); PX.ren.setSize(r.width, r.height, false); }
+  probeLight(now);
+  const t0 = performance.now();
+  const f = PX.tracker.detect();
+  // object-fit:cover mapping — normalized video coords → pane px. The SAME
+  // mapping feeds the landmarks and the shader's video lookup, so the
+  // pixel-skin lines up with the displayed video exactly, any aspect ratio.
+  const vw = vid.videoWidth, vh = vid.videoHeight, pw = r.width, ph = r.height;
+  const s = Math.max(pw / vw, ph / vh), covx = (pw - vw * s) / 2, covy = (ph - vh * s) / 2;
+  const grow = grow0 ? Math.min(1, (now - grow0) / 4500) : 0;
+  for (const m of PX.mats) { const u = m.uniforms;
+    u.uVP.value.set(pw, ph); u.uCov.value.set(covx, covy, 1 / (vw * s), 1 / (vh * s));
+    u.uGrow.value = grow; u.uFx.value = grow0 ? 1 : 0; u.uTime.value = now * 0.001;
+    u.uTex.value = MATTEX.alb; u.uNrm.value = MATTEX.nrm;
+    u.uAmb.value.set(PROBE.amb[0], PROBE.amb[1], PROBE.amb[2]);
+    u.uLdir.value.set(PROBE.dir[0], PROBE.dir[1], PROBE.dir[2]);
+  }
+  const used = { R: false, L: false };
+  for (const lm of (f.hands || [])) {
+    // tracking.js emits selfie-mirrored x; this canvas is CSS-mirrored like
+    // the video, so convert back to raw frame coords before cover-mapping
+    const pts = lm.map(q => new THREE.Vector3(
+      covx + (1 - q.x) * vw * s, covy + q.y * vh * s, q.z * vw * s));
+    let k = Math.sign(pxTetra(pts)) === PX.rigs.R.sign ? 'R' : 'L';
+    if (used[k]) k = k === 'R' ? 'L' : 'R';
+    used[k] = true;
+    const rig = PX.rigs[k];
+    rig.pose(pts, []);
+    rig._pts = pts;
+    const fr = PX.buildFrame(pts);
+    if (fr) rig.mesh.material.uniforms.uLoc.value.copy(fr).invert();
+  }
+  if (!used.R) PX.rigs.R.pose(null);
+  if (!used.L) PX.rigs.L.pose(null);
+  // forearms: pose elbow→hand wrist capsule, matched by wrist proximity
+  for (const k of ['R', 'L']) {
+    const cap = PX.fore[k], rig = PX.rigs[k];
+    cap.visible = false;
+    if (!f.pose || !used[k] || !rig._pts) continue;
+    let best = null, bd = 1e9;
+    for (const [ei, wi] of [[13, 15], [14, 16]]) {
+      const wx = covx + (1 - f.pose[wi].x) * vw * s, wy = covy + f.pose[wi].y * vh * s;
+      const d = Math.hypot(wx - rig._pts[0].x, wy - rig._pts[0].y);
+      if (d < bd) { bd = d; best = ei; }
+    }
+    const span = rig._pts[0].distanceTo(rig._pts[9]);
+    if (best === null || bd > span * 1.2) continue;
+    const E = _capX.set(covx + (1 - f.pose[best].x) * vw * s,
+                        covy + f.pose[best].y * vh * s, rig._pts[0].z);
+    const W = rig._pts[0];
+    _capY.subVectors(W, E); const len = _capY.length(); if (len < 8) continue;
+    _capMid.addVectors(E, W).multiplyScalar(0.5);
+    cap.position.copy(_capMid);
+    cap.quaternion.setFromUnitVectors(_yUnit, _capY.divideScalar(len));
+    const rad = span * 0.40;
+    cap.scale.set(rad, len / 4.4, rad);
+    cap.visible = true;
+    // hand-local frame for the capsule's triplanar: y along the forearm
+    _capZ.set(0, 0, 1).cross(_capY).normalize().multiplyScalar(span);
+    _capM.makeBasis(_capZ, _capY.multiplyScalar(span),
+                    _capZ.clone().cross(_capY).normalize().multiplyScalar(span));
+    _capM.setPosition(E.x, E.y, E.z);
+    cap.material.uniforms.uLoc.value.copy(_capM).invert();
+  }
+  PX.ren.render(PX.scn, PX.cam);
+  PX.ms = performance.now() - t0;
+  c.style.opacity = (grow0 || PX.dbg) ? '1' : '0';
 }
 
 let rigMesh = null, lfxMesh = null, lfxRen = null, lfxScn = null, lfxCam = null, grow0 = 0;
@@ -732,9 +887,7 @@ function connect() {
     S.msGpu = d.ms || 0; S.samMs = d.sms || 0;
     if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
     if (d.rig) rigPacket(d.rig);
-    if (d.dp) { iuvInit(); IUV.ms = d.dp.ms || 0;
-      IUV.a = d.dp.a || null; IUV.pid = d.dp.id;        // anchor at compute time (st-13)
-      iuvImg.src = 'data:image/png;base64,' + d.dp.png; }
+    // (st-14) d.dp DensePose packets are ignored — the live wrap is client-side now
     if (d.rigst === 'loading' && !S._lt) { S._lt = 1; toast('🦴 cloud is loading the 3D body model (~1 min)…', 8000); }
   };
 }
@@ -863,6 +1016,7 @@ function applyPrompt(raw) {
     S.concepts.clear(); S.sam = false;
     S.ws?.send(JSON.stringify({ cmd: 'sam', on: 0 }));
     grow0 = 0;                       // effects off — the body rig itself STAYS (default state)
+    pxOff();                         // st-14: own-pixels layer off
     if (FX_LANE) fxOff();            // st-8: also stop the generative lane
     say('✕ effects & concepts cleared — body rig keeps tracking (that is the default)'); return;
   }
@@ -870,14 +1024,14 @@ function applyPrompt(raw) {
   { const m = p.match(/\b(snake|dragon|fish|lizard)\b/);
     if (m && MATTEX.name !== m[1]) matSwap(m[1]); }
   if (/(scale|slime|skin|dragon|feather|armor|fire|snake|lizard|fish)/.test(p)) {
-    S.rigOn = true; S.sam = true;    // sam masks feed the E1 silhouette clip
+    // st-14: the live wrap is the OWN-PIXELS rig — client-side, no SAM crop.
+    // The cloud rig stays only for the dollhouse (right screen).
+    S.rigOn = true;
     S.ws?.send(JSON.stringify({ cmd: 'rig', on: 1 }));
-    S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
     grow0 = performance.now();       // start the growth front NOW
-    // st-8: ADDITIVE — same prompt also drives the generative fx lane when
-    // present; rig + procedural layer above stay untouched as the fallback
+    pxOn();
     if (FX_LANE) fxOn(raw.trim());
-    say('🐉 growing the effect over your body — left = on your skin, right = on the rig'); return;
+    say('🐉 growing onto your hands & forearms — real 3D mesh, your own pixels'); return;
   }
   if (/(segment|people|everyone|mask)/.test(p)) {
     S.sam = true; S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
@@ -925,7 +1079,7 @@ function loop(now) {
   fxPump(now);
   drawLive();
   drawLfx(now);
-  iuvDraw(now);   // IUV skin wrap — the real per-pixel body-surface material
+  pxDraw(now);    // st-14 own-pixels hand rig — client-side, zero-latency wrap
   drawFx2();
   orbit.update();
   if (rigMesh) {
@@ -937,7 +1091,7 @@ function loop(now) {
   statEl.textContent = (S.ws?.readyState === 1 ? '●' : '○') +
     ` ${BUILD} · rtt ${S.rtt.toFixed(0)}ms · gpu ${S.msGpu.toFixed(0)}ms` +
     (S.samMs ? ` · sam ${S.samMs.toFixed(0)}ms` : '') +
-    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') + (IUV.lastPkt ? ` · skin ${IUV.ms.toFixed(0)}ms` : '') +
+    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') + (PX.ready ? ` · hand ${PX.ms.toFixed(1)}ms` : '') +
     ` · ${S.players.length}p` +
     (FX.lastFrame && now - FX.lastFrame < 3000 ? ` · fx ${FX.ms.toFixed(0)}ms` : '');
 }
