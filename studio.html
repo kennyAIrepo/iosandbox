@@ -106,7 +106,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-14';
+const BUILD = 'st-15';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -453,10 +453,11 @@ const PX_VERT = `
     vLoc  = (uLoc * vec4(p, 1.0)).xyz;
     vLocN = normalize(mat3(uLoc) * normal);
     vNrm  = normal;
-    // displacement: scales physically raise off the skin as they grow
-    float h = texture2D(uTex, vLoc.xy * 0.8).g;
+    vScr  = p.xy;                    // video is sampled where the SURFACE is —
+                                     // BEFORE displacement (sampling after = smear)
+    // gentle low-frequency relief so the surface stays coherent
+    float h = texture2D(uTex, vLoc.xy * 0.35).g;
     p += normal * h * uDisp * uGrow;
-    vScr = p.xy;
     gl_Position = vec4(p.x / uVP.x * 2.0 - 1.0, 1.0 - p.y / uVP.y * 2.0,
                        clamp(p.z / 2000.0, -0.95, 0.95), 1.0);
   }`;
@@ -464,7 +465,8 @@ const PX_FRAG = `
   precision highp float;
   uniform sampler2D uVid, uTex, uNrm;
   uniform vec4 uCov;                // cover-map: ox, oy, 1/(vw*s), 1/(vh*s)
-  uniform float uTime, uGrow, uFx, uDbg, uTexScale;
+  uniform vec2 uSkinRef;            // video-uv of the palm centre — live skin reference
+  uniform float uTime, uGrow, uFx, uDbg, uTexScale, uTipFade;
   uniform vec3 uAmb, uLdir;
   varying vec3 vLoc, vLocN, vNrm;
   varying vec2 vScr;
@@ -472,12 +474,20 @@ const PX_FRAG = `
   float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
     return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
   float fbm(vec2 p){ return 0.55*noise(p)+0.28*noise(p*2.03)+0.17*noise(p*4.11); }
-  vec3 overlay(vec3 b, vec3 t){ return mix(2.0*b*t, 1.0-2.0*(1.0-b)*(1.0-t), step(0.5,b)); }
+  float lumOf(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
   void main(){
     // base skin: the live video sampled at this fragment's OWN screen spot —
     // with no effect the mesh reproduces the video exactly (invisibility test)
-    vec2 vuv = vec2((vScr.x - uCov.x) * uCov.z, (vScr.y - uCov.y) * uCov.w);
-    vec3 skin = texture2D(uVid, vec2(vuv.x, 1.0 - vuv.y)).rgb;
+    vec2 vuv = vec2((vScr.x - uCov.x) * uCov.z, 1.0 - (vScr.y - uCov.y) * uCov.w);
+    vec3 skin = texture2D(uVid, vuv).rgb;
+
+    // SKIN GATE: if the video pixel under this fragment is not the user's
+    // skin, the mesh is web/overshoot sitting over BACKGROUND (spread
+    // fingers, silhouette error) — melt it away completely
+    vec3 refc = texture2D(uVid, uSkinRef).rgb;
+    vec3 c1 = skin / (skin.r + skin.g + skin.b + 0.05);
+    vec3 c2 = refc / (refc.r + refc.g + refc.b + 0.05);
+    float skinGate = smoothstep(0.24, 0.11, distance(c1, c2));
 
     // triplanar material in HAND-LOCAL space (forged mesh has no UV atlas;
     // the local frame makes the texture stick to the hand instead of swimming)
@@ -486,25 +496,41 @@ const PX_FRAG = `
     vec3 alb = texture2D(uTex, cx).rgb * tw.x + texture2D(uTex, cy).rgb * tw.y + texture2D(uTex, cz).rgb * tw.z;
     vec3 ntx = (texture2D(uNrm, cx).rgb * tw.x + texture2D(uNrm, cy).rgb * tw.y + texture2D(uNrm, cz).rgb * tw.z) * 2.0 - 1.0;
 
-    // lit by the ROOM (st-13 probe) on TRUE 3D mesh normals
+    // REFERENCE-PHOTO BLEND: the scales are TINTED BY THE ARM'S OWN SHADING
+    // (form, veins, AO come from the real limb), lit by the room probe on the
+    // mesh's true normals, and the user's high-frequency detail — hair,
+    // creases, glints — is re-injected ON TOP of the material.
+    float sl = lumOf(skin);
     vec3 n  = normalize(vNrm * vec3(1.0, -1.0, -1.0));   // pane y-down → light y-up
-    vec3 nb = normalize(n + ntx * 0.55);
-    float lam = clamp(0.40 + 0.60 * dot(nb, normalize(uLdir)), 0.0, 1.0);
+    vec3 nb = normalize(n + ntx * 0.6);
+    float lam = clamp(0.42 + 0.58 * dot(nb, normalize(uLdir)), 0.0, 1.0);
     vec3 ambT = uAmb / max(dot(uAmb, vec3(0.3333)), 0.15);
-    vec3 mat = overlay(skin, alb);
-    mat = mat * (0.55 + 0.85 * lam) * mix(vec3(1.0), ambT, 0.30);
-    mat += pow(lam, 20.0) * 0.35;
+    vec3 mat = alb * mix(1.0, sl * 2.3, 0.62);           // real limb shading drives the scales
+    mat = mix(mat, mat * (0.55 + 0.9 * lam), 0.5) * mix(vec3(1.0), ambT, 0.25);
+    mat += pow(lam, 22.0) * 0.28;
+    vec2 o = vec2(uCov.z, uCov.w) * 2.5;                 // ~2.5 pane px in video-uv
+    float bl = (lumOf(texture2D(uVid, vuv + vec2(o.x, 0.0)).rgb)
+              + lumOf(texture2D(uVid, vuv - vec2(o.x, 0.0)).rgb)
+              + lumOf(texture2D(uVid, vuv + vec2(0.0, o.y)).rgb)
+              + lumOf(texture2D(uVid, vuv - vec2(0.0, o.y)).rgb)) * 0.25;
+    mat = clamp(mat + (sl - bl) * 1.25, 0.0, 1.0);       // hair/creases OVER the scales
 
-    // organic growth: a patchy front over the hand-local noise field
-    float g = fbm(vLoc.xy * 2.6 + vLoc.z * 1.3);
-    float amt = smoothstep(0.0, 0.22, uGrow * 1.3 - g) * uFx;
+    // growth with a real TRANSITION ZONE like the reference: solid coverage,
+    // then a band of scattered scale clusters dissolving into bare skin
+    float g = fbm(vLoc.xy * 3.0 + vLoc.z * 1.5);
+    float front  = uGrow * 1.5 - g;
+    float solid  = smoothstep(0.10, 0.30, front);
+    float sparse = smoothstep(-0.08, 0.06, front) * smoothstep(0.55, 0.85, fbm(vLoc.xy * 14.0 + 3.7));
+    float amt = clamp(solid + sparse, 0.0, 1.0) * uFx;
+    amt *= mix(1.0, smoothstep(1.45, 1.0, vLoc.y), uTipFade);  // fingertips stay skin
 
     vec3 col = mix(skin, mat, amt);
     col = mix(col, vec3(0.2, 1.0, 0.4), uDbg * 0.22);    // ?pxtest alignment tint
     // silhouette melt: fade at grazing angles so MediaPipe's few-px edge
     // error dissolves instead of showing a cut edge
     float rim = pow(1.0 - abs(n.z), 3.0);
-    float a = 1.0 - rim * 0.85;
+    float a = (1.0 - rim * 0.85) * skinGate;
+    if (uDbg > 0.5) a = max(a, 0.30 * skinGate);
     gl_FragColor = vec4(col, a);
   }`;
 
@@ -515,8 +541,9 @@ function makePixelSkin() {
     uniforms: {
       uVid: { value: PX.vtex }, uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
       uVP: { value: new THREE.Vector2(1, 1) }, uCov: { value: new THREE.Vector4(0, 0, 1, 1) },
-      uLoc: { value: new THREE.Matrix4() }, uDisp: { value: 9.0 }, uGrow: { value: 0 },
-      uFx: { value: 0 }, uDbg: { value: PX.dbg ? 1 : 0 }, uTexScale: { value: 1.4 },
+      uLoc: { value: new THREE.Matrix4() }, uDisp: { value: 3.5 }, uGrow: { value: 0 },
+      uFx: { value: 0 }, uDbg: { value: PX.dbg ? 1 : 0 }, uTexScale: { value: 1.1 },
+      uSkinRef: { value: new THREE.Vector2(0.5, 0.5) }, uTipFade: { value: 1 },
       uTime: { value: 0 }, uAmb: { value: new THREE.Vector3(1, 1, 1) },
       uLdir: { value: new THREE.Vector3(0.35, 0.45, 0.82) } } });
   PX.mats.push(m); return m;
@@ -554,6 +581,7 @@ async function pxInit() {
       rig.sign = Math.sign(pxTetra(rig.rest));
       PX.rigs[k] = rig;
       const cap = new THREE.Mesh(new THREE.CapsuleGeometry(1, 2.4, 6, 14), makePixelSkin());
+      cap.material.uniforms.uTipFade.value = 0;   // forearm: no fingertip fade
       cap.visible = false; cap.frustumCulled = false; PX.scn.add(cap); PX.fore[k] = cap;
     }
     PX.ready = true;
@@ -610,6 +638,11 @@ function pxDraw(now) {
     rig._pts = pts;
     const fr = PX.buildFrame(pts);
     if (fr) rig.mesh.material.uniforms.uLoc.value.copy(fr).invert();
+    // live skin reference for the skin gate: video-uv of the palm centre
+    const su = ((pts[0].x + pts[9].x) / 2 - covx) / (vw * s),
+          sv = 1 - ((pts[0].y + pts[9].y) / 2 - covy) / (vh * s);
+    rig.mesh.material.uniforms.uSkinRef.value.set(su, sv);
+    PX.fore[k].material.uniforms.uSkinRef.value.set(su, sv);
   }
   if (!used.R) PX.rigs.R.pose(null);
   if (!used.L) PX.rigs.L.pose(null);
