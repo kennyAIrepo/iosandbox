@@ -105,7 +105,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const BUILD = 'st-9';
+const BUILD = 'st-10';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -294,6 +294,115 @@ const LFX_FRAG = `
     if (alpha < 0.01) discard;
     gl_FragColor = vec4(col, alpha);
   }`;
+// ══ IUV SKIN LAYER — the REAL wrap ═══════════════════════════════════════
+// DensePose gives, per pixel of the live video, which body part it is and the
+// (U,V) surface coordinate on that part. That IS a UV map of the person as
+// captured — so we texture in SCREEN SPACE using those coordinates. No 3D
+// mesh, no camera fit, no projection error: the material follows the actual
+// arm/torso pixels at any framing or crop. The user's own pixels stay the
+// base color (overlay blend), so lighting and form are preserved.
+const IUV_FRAG = `
+  precision highp float;
+  varying vec2 vUv;
+  uniform sampler2D uVid, uIuv, uTex, uNrm;
+  uniform float uTime, uGrow, uScale, uHasIuv;
+  uniform vec2 uVidAspect;
+
+  float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1,311.7)))*43758.5453); }
+  float noise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f);
+    return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
+  float fbm(vec2 p){ return 0.55*noise(p)+0.28*noise(p*2.03)+0.17*noise(p*4.11); }
+  vec3 overlay(vec3 b, vec3 t){ return mix(2.0*b*t, 1.0-2.0*(1.0-b)*(1.0-t), step(0.5,b)); }
+
+  void main(){
+    vec3 skin = texture2D(uVid, vUv).rgb;
+    vec4 iuv = texture2D(uIuv, vUv);
+    float part = floor(iuv.r * 255.0 / 10.0 + 0.5);
+    if (uHasIuv < 0.5 || part < 0.5) discard;          // background → untouched
+
+    // surface coords of THIS pixel on THIS body part; part id offsets the
+    // tile so neighbouring limbs don't share an identical patch
+    vec2 suv = vec2(iuv.g, iuv.b);
+    vec2 tuv = suv * uScale + vec2(mod(part, 5.0) * 0.37, floor(part / 5.0) * 0.29);
+
+    vec3 alb = texture2D(uTex, tuv).rgb;
+    vec3 nt  = texture2D(uNrm, tuv).rgb * 2.0 - 1.0;
+
+    // relief lit from the material's own normal map + surface-gradient shading
+    float lam  = clamp(0.45 + 0.55 * dot(normalize(nt), normalize(vec3(0.3, -0.5, 0.8))), 0.0, 1.0);
+    float spec = pow(lam, 18.0);
+    vec3 mat = overlay(skin, alb);
+    mat = mix(mat, mat * (0.6 + 0.8 * lam), 0.7);
+    mat += spec * 0.28;
+
+    // growth sweeps up the BODY SURFACE (V runs along each part), so it
+    // creeps along limbs rather than cutting a flat screen-space line
+    float warp  = (fbm(suv * 7.0 + part * 3.1 + uTime * 0.05) - 0.5) * 0.22;
+    float front = 1.25 - uGrow * 2.6 + warp;
+    float edge  = (1.0 - suv.y) - front;
+    float full  = smoothstep(0.0, 0.18, edge);
+    float lead  = smoothstep(-0.15, 0.04, edge);
+    float grain = smoothstep(0.35, 0.75, fbm(suv * 22.0 + part * 5.0));
+    float amt   = clamp(full + lead * grain * 0.5, 0.0, 1.0);
+
+    vec3 col = mix(skin, mat, amt);
+    col += smoothstep(0.05, 0.0, abs(edge)) * (0.3 + 0.3 * sin(uTime * 7.0 + suv.x * 20.0)) * vec3(0.18, 0.5, 0.24);
+    float a = clamp(lead * 1.1, 0.0, 1.0);
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(col, a);
+  }`;
+const IUV_VERT = `
+  varying vec2 vUv;
+  void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const LFX_MESH_ON = new URLSearchParams(location.search).get('mesh2d') === '1';
+const IUV = { cv: document.createElement('canvas'), tex: null, ren: null, scn: null,
+              cam: null, quad: null, has: 0, lastPkt: 0, ms: 0 };
+IUV.cv.width = 512; IUV.cv.height = 288;
+const iuvCtx = IUV.cv.getContext('2d');
+const iuvImg = new Image();
+iuvImg.onload = () => {
+  IUV.cv.width = iuvImg.width; IUV.cv.height = iuvImg.height;
+  iuvCtx.clearRect(0, 0, IUV.cv.width, IUV.cv.height);
+  iuvCtx.drawImage(iuvImg, 0, 0);
+  if (IUV.tex) IUV.tex.needsUpdate = true;
+  IUV.has = 1; IUV.lastPkt = performance.now();
+};
+function iuvInit() {
+  if (IUV.ren) return;
+  const c = document.getElementById('lfx2');
+  IUV.ren = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true });
+  IUV.tex = new THREE.CanvasTexture(IUV.cv);
+  IUV.tex.minFilter = IUV.tex.magFilter = THREE.NearestFilter;   // part ids must not blend
+  const vtex = new THREE.VideoTexture(vid); vtex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.ShaderMaterial({ vertexShader: IUV_VERT, fragmentShader: IUV_FRAG,
+    transparent: true, depthTest: false,
+    uniforms: { uVid: { value: vtex }, uIuv: { value: IUV.tex },
+                uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm },
+                uTime: { value: 0 }, uGrow: { value: 0 }, uScale: { value: 2.2 },
+                uHasIuv: { value: 0 }, uVidAspect: { value: new THREE.Vector2(1, 1) } } });
+  IUV.quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat);
+  IUV.scn = new THREE.Scene(); IUV.scn.add(IUV.quad);
+  IUV.cam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+}
+function iuvDraw(now) {
+  const c = document.getElementById('lfx2');
+  const live = IUV.ren && S.rigOn && grow0 && now - IUV.lastPkt < 4000;
+  if (!IUV.ren) { c.style.opacity = '0'; return; }
+  if (!live) { c.style.opacity = '0'; return; }
+  c.style.opacity = '1';
+  const r = document.getElementById('scrL').getBoundingClientRect();
+  if (r.width < 4) return;
+  const dpr = Math.min(devicePixelRatio, 2);
+  if (c.width !== Math.round(r.width * dpr)) { IUV.ren.setPixelRatio(dpr); IUV.ren.setSize(r.width, r.height, false); }
+  const u = IUV.quad.material.uniforms;
+  u.uTime.value = now * 0.001;
+  u.uGrow.value = grow0 ? Math.min(1, (now - grow0) / 4500) : 0;
+  u.uHasIuv.value = IUV.has;
+  u.uTex.value = MATTEX.alb; u.uNrm.value = MATTEX.nrm;
+  IUV.ren.render(IUV.scn, IUV.cam);
+}
+
 let rigMesh = null, lfxMesh = null, lfxRen = null, lfxScn = null, lfxCam = null, grow0 = 0;
 // ── AI-GENERATED MATERIAL (node: SDXL 30-step, tileable, + Sobel normal map) ──
 // Fetched from the node's file tunnel; swapping material = swapping these two
@@ -390,7 +499,12 @@ function rigPacket(p) {
 }
 function drawLfx(now) {
   const c = document.getElementById('lmesh');
-  const live = lfxMesh && S.rigOn && now - S.rig.lastPkt < 2500;
+  // The projected 3D mesh is NOT used for the live skin any more: with
+  // partial-body framing SAM-3D-Body's camera fit can't align to a close-up
+  // torso (it fits a whole body), which produced a floating green slab. The
+  // IUV layer wraps the live pixels correctly; the mesh keeps its job in the
+  // dollhouse. Kept behind a flag for A/B rather than deleted.
+  const live = LFX_MESH_ON && lfxMesh && S.rigOn && now - S.rig.lastPkt < 2500;
   if (!lfxRen) return;
   if (!live) { c.style.opacity = '0'; return; }
   c.style.opacity = '1';
@@ -528,6 +642,7 @@ function connect() {
     S.msGpu = d.ms || 0; S.samMs = d.sms || 0;
     if (d.rig_topo && !S.rig.topo) rigTopo(d.rig_topo);
     if (d.rig) rigPacket(d.rig);
+    if (d.dp) { iuvInit(); IUV.ms = d.dp.ms || 0; iuvImg.src = 'data:image/png;base64,' + d.dp.png; }
     if (d.rigst === 'loading' && !S._lt) { S._lt = 1; toast('🦴 cloud is loading the 3D body model (~1 min)…', 8000); }
   };
 }
@@ -718,6 +833,7 @@ function loop(now) {
   fxPump(now);
   drawLive();
   drawLfx(now);
+  iuvDraw(now);   // IUV skin wrap — the real per-pixel body-surface material
   drawFx2();
   orbit.update();
   if (rigMesh) {
@@ -729,7 +845,7 @@ function loop(now) {
   statEl.textContent = (S.ws?.readyState === 1 ? '●' : '○') +
     ` ${BUILD} · rtt ${S.rtt.toFixed(0)}ms · gpu ${S.msGpu.toFixed(0)}ms` +
     (S.samMs ? ` · sam ${S.samMs.toFixed(0)}ms` : '') +
-    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') +
+    (S.rig.lastPkt ? ` · rig ${S.rig.ms.toFixed(0)}ms` : '') + (IUV.lastPkt ? ` · skin ${IUV.ms.toFixed(0)}ms` : '') +
     ` · ${S.players.length}p` +
     (FX.lastFrame && now - FX.lastFrame < 3000 ? ` · fx ${FX.ms.toFixed(0)}ms` : '');
 }
