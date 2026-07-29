@@ -107,7 +107,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 
-const BUILD = 'st-22';
+const BUILD = 'st-23';
 const SAMPLE_URL = 'https://speeches-restaurant-laugh-capability.trycloudflare.com/nba_sample.mp4';
 // STUDIO owns its own server key + defaults to the SAM3 lane — deliberately
 // NOT shared with mpgames' key, whose saved value may point at the SAM2.1
@@ -189,6 +189,12 @@ addEventListener('DOMContentLoaded', () => {
   dhBtn('🪞 mirror', 8, () => { if (!rigMesh) return;
     rigMesh.scale.x *= -1;
     localStorage.setItem('hopeos-dh-mirror', rigMesh.scale.x < 0 ? '1' : '0'); });
+  // st-23 CLOSET — one item for now: the yellow hackathon tee
+  dhBtn('👕 closet: yellow tee', 184, () => { if (!rigMesh) return;
+    const u = rigMesh.material.uniforms.uShirt;
+    u.value = u.value ? 0 : 1;
+    localStorage.setItem('hopeos-shirt', u.value ? '1' : '0');
+    toast(u.value ? '👕 wearing: A Real Quantum Hackathon tee' : '👕 shirt off'); });
   const gz = dhBtn('🎛 gizmo', 96, () => { if (!rigMesh) return;
     tcMode = (tcMode + 1) % 4;
     if (tcMode === 0) { tc.detach(); gz.textContent = '🎛 gizmo'; }
@@ -202,9 +208,11 @@ const grid = new THREE.GridHelper(8, 32, 0x2e4a6e, 0x16233a); grid.position.y = 
 
 const SCALE_FRAG = `
   precision highp float;
-  varying vec3 vPos; varying vec3 vNrm;
+  varying vec3 vPos; varying vec3 vNrm; varying vec3 vONrm;
   uniform sampler2D uTex, uNrm;
-  uniform float uTime, uGrow, uScale;
+  uniform sampler2D uDecal;                     // st-23: chest-print (closet)
+  uniform float uTime, uGrow, uScale, uShirt;
+  uniform vec3 uBMin, uBMax, uShirtCol;
   float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
   float noise(vec2 p){
     vec2 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
@@ -227,7 +235,34 @@ const SCALE_FRAG = `
     float on = smoothstep(front - 0.02, front + 0.14, vPos.y);
     col += smoothstep(0.06, 0.0, abs(vPos.y - front)) * (0.4 + 0.4 * sin(uTime * 7.0)) * vec3(0.25, 0.7, 0.3);
     vec3 grey = vec3(0.55) * (0.25 + 0.75 * clamp(dot(n, normalize(vec3(0.4,0.8,0.5))), 0.0, 1.0));
-    gl_FragColor = vec4(mix(grey, col, on), 1.0);
+    vec3 outc = mix(grey, col, on);
+
+    // ── st-23 CLOSET: yellow tee over the upper torso + short sleeves ──────
+    // Region is cut in NORMALIZED body space (0=head-top .. 1=feet, y-down
+    // camera convention), so it fits any person and any framing.
+    if (uShirt > 0.5) {
+      vec3 bs = max(uBMax - uBMin, vec3(1e-4));
+      float nx = (vPos.x - uBMin.x) / bs.x;
+      float ny = (vPos.y - uBMin.y) / bs.y;
+      float torso   = step(0.14, ny) * step(ny, 0.50) * step(abs(nx - 0.5), 0.24);
+      float sleeves = step(0.14, ny) * step(ny, 0.30);
+      float neck    = step(ny, 0.175) * step(abs(nx - 0.5), 0.085);
+      float shirt = clamp(torso + sleeves, 0.0, 1.0) * (1.0 - neck);
+      if (shirt > 0.0) {
+        // soft cotton: real yellow from the photo, wrinkle noise, low sheen
+        float wr = fbm(vPos.xy * 16.0 + vPos.z * 6.0) - 0.5;
+        vec3 cloth = uShirtCol * (0.60 + 0.45 * lam + wr * 0.10);
+        cloth += pow(lam, 8.0) * 0.05;
+        // chest print — wearer's LEFT upper chest, front faces only
+        vec2 duv = vec2((nx - 0.635) / 0.17 + 0.5, (ny - 0.235) / 0.19 + 0.5);
+        if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0 && vONrm.z < -0.05) {
+          float ink = texture2D(uDecal, duv).a;
+          cloth = mix(cloth, vec3(0.06, 0.06, 0.07), ink * 0.92);
+        }
+        outc = mix(outc, cloth, shirt);
+      }
+    }
+    gl_FragColor = vec4(outc, 1.0);
   }`;
 // st-22: the dollhouse mesh INTERPOLATES between rig packets in the vertex
 // shader (aPrev→position over uMix), exactly the LIVE_EFFECTS_PLAN contract —
@@ -235,10 +270,11 @@ const SCALE_FRAG = `
 const SCALE_VERT = `
   attribute vec3 aPrev; attribute vec3 aPrevN;
   uniform float uMix;
-  varying vec3 vPos; varying vec3 vNrm;
+  varying vec3 vPos; varying vec3 vNrm; varying vec3 vONrm;
   void main() {
     vec3 p = mix(aPrev, position, uMix);
     vPos = p; vNrm = normalMatrix * normalize(mix(aPrevN, normal, uMix));
+    vONrm = normalize(mix(aPrevN, normal, uMix));   // object-space (st-23: shirt front)
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }`;
 // LEFT-SCREEN EFFECT LAYER — the same mesh projected ONTO the live person
@@ -780,6 +816,28 @@ const maskCv = document.createElement('canvas'); maskCv.width = 480; maskCv.heig
 const maskCtx = maskCv.getContext('2d');
 let maskTex = null;
 function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
+// ── st-23 CLOSET: chest-print decal, drawn once (layout per the reference:
+// three stacked serif lines + a year/city row) ───────────────────────────
+let _shirtTex = null;
+function shirtDecalTex() {
+  if (_shirtTex) return _shirtTex;
+  const c = document.createElement('canvas'); c.width = c.height = 512;
+  const x = c.getContext('2d');
+  x.clearRect(0, 0, 512, 512);
+  x.fillStyle = '#111';
+  x.textAlign = 'center';
+  x.font = 'italic 600 78px Georgia, "Times New Roman", serif';
+  x.fillText('A Real', 256, 130);
+  x.fillText('Quantum', 256, 225);
+  x.fillText('Hackathon', 256, 320);
+  x.font = '600 40px Georgia, serif';
+  x.textAlign = 'left';  x.fillText('2026', 60, 420);
+  x.textAlign = 'right'; x.fillText('New York City', 452, 420);
+  _shirtTex = new THREE.CanvasTexture(c);
+  _shirtTex.flipY = false;                        // duv.y is drawn top-down already
+  _shirtTex.minFilter = _shirtTex.magFilter = THREE.LinearFilter;
+  return _shirtTex;
+}
 function rigTopo(t) {
   const mk = () => {
     const geo = new THREE.BufferGeometry();
@@ -789,7 +847,12 @@ function rigTopo(t) {
   };
   const mat = new THREE.ShaderMaterial({ vertexShader: SCALE_VERT, fragmentShader: SCALE_FRAG,
     uniforms: { uTime: { value: 0 }, uGrow: { value: 0 }, uMix: { value: 1 },
-                uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm }, uScale: { value: 5.5 } },
+                uTex: { value: MATTEX.alb }, uNrm: { value: MATTEX.nrm }, uScale: { value: 5.5 },
+                uShirt: { value: localStorage.getItem('hopeos-shirt') === '1' ? 1 : 0 },
+                uShirtCol: { value: new THREE.Vector3(0.914, 0.898, 0.545) },  // photo yellow
+                uDecal: { value: shirtDecalTex() },
+                uBMin: { value: new THREE.Vector3(-0.4, -1.6, -0.35) },
+                uBMax: { value: new THREE.Vector3(0.4, 0, 0.33) } },
     side: THREE.DoubleSide });
   const rgeo = mk();
   // st-22 interp targets: position/normal = latest packet, aPrev/aPrevN =
@@ -868,6 +931,9 @@ function rigPacket(p) {
     u.uFocal.value = p.focal; u.uIw.value = p.iw; u.uIh.value = p.ih; }
   const dt = now - (S.rig.lastPkt || now);
   if (dt > 0 && dt < 3000) S.rig.span = S.rig.span ? S.rig.span * 0.7 + dt * 0.3 : dt;
+  { const u = rigMesh.material.uniforms;            // st-23: shirt fits any body
+    if (u.uBMin) { u.uBMin.value.set(p.vmin[0], p.vmin[1], p.vmin[2]);
+                   u.uBMax.value.set(p.vmax[0], p.vmax[1], p.vmax[2]); } }
   S.rig.tPrev = S.rig.lastPkt || now;
   S.rig.lastPkt = now; S.rig.ms = p.ms;
   S.rig.id = p.id;
