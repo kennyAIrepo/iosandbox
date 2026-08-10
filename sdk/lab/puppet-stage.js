@@ -51,9 +51,57 @@ export const CHANNEL_RULES = [
   { id: 'head.rot',        kind: 'bone',  rx: [/^(mixamorig)?head$/i, /_head(_\d+)?$/i, /^b_head/i] }
 ];
 
+/* ── Response shaping: the contract's `map` field, implemented ──────
+ * Raw tracker scores idle at nonzero (smile ~0.2, sneer flickers, brows
+ * drift) — mapped 1:1 they give the puppet a permanent uncanny smirk.
+ * Per channel:  v' = min(max, gain·((max(0, v−dead)/(1−dead))^gamma))
+ *   dead  — noise floor: below this the face does NOTHING (rest = rest)
+ *   gamma — ease-in: >1 suppresses idle twitch, keeps big expressions
+ *   gain/max — how far the puppet is allowed to take the shape
+ * Channels not listed pass through untouched. */
+const SHAPE = {
+  'mouth.open':      { dead: 0.06, gamma: 1.15, gain: 1.0,  max: 1.0 },
+  'mouth.stretch.L': { dead: 0.15, gamma: 1.4,  gain: 0.8,  max: 0.7 },
+  'mouth.stretch.R': { dead: 0.15, gamma: 1.4,  gain: 0.8,  max: 0.7 },
+  'mouth.smile.L':   { dead: 0.25, gamma: 1.6,  gain: 0.85, max: 0.8 },
+  'mouth.smile.R':   { dead: 0.25, gamma: 1.6,  gain: 0.85, max: 0.8 },
+  'mouth.pucker':    { dead: 0.20, gamma: 1.5,  gain: 0.9,  max: 0.85 },
+  'tongue.out':      { dead: 0.10, gamma: 1.2,  gain: 1.0,  max: 1.0 },
+  'eye.blink.L':     { dead: 0.12, gamma: 1.3,  gain: 1.05, max: 1.0 },
+  'eye.blink.R':     { dead: 0.12, gamma: 1.3,  gain: 1.05, max: 1.0 },
+  'eye.wide.L':      { dead: 0.25, gamma: 1.5,  gain: 0.8,  max: 0.7 },
+  'eye.wide.R':      { dead: 0.25, gamma: 1.5,  gain: 0.8,  max: 0.7 },
+  'brow.inner.up':   { dead: 0.15, gamma: 1.3,  gain: 0.85, max: 0.85 },
+  'brow.up.L':       { dead: 0.15, gamma: 1.3,  gain: 0.85, max: 0.85 },
+  'brow.up.R':       { dead: 0.15, gamma: 1.3,  gain: 0.85, max: 0.85 },
+  'brow.down.L':     { dead: 0.25, gamma: 1.5,  gain: 0.75, max: 0.7 },
+  'brow.down.R':     { dead: 0.25, gamma: 1.5,  gain: 0.75, max: 0.7 },
+  'cheek.raise.L':   { dead: 0.30, gamma: 1.6,  gain: 0.7,  max: 0.6 },
+  'cheek.raise.R':   { dead: 0.30, gamma: 1.6,  gain: 0.7,  max: 0.6 },
+  'cheek.puff':      { dead: 0.35, gamma: 1.8,  gain: 0.8,  max: 0.8 },
+  'nose.sneer.L':    { dead: 0.35, gamma: 2.0,  gain: 0.55, max: 0.45 },
+  'nose.sneer.R':    { dead: 0.35, gamma: 2.0,  gain: 0.55, max: 0.45 }
+};
+// Channels where feel-preset scaling applies (core mouth/blink stay 1:1 honest)
+const FRINGE = new Set(Object.keys(SHAPE).filter(id =>
+  !/^(mouth\.open|tongue\.out|eye\.blink)/.test(id)));
+
+function shape(id, v, feel = 1) {
+  const s = SHAPE[id];
+  if (!s) return v;
+  let x = Math.max(0, v - s.dead) / (1 - s.dead);
+  x = Math.pow(x, s.gamma) * s.gain * (FRINGE.has(id) ? feel : 1);
+  return Math.min(s.max, x);
+}
+
+/* Head damping: 1:1 head motion reads robotic; roll is the worst offender. */
+const HEAD_FEEL = { yaw: 0.7, pitch: 0.6, roll: 0.35, max: 26 };
+const clampDeg = (v, m) => Math.max(-m, Math.min(m, v));
+
 export class PuppetStage {
   /** @param {HTMLCanvasElement} canvas */
   constructor(canvas) {
+    this.feel = 1.0;
     this.canvas = canvas;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.scene = new THREE.Scene();
@@ -152,7 +200,7 @@ export class PuppetStage {
       const m = c.matches[ch.id];
       if (!m.target) continue;
       if (m.kind === 'morph') {
-        const v = values[ch.id] || 0;
+        const v = shape(ch.id, values[ch.id] || 0, this.feel);
         for (const mesh of c.spec.morphMeshes[m.target] || []) {
           mesh.morphTargetInfluences[mesh.morphTargetDictionary[m.target]] = v;
         }
@@ -160,14 +208,22 @@ export class PuppetStage {
         const hv = values[ch.id];
         const bone = c.spec.bones[m.target];
         if (!bone || !hv) continue;
+        // Damped, clamped head: full-gain 1:1 head motion on a puppet reads
+        // robotic; roll especially turns uncanny fast, so it gets the least.
+        const H = HEAD_FEEL;
+        const yaw = clampDeg(hv.yaw * H.yaw, H.max), pitch = clampDeg(hv.pitch * H.pitch, H.max);
+        const roll = clampDeg(hv.roll * H.roll, H.max);
         // mirrored-selfie: user's nose to screen-right → puppet turns to ITS screen-right
-        this._eu.set(THREE.MathUtils.degToRad(-hv.pitch), THREE.MathUtils.degToRad(-hv.yaw),
-                     THREE.MathUtils.degToRad(hv.roll));
+        this._eu.set(THREE.MathUtils.degToRad(-pitch), THREE.MathUtils.degToRad(-yaw),
+                     THREE.MathUtils.degToRad(roll));
         this._q.setFromEuler(this._eu);
         bone.quaternion.copy(c.restQ[m.target]).multiply(this._q);
       }
     }
   }
+
+  /** Global expressiveness multiplier for the fringe channels (presets). */
+  setFeel(mult) { this.feel = mult; }
 
   render() {
     const c = this.canvas;

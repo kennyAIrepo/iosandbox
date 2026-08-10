@@ -87,6 +87,12 @@
   <div class="pane">
     <h2>3 · PUPPET — mediated output
       <span id="tap-info" style="color:var(--dim);font-weight:normal"></span>
+      <select id="feel" title="expression feel (fringe channel gain)"
+        style="background:#0a0d12;color:var(--tx);border:1px solid var(--line);border-radius:4px;font:inherit;font-size:11px">
+        <option value="0.7">subtle</option>
+        <option value="1" selected>natural</option>
+        <option value="1.35">expressive</option>
+      </select>
       <div id="model-tabs"></div>
     </h2>
     <canvas id="puppet"></canvas>
@@ -168,6 +174,7 @@ async function loadModel(i) {
   renderChannels(); busAlign();
 }
 
+$('feel').onchange = e => stage.setFeel(parseFloat(e.target.value));
 $('btn-neutral').onclick = () => { cal.start('neutral', 2000); $('btn-neutral').classList.add('armed'); };
 $('btn-range').onclick = () => { cal.start('range', 3000); $('btn-range').classList.add('armed'); };
 $('btn-hand').onclick = () => cal.download(contract?.id, stage.alignment());
