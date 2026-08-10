@@ -1071,7 +1071,7 @@ function shirt2Build() {
   // shirt's shape/coloring/finish never regenerates or varies again.
   const fitKey = (() => { const s = S.rig.topoFaces || ''; let h = 5381;
     for (let i = 0; i < s.length; i += 97) h = ((h * 33) + s.charCodeAt(i)) >>> 0;
-    return 'hopeos-fit6-' + s.length + '-' + h.toString(36); })();   // v6: +frozen depth
+    return 'hopeos-fit7-' + s.length + '-' + h.toString(36); })();   // v7: topology limb label (v6 could freeze an arm as torso)
   let dress = null, dressZ = null;
   try { const cs = localStorage.getItem(fitKey), cz = localStorage.getItem(fitKey + 'z');
     if (cs && cz) {
@@ -1102,18 +1102,30 @@ function shirt2Build() {
       for (const [a, b] of [[idx[f], idx[f+1]], [idx[f+1], idx[f+2]], [idx[f], idx[f+2]]]) {
         apush(a, b); apush(b, a);
       }
-    const torsoLow = new Uint8Array(pos.count); const stack = [];
-    for (let i = 0; i < pos.count; i++)
-      if (dress[i*4+1] > 0.32 && dress[i*4+1] < 0.55 && Math.abs(dress[i*4] - 0.5) < 0.15) {
-        torsoLow[i] = 1; stack.push(i);
+    // st-46: label by TOPOLOGY, not position — the old central-column seed
+    // (|nx-0.5|<0.15) grabbed an arm that hung slightly forward/inward at
+    // dress time and painted the forearm+hand as torso fabric. Inside the
+    // band the torso is the LARGEST connected component; arms are always
+    // their own components (they join only via the shoulders, above the
+    // band — a hand touching the body never merges mesh topology).
+    const comp = new Int32Array(pos.count).fill(-1);
+    const compN = []; const stack = [];
+    for (let i = 0; i < pos.count; i++) {
+      if (comp[i] >= 0 || !inBand(i)) continue;
+      const id = compN.length; let n = 0;
+      comp[i] = id; stack.push(i);
+      while (stack.length) {
+        const v = stack.pop(); n++;
+        const l = adj.get(v);
+        if (l) for (const w of l) if (comp[w] < 0 && inBand(w)) { comp[w] = id; stack.push(w); }
       }
-    while (stack.length) {
-      const v = stack.pop(); const l = adj.get(v);
-      if (l) for (const w of l) if (!torsoLow[w] && inBand(w)) { torsoLow[w] = 1; stack.push(w); }
+      compN.push(n);
     }
+    let torsoC = 0;
+    for (let c = 1; c < compN.length; c++) if (compN[c] > compN[torsoC]) torsoC = c;
     let lb = new Float32Array(pos.count);
     for (let i = 0; i < pos.count; i++)
-      lb[i] = (dress[i*4+1] > 0.30 && dress[i*4+1] < 0.62 && !torsoLow[i]) ? 1 : 0;
+      lb[i] = (inBand(i) && comp[i] !== torsoC) ? 1 : 0;
     // st-39: DIFFUSE the limb label along mesh edges — the torso→sleeve
     // transition spreads over several triangle rings instead of jumping in
     // one, so the sleeve hem is a smooth curve in every pose
@@ -1143,9 +1155,11 @@ function shirt2Build() {
     // raised overhead passes the aspect test but yields ~zero arm labels —
     // refuse that pose, wait for a proper standing frame. This is what makes
     // "short sleeves, fixed length" hold at ALL times.
-    let armN = 0;
-    for (let i = 0; i < pos.count; i++) if (lb[i] > 0.5) armN++;
-    if (armN < 120) return;
+    // st-46: the gate is PER ARM — one healthy arm used to pass the global
+    // count while the other sat mislabeled as torso, and the cache froze it
+    let armComps = 0;
+    for (let c = 0; c < compN.length; c++) if (c !== torsoC && compN[c] >= 60) armComps++;
+    if (armComps < 2) return;
     try { const b64of = (arr) => { const u = new Uint8Array(arr.buffer); let s = '';
         for (let i = 0; i < u.length; i += 8192) s += String.fromCharCode.apply(null, u.subarray(i, i + 8192));
         return btoa(s); };

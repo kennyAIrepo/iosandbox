@@ -362,6 +362,8 @@ export { PhysicsWorld } from './core/physics.js';
 export { GestureDetector } from './interaction/gestures.js';
 export { BodyGestureDetector, POSE_LANDMARKS, jointAngle } from './interaction/body-gestures.js';
 export { FaceExpressionDetector } from './interaction/face.js';
+export { MouthTriggers } from './interaction/mouth.js';
+export { PuppetInput } from './interaction/puppet.js';
 export { FireEffect } from './interaction/effects.js';
 export { VoiceCommander } from './interaction/voice.js';
 export { GrabState, isPinch, pinchPoint, palmCenter, handQuaternion } from './interaction/grab.js';

@@ -1,0 +1,130 @@
+{
+  "_spec": "hopeOS face-puppet contract v1. One file = one puppet. Positions never cross the human->puppet boundary; each channel names a MEASURE evaluated by the same formula on both sides (sdk/interaction/face-measures.js), a per-user human calibration, a puppet response curve, and the rig target it drives. A channel is LIVE only when every field is non-null and 'status' is 'calibrated' -- the riglab ghost view shows exactly which channels pass.",
+  "version": 1,
+  "id": "lizard-face-v1",
+
+  "human": {
+    "space": "mediapipe-face-478",
+    "tracker_call": "initTracking(vid, { enableHands:false, enablePose:false, faceEvery:1, faceMatrix:true })",
+    "aspect": "videoWidth/videoHeight at runtime",
+    "smoothing": "One-Euro applied on the HUMAN side only (minCutoff 2.0, beta 0.15); puppet applies raw",
+    "calibration_ritual": [
+      "neutral: 2s hold, face relaxed, eyes open, mouth closed -> per-channel 'neutral'",
+      "range:   open mouth wide, blink hard, tongue out far   -> per-channel 'max'"
+    ]
+  },
+
+  "puppet": {
+    "asset": "Meshy_AI_green_gecko_3d_0804213001_image-to-3d-texture.glb",
+    "geom_sha1": "48ae32c8a3989499",
+    "vert_count": 125684,
+    "axes": "blender(x,y,z) = glb(x,-z,y)",
+    "index_warning": "vertex indices below bind to THIS geom_sha1. The Blender working copy had a cavity boolean applied (120624 verts) -- marks made there DO NOT transfer to this GLB. Mark on the pristine mesh or re-export and re-digest.",
+    "rig": {
+      "armature": "LizardRig",
+      "bones": ["root", "jaw", "tongue_01", "tongue_02", "tongue_03", "tongue_04"],
+      "props": { "mouth_open": "0..1", "tongue_out": "0..1" }
+    }
+  },
+
+  "channels": [
+    {
+      "id": "mouth.open",
+      "status": "awaiting_puppet_marks",
+      "human": {
+        "probe": "landmark_ratio", "formula": "MAR",
+        "points": { "upperInner": 13, "lowerInner": 14, "cornerL": 78, "cornerR": 308 },
+        "cal": { "neutral": 0.05, "max": 0.7, "per_user": true }
+      },
+      "puppet": {
+        "probe": "landmark_ratio", "formula": "MAR",
+        "points": { "upperInner": null, "lowerInner": null, "cornerL": null, "cornerR": null },
+        "marking": "4 verts on the lizard mouth: inner-lip mids at the slit front (upper/lower), and the two mouth corners where the carved slit ends",
+        "response_curve": null,
+        "response_curve_method": "Blender sweep: pose mouth_open 0->1 in 21 steps, evaluate deformed mesh (depsgraph), record puppet MAR at each step, store LUT + inverse"
+      },
+      "target": { "kind": "prop", "path": "LizardRig[\"mouth_open\"]" },
+      "map": { "gain": 1.0, "gamma": 1.0, "clamp": [0, 1] }
+    },
+    {
+      "id": "tongue.out",
+      "status": "awaiting_puppet_marks",
+      "human": {
+        "probe": "pixel_stat", "source": "MouthTriggers.state.tongueAmount",
+        "note": "MediaPipe has no tongue landmark; red-ratio inside the inner-lip polygon is the probe (mouth.js). Already smoothed + hysteresis.",
+        "cal": { "neutral": 0.0, "max": 0.55, "per_user": true }
+      },
+      "puppet": {
+        "probe": "landmark_pair", "formula": "tipTravel",
+        "points": { "root": null, "tip": null },
+        "marking": "2 verts: tongue root (base on mouth floor) and resting tip",
+        "response_curve": null,
+        "response_curve_method": "sweep tongue_out 0->1, record tip displacement / rest length"
+      },
+      "target": { "kind": "prop", "path": "LizardRig[\"tongue_out\"]" },
+      "map": { "gain": 1.0, "gamma": 1.0, "clamp": [0, 1] }
+    },
+    {
+      "id": "tongue.aim",
+      "status": "unrigged",
+      "human": {
+        "probe": "pixel_stat", "source": "MouthTriggers.state.tongueTip",
+        "note": "2D tip centroid in mirrored normalized coords; x-offset from mouth center -> yaw, y -> pitch"
+      },
+      "puppet": {
+        "note": "tongue chain has no yaw/pitch drivers yet -- rig extension needed (tongue_01 rotation)",
+        "response_curve": null
+      },
+      "target": { "kind": "bone_rot", "path": "tongue_01", "axes": ["yaw", "pitch"] },
+      "map": { "gain": 1.0, "clamp_deg": [-25, 25] }
+    },
+    {
+      "id": "head.yaw+pitch+roll",
+      "status": "unrigged",
+      "human": {
+        "probe": "matrix_angles", "source": "PuppetInput.state.head",
+        "note": "degrees, mirrored-view convention, One-Euro smoothed; requires faceMatrix:true"
+      },
+      "puppet": {
+        "note": "NO head bone exists -- jaw parents to root. Add 'head' bone (neck pivot ~(-0.17,-0.45,0.30)), reparent jaw+tongue chain under it",
+        "response_curve": "identity (angle space transfers directly)"
+      },
+      "target": { "kind": "bone_rot", "path": "head", "axes": ["yaw", "pitch", "roll"] },
+      "map": { "gain": 0.8, "clamp_deg": [-35, 35] }
+    },
+    {
+      "id": "eye.blink.L",
+      "status": "unrigged",
+      "human": {
+        "probe": "landmark_ratio", "formula": "EAR", "points": [362, 385, 387, 263, 373, 380],
+        "corroborate": "blendshape eyeBlinkLeft (puppet.js already consumes)",
+        "cal": { "neutral": 0.30, "max_closed": 0.08, "per_user": true, "inverted": true }
+      },
+      "puppet": { "note": "gecko has no eyelids; stylized model could take a lid shape key -- design call, not anatomy", "response_curve": null },
+      "target": null,
+      "map": { "gain": 1.0 }
+    },
+    {
+      "id": "eye.blink.R",
+      "status": "unrigged",
+      "human": { "probe": "landmark_ratio", "formula": "EAR", "points": [33, 160, 158, 133, 153, 144], "corroborate": "blendshape eyeBlinkRight", "cal": { "neutral": 0.30, "max_closed": 0.08, "per_user": true, "inverted": true } },
+      "puppet": { "response_curve": null },
+      "target": null,
+      "map": { "gain": 1.0 }
+    },
+    {
+      "id": "cheek.puff",
+      "status": "v2",
+      "human": { "probe": "blendshape", "source": "cheekPuff" },
+      "puppet": { "note": "candidate: gecko throat/dewlap pouch scale" },
+      "target": null
+    },
+    {
+      "id": "mouth.width",
+      "status": "v2",
+      "human": { "probe": "landmark_ratio", "formula": "mouthWidth", "points": { "outerCornerL": 61, "outerCornerR": 291, "cheekR": 234, "cheekL": 454 } },
+      "puppet": { "note": "lizard slit is rigid; would need corner shape keys" },
+      "target": null
+    }
+  ]
+}

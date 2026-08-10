@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>puppetlab — full puppet-channel test (mouth/tongue/eyes/head/limbs)</title>
+<style>
+  body { margin: 0; background: #0a0f16; color: #cfe3f5; font: 13px/1.45 ui-monospace, monospace; }
+  #wrap { display: flex; gap: 16px; padding: 16px; flex-wrap: wrap; }
+  #stage { position: relative; }
+  /* fill (not cover): landmark coords map to the FULL frame */
+  video, #overlay { width: 560px; height: 420px; border-radius: 10px; }
+  video { object-fit: fill; transform: scaleX(-1); background: #000; }
+  #overlay { position: absolute; inset: 0; pointer-events: none; }
+  #hud { min-width: 300px; max-width: 340px; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 3px 0; }
+  .row label { width: 88px; color: #7f93ad; }
+  .bar { flex: 1; height: 12px; background: #16233a; border-radius: 6px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: #3aa0ff; }
+  .on > label { color: #7dffb0; }
+  h4 { margin: 14px 0 4px; color: #55657c; font-weight: normal; letter-spacing: 2px; }
+  #head3 { color: #cfe3f5; }
+  #log { margin-top: 12px; color: #7f93ad; white-space: pre; overflow: hidden; max-height: 170px; }
+  button { background: #1b2c47; color: #cfe3f5; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <video id="vid" autoplay playsinline muted></video>
+    <canvas id="overlay" width="560" height="420"></canvas>
+  </div>
+  <div id="hud">
+    <button id="go">start camera</button>
+    <h4>FACE</h4>
+    <div class="row" id="rMouth"><label>mouth</label><div class="bar"><div></div></div></div>
+    <div class="row" id="rTongue"><label>tongue</label><div class="bar"><div style="background:#ff5f7a"></div></div></div>
+    <div class="row" id="rEyeL"><label>eye L</label><div class="bar"><div></div></div></div>
+    <div class="row" id="rEyeR"><label>eye R</label><div class="bar"><div></div></div></div>
+    <h4>HEAD</h4>
+    <div id="head3">yaw 0&deg;&nbsp;&nbsp;pitch 0&deg;&nbsp;&nbsp;roll 0&deg;</div>
+    <h4>LIMBS (raise · extend)</h4>
+    <div class="row" id="rarmL"><label>arm L</label><div class="bar"><div></div></div><div class="bar"><div style="background:#b48cff"></div></div></div>
+    <div class="row" id="rarmR"><label>arm R</label><div class="bar"><div></div></div><div class="bar"><div style="background:#b48cff"></div></div></div>
+    <div class="row" id="rlegL"><label>leg L</label><div class="bar"><div></div></div><div class="bar"><div style="background:#b48cff"></div></div></div>
+    <div class="row" id="rlegR"><label>leg R</label><div class="bar"><div></div></div><div class="bar"><div style="background:#b48cff"></div></div></div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script type="module">
+// ── THE GENERIC ACCESS POINT — everything a puppet game needs ──────────────
+import { initCamera, initTracking } from './sdk/core/tracking.js';
+import { PuppetInput } from './sdk/interaction/puppet.js';
+import { POSE_LANDMARKS as LM } from './sdk/interaction/body-gestures.js';
+
+const vid = document.getElementById('vid');
+const logEl = document.getElementById('log');
+const lines = [];
+const log = m => { lines.unshift(`${(performance.now() / 1000).toFixed(1)}s  ${m}`); logEl.textContent = lines.slice(0, 11).join('\n'); };
+
+let lastPose = null;
+
+document.getElementById('go').onclick = async (e) => {
+  e.target.disabled = true; e.target.textContent = 'loading models…';
+  await initCamera(null, vid);
+  const tracker = await initTracking(vid, {
+    enableHands: false, faceEvery: 1, faceMatrix: true, poseEvery: 2
+  });
+  const puppet = new PuppetInput(vid);
+
+  puppet.on('mouthOpen', a => log(`mouthOpen ${a.toFixed(2)}`));
+  puppet.on('mouthClose', () => log('mouthClose'));
+  puppet.on('tongueOut', r => log(`tongueOut ${r.toFixed(2)} → FIRE`));
+  puppet.on('tongueIn', () => log('tongueIn'));
+  puppet.on('eyeClose', s => log(`eyeClose ${s}`));
+  puppet.on('eyeOpen', s => log(`eyeOpen ${s}`));
+  puppet.on('limbRaise', (id, r) => log(`limbRaise ${id} ${r.toFixed(2)}`));
+  puppet.on('limbLower', id => log(`limbLower ${id}`));
+
+  e.target.style.display = 'none';
+  const octx = document.getElementById('overlay').getContext('2d');
+
+  (function loop() {
+    const f = tracker.detect();
+    if (f.pose) lastPose = f.pose;
+    const s = puppet.update(f, performance.now());
+    hud(s);
+    draw(octx, puppet, s);
+    requestAnimationFrame(loop);
+  })();
+};
+
+function setRow(id, on, ...vals) {
+  const row = document.getElementById(id);
+  row.classList.toggle('on', on);
+  const bars = row.querySelectorAll('.bar > div');
+  vals.forEach((v, i) => { if (bars[i]) bars[i].style.width = `${Math.max(0, Math.min(1, v)) * 100}%`; });
+}
+
+function hud(s) {
+  setRow('rMouth', s.mouth.mouthOpen, s.mouth.mouthOpenAmount);
+  setRow('rTongue', s.mouth.tongueOut, s.mouth.tongueAmount);
+  setRow('rEyeL', s.eyes.left.open, s.eyes.left.openAmount);
+  setRow('rEyeR', s.eyes.right.open, s.eyes.right.openAmount);
+  document.getElementById('head3').innerHTML =
+    `yaw ${s.head.yaw.toFixed(0)}&deg;&nbsp;&nbsp;pitch ${s.head.pitch.toFixed(0)}&deg;&nbsp;&nbsp;roll ${s.head.roll.toFixed(0)}&deg;`;
+  for (const id of ['armL', 'armR', 'legL', 'legR']) {
+    const l = s.limbs[id];
+    // raise is roughly -1..+1 → map to 0..1 for the bar
+    setRow('r' + id, l.raised, (l.raise + 1) / 2, l.extend);
+  }
+}
+
+const BONES = [
+  [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER], [LM.LEFT_HIP, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_HIP], [LM.RIGHT_SHOULDER, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_ELBOW], [LM.LEFT_ELBOW, LM.LEFT_WRIST],
+  [LM.RIGHT_SHOULDER, LM.RIGHT_ELBOW], [LM.RIGHT_ELBOW, LM.RIGHT_WRIST],
+  [LM.LEFT_HIP, LM.LEFT_KNEE], [LM.LEFT_KNEE, LM.LEFT_ANKLE],
+  [LM.RIGHT_HIP, LM.RIGHT_KNEE], [LM.RIGHT_KNEE, LM.RIGHT_ANKLE]
+];
+
+function draw(ctx, puppet, s) {
+  const { width: w, height: h } = ctx.canvas;
+  ctx.clearRect(0, 0, w, h);
+
+  // Pose skeleton (already mirrored coords)
+  if (lastPose) {
+    ctx.strokeStyle = '#2e4a6e'; ctx.lineWidth = 2;
+    for (const [a, b] of BONES) {
+      const pa = lastPose[a], pb = lastPose[b];
+      if (!pa || !pb || (pa.v ?? 1) < 0.5 || (pb.v ?? 1) < 0.5) continue;
+      ctx.beginPath(); ctx.moveTo(pa.x * w, pa.y * h); ctx.lineTo(pb.x * w, pb.y * h); ctx.stroke();
+    }
+    for (const id of ['armL', 'armR', 'legL', 'legR']) {
+      const t = s.limbs[id].tip;
+      if (!t) continue;
+      ctx.beginPath(); ctx.arc(t.x * w, t.y * h, 5, 0, Math.PI * 2);
+      ctx.fillStyle = s.limbs[id].raised ? '#7dffb0' : '#55657c'; ctx.fill();
+    }
+  }
+
+  // Mouth polygon + tongue tip
+  const poly = puppet.mouth.getMouthPolygon();
+  if (poly) {
+    ctx.beginPath();
+    poly.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](p.x * w, p.y * h));
+    ctx.closePath();
+    ctx.strokeStyle = s.mouth.mouthOpen ? '#7dffb0' : '#55657c'; ctx.lineWidth = 2; ctx.stroke();
+  }
+  if (s.mouth.tongueTip) {
+    ctx.beginPath(); ctx.arc(s.mouth.tongueTip.x * w, s.mouth.tongueTip.y * h, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff5f7a'; ctx.fill();
+  }
+}
+</script>
+</body>
+</html>

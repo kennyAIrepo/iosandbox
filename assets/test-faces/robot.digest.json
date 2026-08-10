@@ -1,0 +1,570 @@
+{
+ "_contract": "Landmarks are VERTEX INDICES, stable across GLB / Blender / three.js. Valid only while vert_count and geom_sha1 match; any boolean, decimate, or re-export renumbers them.",
+ "file": "robot.glb",
+ "file_mb": 0.46,
+ "generator": "FBX2glTF",
+ "axes": "blender (x,y,z) = glb(x,-z,y)",
+ "region": null,
+ "vert_count": 7214,
+ "tri_count": 3237,
+ "geom_sha1": "6174753f1624d356",
+ "already_rigged": {
+  "skins": 2,
+  "joints": [
+   43,
+   43
+  ],
+  "morph_targets": 9,
+  "animations": 14
+ },
+ "parts": [
+  {
+   "node": "Foot.L",
+   "mesh": "Foot.L",
+   "primitive": 0,
+   "vert_range": [
+    0,
+    64
+   ],
+   "material": 0
+  },
+  {
+   "node": "Torso",
+   "mesh": "Torso",
+   "primitive": 0,
+   "vert_range": [
+    64,
+    632
+   ],
+   "material": 0
+  },
+  {
+   "node": "Torso",
+   "mesh": "Torso",
+   "primitive": 1,
+   "vert_range": [
+    632,
+    1976
+   ],
+   "material": 1
+  },
+  {
+   "node": "Head",
+   "mesh": "Head",
+   "primitive": 0,
+   "vert_range": [
+    1976,
+    2278
+   ],
+   "material": 0
+  },
+  {
+   "node": "Head",
+   "mesh": "Head",
+   "primitive": 1,
+   "vert_range": [
+    2278,
+    3154
+   ],
+   "material": 1
+  },
+  {
+   "node": "Head",
+   "mesh": "Head",
+   "primitive": 2,
+   "vert_range": [
+    3154,
+    3718
+   ],
+   "material": 2
+  },
+  {
+   "node": "Shoulder.L",
+   "mesh": "Shoulder.L",
+   "primitive": 0,
+   "vert_range": [
+    3718,
+    3950
+   ],
+   "material": 1
+  },
+  {
+   "node": "Arm.L",
+   "mesh": "Arm.L",
+   "primitive": 0,
+   "vert_range": [
+    3950,
+    4246
+   ],
+   "material": 1
+  },
+  {
+   "node": "Shoulder.R",
+   "mesh": "Shoulder.R",
+   "primitive": 0,
+   "vert_range": [
+    4246,
+    4478
+   ],
+   "material": 1
+  },
+  {
+   "node": "Arm.R",
+   "mesh": "Arm.R",
+   "primitive": 0,
+   "vert_range": [
+    4478,
+    4762
+   ],
+   "material": 1
+  },
+  {
+   "node": "Leg.L",
+   "mesh": "Leg.L",
+   "primitive": 0,
+   "vert_range": [
+    4762,
+    5032
+   ],
+   "material": 1
+  },
+  {
+   "node": "LowerLeg.L",
+   "mesh": "LowerLeg.L",
+   "primitive": 0,
+   "vert_range": [
+    5032,
+    5402
+   ],
+   "material": 1
+  },
+  {
+   "node": "Leg.R",
+   "mesh": "Leg.R",
+   "primitive": 0,
+   "vert_range": [
+    5402,
+    5672
+   ],
+   "material": 1
+  },
+  {
+   "node": "LowerLeg.R",
+   "mesh": "LowerLeg.R",
+   "primitive": 0,
+   "vert_range": [
+    5672,
+    6042
+   ],
+   "material": 1
+  },
+  {
+   "node": "Foot.R",
+   "mesh": "Foot.R",
+   "primitive": 0,
+   "vert_range": [
+    6042,
+    6106
+   ],
+   "material": 0
+  },
+  {
+   "node": "Hand.R",
+   "mesh": "Hand.R",
+   "primitive": 0,
+   "vert_range": [
+    6106,
+    6362
+   ],
+   "material": 1
+  },
+  {
+   "node": "Hand.R",
+   "mesh": "Hand.R",
+   "primitive": 1,
+   "vert_range": [
+    6362,
+    6660
+   ],
+   "material": 0
+  },
+  {
+   "node": "Hand.L",
+   "mesh": "Hand.L",
+   "primitive": 0,
+   "vert_range": [
+    6660,
+    6916
+   ],
+   "material": 1
+  },
+  {
+   "node": "Hand.L",
+   "mesh": "Hand.L",
+   "primitive": 1,
+   "vert_range": [
+    6916,
+    7214
+   ],
+   "material": 0
+  }
+ ],
+ "materials": [
+  "Grey",
+  "Main",
+  "Black"
+ ],
+ "bbox": {
+  "min": [
+   -3.312,
+   -1.416,
+   -0.0203
+  ],
+  "max": [
+   3.3066,
+   1.2691,
+   4.4409
+  ],
+  "size": [
+   6.6185,
+   2.6852,
+   4.4612
+  ],
+  "center": [
+   -0.0027,
+   -0.0734,
+   2.2103
+  ],
+  "diagonal": 8.4213
+ },
+ "symmetry": {
+  "axis": "x",
+  "axis_index": 0,
+  "plane_offset": -0.0689,
+  "score": 0.6231
+ },
+ "body_axis": "x",
+ "extremes": {
+  "x_min": {
+   "vert": 6532,
+   "co": [
+    -3.312,
+    -0.4273,
+    2.4309
+   ]
+  },
+  "x_max": {
+   "vert": 7086,
+   "co": [
+    3.3066,
+    -0.4273,
+    2.4309
+   ]
+  },
+  "y_min": {
+   "vert": 3535,
+   "co": [
+    0.3851,
+    -1.416,
+    3.6687
+   ]
+  },
+  "y_max": {
+   "vert": 2350,
+   "co": [
+    0.1628,
+    1.2691,
+    3.6845
+   ]
+  },
+  "z_min": {
+   "vert": 11,
+   "co": [
+    0.625,
+    0.2498,
+    -0.0203
+   ]
+  },
+  "z_max": {
+   "vert": 3068,
+   "co": [
+    -0.0765,
+    0.0983,
+    4.4409
+   ]
+  }
+ },
+ "profile": {
+  "axis": "x",
+  "range": [
+   -3.312,
+   3.3066
+  ],
+  "slices": [
+   {
+    "at": -3.312,
+    "n": 361,
+    "w": 0.787,
+    "h": 0.7951,
+    "girth": 0.791,
+    "ctr": [
+     -2.9385,
+     -0.1937,
+     2.4908
+    ]
+   },
+   {
+    "at": -2.4847,
+    "n": 137,
+    "w": 0.6688,
+    "h": 0.7574,
+    "girth": 0.7131,
+    "ctr": [
+     -1.919,
+     0.0356,
+     2.4347
+    ]
+   },
+   {
+    "at": -1.6574,
+    "n": 818,
+    "w": 2.1101,
+    "h": 4.1748,
+    "girth": 3.1425,
+    "ctr": [
+     -1.0663,
+     -0.1571,
+     2.7643
+    ]
+   },
+   {
+    "at": -0.83,
+    "n": 2276,
+    "w": 2.5066,
+    "h": 4.4612,
+    "girth": 3.4839,
+    "ctr": [
+     -0.5489,
+     -0.0646,
+     1.7914
+    ]
+   },
+   {
+    "at": -0.0027,
+    "n": 2572,
+    "w": 2.6852,
+    "h": 4.3751,
+    "girth": 3.5302,
+    "ctr": [
+     0.5139,
+     -0.0914,
+     1.9527
+    ]
+   },
+   {
+    "at": 0.8246,
+    "n": 552,
+    "w": 2.017,
+    "h": 4.2841,
+    "girth": 3.1506,
+    "ctr": [
+     1.0403,
+     -0.0179,
+     2.5079
+    ]
+   },
+   {
+    "at": 1.6519,
+    "n": 137,
+    "w": 0.6688,
+    "h": 0.7574,
+    "girth": 0.7131,
+    "ctr": [
+     1.9136,
+     0.0356,
+     2.4347
+    ]
+   },
+   {
+    "at": 2.4792,
+    "n": 361,
+    "w": 0.787,
+    "h": 0.7951,
+    "girth": 0.791,
+    "ctr": [
+     2.9331,
+     -0.1937,
+     2.4908
+    ]
+   }
+  ]
+ },
+ "creases_concave": [
+  {
+   "n": 4,
+   "centroid": [
+    -2.5557,
+    -0.1504,
+    2.4718
+   ],
+   "extent": [
+    0.1933,
+    0.0891,
+    0.2171
+   ],
+   "rep_vert": 6253,
+   "sample_verts": [
+    6252,
+    6253,
+    6265,
+    6289
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    -2.6145,
+    -0.0955,
+    2.7994
+   ],
+   "extent": [
+    0.1331,
+    0.1422,
+    0.201
+   ],
+   "rep_vert": 6442,
+   "sample_verts": [
+    6442,
+    6443,
+    6458,
+    6459
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    -3.1498,
+    -0.3764,
+    2.29
+   ],
+   "extent": [
+    0.1972,
+    0.1422,
+    0.0955
+   ],
+   "rep_vert": 6484,
+   "sample_verts": [
+    6484,
+    6485,
+    6500,
+    6501
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    2.5502,
+    -0.1504,
+    2.4718
+   ],
+   "extent": [
+    0.1933,
+    0.0891,
+    0.2171
+   ],
+   "rep_vert": 6808,
+   "sample_verts": [
+    6806,
+    6808,
+    6819,
+    6842
+   ]
+  }
+ ],
+ "bumps_convex": [
+  {
+   "n": 7,
+   "centroid": [
+    -2.6311,
+    -0.1396,
+    2.7938
+   ],
+   "extent": [
+    0.117,
+    0.1786,
+    0.1492
+   ],
+   "rep_vert": 6434,
+   "sample_verts": [
+    6205,
+    6434,
+    6435,
+    6438,
+    6439,
+    6450
+   ]
+  },
+  {
+   "n": 7,
+   "centroid": [
+    2.6257,
+    -0.1396,
+    2.7938
+   ],
+   "extent": [
+    0.117,
+    0.1786,
+    0.1492
+   ],
+   "rep_vert": 6989,
+   "sample_verts": [
+    6758,
+    6988,
+    6989,
+    6992,
+    6993,
+    7004
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    -3.0955,
+    -0.1466,
+    2.3013
+   ],
+   "extent": [
+    0.0973,
+    0.099,
+    0.1816
+   ],
+   "rep_vert": 6525,
+   "sample_verts": [
+    6152,
+    6508,
+    6524,
+    6525
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    -2.9261,
+    -0.2677,
+    2.3012
+   ],
+   "extent": [
+    0.0976,
+    0.0844,
+    0.1887
+   ],
+   "rep_vert": 6509,
+   "sample_verts": [
+    6162,
+    6212,
+    6509,
+    6512
+   ]
+  }
+ ]
+}

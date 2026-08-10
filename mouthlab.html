@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mouthlab — mouth/tongue trigger test</title>
+<style>
+  body { margin: 0; background: #0a0f16; color: #cfe3f5; font: 13px/1.45 ui-monospace, monospace; }
+  #wrap { display: flex; gap: 16px; padding: 16px; flex-wrap: wrap; }
+  #stage { position: relative; }
+  video, #overlay { width: 480px; height: 360px; border-radius: 10px; }
+  /* fill (not cover): normalized landmark coords map to the FULL frame, so
+     the stage must show the full frame or the overlay drifts off the mouth */
+  video { object-fit: fill; transform: scaleX(-1); background: #000; }
+  #overlay { position: absolute; inset: 0; pointer-events: none; }
+  #hud { min-width: 260px; }
+  .bar { height: 14px; background: #16233a; border-radius: 7px; margin: 4px 0 12px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: #3aa0ff; transition: width 60ms linear; }
+  #tbar > div { background: #ff5f7a; }
+  .st { font-size: 20px; margin: 6px 0; color: #55657c; }
+  .st.on { color: #7dffb0; }
+  #log { margin-top: 12px; color: #7f93ad; white-space: pre; max-height: 180px; overflow: hidden; }
+  button { background: #1b2c47; color: #cfe3f5; border: 0; border-radius: 8px; padding: 10px 16px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="stage">
+    <video id="vid" autoplay playsinline muted></video>
+    <canvas id="overlay" width="480" height="360"></canvas>
+  </div>
+  <div id="hud">
+    <button id="go">start camera</button>
+    <div class="st" id="stMouth">MOUTH OPEN</div>
+    <div>MAR <span id="marN">0.00</span></div>
+    <div class="bar"><div id="mbar_i"></div></div>
+    <div class="st" id="stTongue">TONGUE OUT</div>
+    <div>red-ratio <span id="tonN">0.00</span></div>
+    <div class="bar" id="tbar"><div id="tbar_i"></div></div>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script type="module">
+// ── THE GENERIC ACCESS POINT: this is all a game/rig script needs ──────────
+import { initCamera, initTracking } from './sdk/core/tracking.js';
+import { MouthTriggers } from './sdk/interaction/mouth.js';
+
+const vid = document.getElementById('vid');
+const logEl = document.getElementById('log');
+const lines = [];
+const log = m => { lines.unshift(`${(performance.now() / 1000).toFixed(1)}s  ${m}`); logEl.textContent = lines.slice(0, 12).join('\n'); };
+
+document.getElementById('go').onclick = async (e) => {
+  e.target.disabled = true; e.target.textContent = 'loading models…';
+  await initCamera(null, vid);
+
+  // Face-only, every frame — triggers are gameplay, latency matters.
+  const tracker = await initTracking(vid, { enableHands: false, enablePose: false, faceEvery: 1 });
+  const mouth = new MouthTriggers(vid);
+
+  mouth.on('mouthOpen',  a => log(`mouthOpen  (amount ${a.toFixed(2)})  → ARM`));
+  mouth.on('mouthClose', () => log('mouthClose → DISARM'));
+  mouth.on('tongueOut',  r => log(`tongueOut  (ratio ${r.toFixed(2)})  → FIRE`));
+  mouth.on('tongueIn',   () => log('tongueIn   → RETRACT'));
+
+  e.target.style.display = 'none';
+  const octx = document.getElementById('overlay').getContext('2d');
+
+  (function loop() {
+    const f = tracker.detect();
+    const s = mouth.update(f.face, performance.now());
+    draw(octx, mouth, s);
+    hud(s);
+    requestAnimationFrame(loop);
+  })();
+};
+
+function hud(s) {
+  document.getElementById('marN').textContent = s.mar.toFixed(2);
+  document.getElementById('tonN').textContent = s.tongueAmount.toFixed(2);
+  document.getElementById('mbar_i').style.width = `${s.mouthOpenAmount * 100}%`;
+  document.getElementById('tbar_i').style.width = `${s.tongueAmount * 100}%`;
+  document.getElementById('stMouth').classList.toggle('on', s.mouthOpen);
+  document.getElementById('stTongue').classList.toggle('on', s.tongueOut);
+}
+
+// Mouth polygon + tongue tip over the (mirrored) video — coords from the SDK
+// are already in mirrored normalized space, so they map straight to CSS px.
+function draw(ctx, mouth, s) {
+  const { width: w, height: h } = ctx.canvas;
+  ctx.clearRect(0, 0, w, h);
+  const poly = mouth.getMouthPolygon();
+  if (poly) {
+    ctx.beginPath();
+    poly.forEach((p, i) => ctx[i ? 'lineTo' : 'moveTo'](p.x * w, p.y * h));
+    ctx.closePath();
+    ctx.strokeStyle = s.mouthOpen ? '#7dffb0' : '#55657c';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  if (s.tongueTip) {
+    ctx.beginPath();
+    ctx.arc(s.tongueTip.x * w, s.tongueTip.y * h, 6, 0, Math.PI * 2);
+    ctx.fillStyle = '#ff5f7a';
+    ctx.fill();
+  }
+}
+</script>
+</body>
+</html>

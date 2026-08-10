@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>taplab — tap-stage contract: auto-extract + align + drive</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --ok:#3fb950; --bad:#f85149; --warn:#d29922; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
+  h1 { font-size:14px; padding:10px 14px; border-bottom:1px solid var(--line); }
+  h1 small { color:var(--dim); font-weight:normal; }
+  #tabs { display:flex; gap:6px; padding:8px 14px 0; }
+  #tabs button { background:#21262d; color:var(--dim); border:1px solid var(--line);
+    border-radius:6px 6px 0 0; padding:6px 14px; font:inherit; cursor:pointer; }
+  #tabs button.on { color:var(--tx); border-color:var(--warn); border-bottom-color:var(--panel); }
+  #main { display:grid; grid-template-columns: 1fr 400px; gap:10px; padding:10px 14px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim); }
+  #view { width:100%; height:520px; display:block; }
+  #side { display:flex; flex-direction:column; gap:10px; }
+  #spec, #align { padding:8px 10px; font-size:11.5px; max-height:220px; overflow:auto; white-space:pre-wrap; }
+  .chrow { display:grid; grid-template-columns: 12px 110px 1fr 60px; gap:6px; align-items:center; padding:3px 10px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); }
+  .dot.ok { background:var(--ok); }
+  .chrow select { background:#0a0d12; color:var(--tx); border:1px solid var(--line); border-radius:4px;
+    font:inherit; font-size:11px; max-width:100%; }
+  .chrow input[type=range] { width:100%; }
+  #drive { padding:4px 0 10px; }
+  #drive .hdr { display:flex; align-items:center; gap:10px; padding:4px 10px; }
+  button.act { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+    padding:4px 10px; font:inherit; cursor:pointer; }
+  button.act.on { border-color:var(--ok); color:var(--ok); }
+  #hud { color:var(--dim); font-size:11px; padding:2px 10px 8px; }
+  video { display:none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<h1>taplab <small>— stage 2→3: auto-extract puppet spec → align channels → tap-drive (sliders or live face)</small></h1>
+<div id="tabs"></div>
+<div id="main">
+  <div class="pane"><h2 id="vtitle">viewer</h2><canvas id="view"></canvas></div>
+  <div id="side">
+    <div class="pane"><h2>auto-extracted puppet spec</h2><div id="spec">loading…</div></div>
+    <div class="pane"><h2>contract alignment (green = tapped) · override manually</h2>
+      <div id="align"></div>
+      <div id="drive"></div>
+    </div>
+  </div>
+</div>
+<video id="vid" autoplay muted playsinline></video>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const MODELS = [
+  { id:'brunette', name:'human (RPM/ARKit)', url:'assets/test-faces/brunette.glb' },
+  { id:'robot',    name:'humanoid (generic)', url:'assets/test-faces/robot.glb' },
+  { id:'fox',      name:'non-human (bones)',  url:'assets/test-faces/fox.glb' }
+];
+
+/* Channel → name-matching rules. THE ALIGNMENT LAYER: same contract channel
+   ids as assets/lizard/face.contract.json; a rule maps each to whatever a
+   given puppet exposes (morph target or bone), tier A automatically. */
+const CHANNELS = [
+  { id:'mouth.open',   kind:'morph', rx:/jaw_?open|mouth_?open|viseme_aa/i },
+  { id:'tongue.out',   kind:'morph', rx:/tongue_?out/i },
+  { id:'eye.blink.L',  kind:'morph', rx:/eye_?blink_?left|blink_?l\b|eyesclosed.*l/i },
+  { id:'eye.blink.R',  kind:'morph', rx:/eye_?blink_?right|blink_?r\b/i },
+  { id:'smile',        kind:'morph', rx:/mouth_?smile(_?left)?|smile/i },
+  { id:'head.rot',     kind:'bone',  rx:/^(mixamorig)?head$|_head(_\d+)?$|^b_head/i }
+];
+
+// ── three.js stage ──────────────────────────────────────────────
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias:true });
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+const cam = new THREE.PerspectiveCamera(35, 1, 0.01, 5000);
+const controls = new OrbitControls(cam, canvas);
+scene.add(new THREE.HemisphereLight(0xe6edf3, 0x30363d, 2.4));
+const key = new THREE.DirectionalLight(0xffffff, 2.0); key.position.set(1,2,3); scene.add(key);
+
+let current = null;   // { root, morphMeshes:{name:[mesh]}, bones:{name:bone}, matches:{chId:{kind,target}}, restQ }
+const loader = new GLTFLoader();
+
+function frameObject(root) {
+  const box = new THREE.Box3().setFromObject(root);
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  const span = Math.max(size.x, size.y, size.z);
+  // face-first framing: aim slightly above center, from the +Z front
+  cam.position.set(ctr.x, ctr.y + size.y*0.25, ctr.z + span*1.15);
+  controls.target.set(ctr.x, ctr.y + size.y*0.25, ctr.z);
+  cam.near = span/100; cam.far = span*20; cam.updateProjectionMatrix(); controls.update();
+}
+
+// ── extraction: the automated "get" of the mediated model's spec ──
+function extract(root) {
+  const morphMeshes = {}, bones = {};
+  let vtotal = 0, meshCount = 0;
+  root.traverse(o => {
+    if (o.isMesh) {
+      meshCount++; vtotal += o.geometry.attributes.position?.count || 0;
+      if (o.morphTargetDictionary) {
+        for (const nm of Object.keys(o.morphTargetDictionary)) {
+          (morphMeshes[nm] = morphMeshes[nm] || []).push(o);
+        }
+      }
+    }
+    if (o.isBone) bones[o.name] = o;
+  });
+  return { morphMeshes, bones, vtotal, meshCount,
+           morphNames: Object.keys(morphMeshes), boneNames: Object.keys(bones) };
+}
+
+// ── alignment: contract channels → this puppet's exposed targets ──
+function align(spec) {
+  const matches = {};
+  for (const ch of CHANNELS) {
+    let hit = null;
+    if (ch.kind === 'morph') hit = spec.morphNames.find(n => ch.rx.test(n)) || null;
+    else hit = spec.boneNames.find(n => ch.rx.test(n)) || null;
+    matches[ch.id] = { kind: ch.kind, target: hit };
+  }
+  return matches;
+}
+
+// ── UI ──────────────────────────────────────────────────────────
+const tabs = document.getElementById('tabs');
+MODELS.forEach((m, i) => {
+  const b = document.createElement('button');
+  b.textContent = m.name; b.onclick = () => load(i);
+  tabs.append(b);
+});
+
+const values = {};   // live channel values 0..1 (head.rot: {yaw,pitch,roll} deg)
+function buildDrivePanel() {
+  const d = document.getElementById('drive'); d.innerHTML = '';
+  const hdr = document.createElement('div'); hdr.className = 'hdr';
+  const camBtn = document.createElement('button');
+  camBtn.className = 'act'; camBtn.id = 'camBtn'; camBtn.textContent = '▶ drive from live face';
+  camBtn.onclick = toggleCamera;
+  hdr.append(camBtn);
+  const spec = document.createElement('button');
+  spec.className = 'act'; spec.textContent = 'copy contract fragment';
+  spec.onclick = () => navigator.clipboard.writeText(JSON.stringify(
+    { puppet: current?.name, matches: current?.matches }, null, 1));
+  hdr.append(spec);
+  d.append(hdr);
+  const hud = document.createElement('div'); hud.id = 'hud'; hud.textContent = 'sliders drive; camera overrides';
+  d.append(hud);
+
+  for (const ch of CHANNELS) {
+    const m = current.matches[ch.id];
+    const row = document.createElement('div'); row.className = 'chrow';
+    const dot = document.createElement('span'); dot.className = 'dot' + (m.target ? ' ok' : '');
+    const lbl = document.createElement('span'); lbl.textContent = ch.id;
+    // manual override dropdown — the human decision layer of the alignment
+    const sel = document.createElement('select');
+    const pool = ch.kind === 'morph' ? current.spec.morphNames : current.spec.boneNames;
+    sel.append(new Option('— none —', ''));
+    for (const n of pool) sel.append(new Option(n, n));
+    sel.value = m.target || '';
+    sel.onchange = () => { m.target = sel.value || null; dot.className = 'dot' + (m.target ? ' ok' : ''); };
+    let ctl;
+    if (ch.id === 'head.rot') {
+      ctl = document.createElement('span'); ctl.style.cssText = 'color:#8b949e;font-size:10px';
+      ctl.textContent = 'yaw/pitch via camera';
+      values[ch.id] = { yaw:0, pitch:0, roll:0 };
+    } else {
+      ctl = document.createElement('input'); ctl.type = 'range'; ctl.min = 0; ctl.max = 1; ctl.step = 0.01; ctl.value = 0;
+      values[ch.id] = 0;
+      ctl.oninput = () => values[ch.id] = parseFloat(ctl.value);
+      row.dataset.slider = ch.id;
+    }
+    row.append(dot, lbl, sel, ctl);
+    d.append(row);
+  }
+}
+
+async function load(i) {
+  [...tabs.children].forEach((b, k) => b.classList.toggle('on', k === i));
+  const m = MODELS[i];
+  document.getElementById('vtitle').textContent = `viewer — ${m.name}`;
+  document.getElementById('spec').textContent = 'loading…';
+  if (current) scene.remove(current.root);
+  const gltf = await loader.loadAsync(m.url);
+  const root = gltf.scene;
+  scene.add(root);
+  frameObject(root);
+  const spec = extract(root);
+  const matches = align(spec);
+  // remember rest pose of every matched bone for additive head rotation
+  const restQ = {};
+  for (const ch of Object.values(matches)) {
+    if (ch.kind === 'bone' && ch.target) restQ[ch.target] = spec.bones[ch.target].quaternion.clone();
+  }
+  current = { root, name: m.id, spec, matches, restQ };
+  document.getElementById('spec').textContent =
+    `meshes ${spec.meshCount} · verts ${spec.vtotal}\n` +
+    `bones (${spec.boneNames.length}): ${spec.boneNames.slice(0,14).join(', ')}${spec.boneNames.length>14?' …':''}\n\n` +
+    `morph targets (${spec.morphNames.length}):\n${spec.morphNames.slice(0,40).join(', ')}${spec.morphNames.length>40?' …':''}`;
+  document.getElementById('align').textContent =
+    CHANNELS.map(ch => `${matches[ch.id].target ? '●' : '○'} ${ch.id.padEnd(12)} → ${matches[ch.id].target || 'UNMATCHED'}`).join('\n');
+  buildDrivePanel();
+}
+
+// ── apply channel values to the puppet each frame ──
+const eu = new THREE.Euler(), q = new THREE.Quaternion();
+function applyChannels() {
+  if (!current) return;
+  for (const ch of CHANNELS) {
+    const m = current.matches[ch.id];
+    if (!m.target) continue;
+    if (m.kind === 'morph') {
+      const v = values[ch.id] || 0;
+      for (const mesh of current.spec.morphMeshes[m.target] || []) {
+        mesh.morphTargetInfluences[mesh.morphTargetDictionary[m.target]] = v;
+      }
+    } else {
+      const bone = current.spec.bones[m.target];
+      const hv = values[ch.id];
+      if (!bone || !hv) continue;
+      const rest = current.restQ[m.target];
+      // mirrored-selfie convention: user's nose to screen-right turns the
+      // puppet toward ITS screen-right (sign flips exposed in riglab if wrong)
+      eu.set(THREE.MathUtils.degToRad(-hv.pitch), THREE.MathUtils.degToRad(-hv.yaw),
+             THREE.MathUtils.degToRad(hv.roll));
+      q.setFromEuler(eu);
+      bone.quaternion.copy(rest).multiply(q);
+    }
+  }
+}
+
+// ── optional live-face drive: full 1→2→3 in one page ──
+let tracker = null, puppet = null, probe = null, normalize = null, camOn = false;
+let cal = JSON.parse(localStorage.getItem('riglab.cal.v1') || 'null') || {
+  'mouth.open': { neutral:0.05, max:0.7 }, 'tongue.out': { neutral:0, max:0.55 },
+  'eye.L': { open:0.30, closed:0.08 }, 'eye.R': { open:0.30, closed:0.08 } };
+
+async function toggleCamera() {
+  const btn = document.getElementById('camBtn');
+  if (camOn) { camOn = false; btn.classList.remove('on'); btn.textContent = '▶ drive from live face'; return; }
+  if (!tracker) {
+    btn.textContent = 'booting tracker…';
+    const [{ initCamera, initTracking }, { PuppetInput }, meas] = await Promise.all([
+      import('./sdk/core/tracking.js'), import('./sdk/interaction/puppet.js'),
+      import('./sdk/interaction/face-measures.js')]);
+    probe = meas.probeHuman; normalize = meas.normalize;
+    const vid = document.getElementById('vid');
+    await initCamera(null, vid);
+    tracker = await initTracking(vid, { enableHands:false, enablePose:false, faceEvery:1, faceMatrix:true });
+    puppet = new PuppetInput(vid);
+  }
+  camOn = true; btn.classList.add('on'); btn.textContent = '⏸ camera driving';
+}
+
+function cameraTick(t) {
+  const vid = document.getElementById('vid');
+  const frame = tracker.detect();
+  const s = puppet.update(frame, t);
+  const lm = frame?.face?.landmarks;
+  if (lm) {
+    const raw = probe(lm, (vid.videoWidth||4)/(vid.videoHeight||3));
+    values['mouth.open'] = normalize(raw['mouth.open'], cal['mouth.open']);
+    values['tongue.out'] = normalize(s.mouth.tongueAmount, cal['tongue.out']);
+    values['eye.blink.L'] = 1 - normalize(raw['eye.blink.L'], { neutral: cal['eye.L'].closed, max: cal['eye.L'].open });
+    values['eye.blink.R'] = 1 - normalize(raw['eye.blink.R'], { neutral: cal['eye.R'].closed, max: cal['eye.R'].open });
+    values['head.rot'] = { yaw: s.head.yaw, pitch: s.head.pitch, roll: s.head.roll };
+    document.getElementById('hud').textContent =
+      `LIVE · mouth ${values['mouth.open'].toFixed(2)} tongue ${values['tongue.out'].toFixed(2)} ` +
+      `blink ${values['eye.blink.L'].toFixed(2)}/${values['eye.blink.R'].toFixed(2)} ` +
+      `head ${s.head.yaw.toFixed(0)}/${s.head.pitch.toFixed(0)}/${s.head.roll.toFixed(0)}°`;
+    // reflect into sliders so the human SEES the channel values land
+    document.querySelectorAll('[data-slider]').forEach(r => {
+      const inp = r.querySelector('input'); if (inp) inp.value = values[r.dataset.slider] || 0;
+    });
+  }
+}
+
+function tick(t) {
+  requestAnimationFrame(tick);
+  if (camOn && tracker) cameraTick(t);
+  applyChannels();
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    renderer.setSize(w, h, false); cam.aspect = w/h; cam.updateProjectionMatrix();
+  }
+  renderer.render(scene, cam);
+}
+
+load(0);
+tick(0);
+</script>
+</body>
+</html>

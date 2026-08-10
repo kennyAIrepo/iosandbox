@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>riglab — face-puppet contract validation</title>
+<style>
+  /* Three panes = three contract stages:
+     GET (human capture) | MID (ghost + calibration) | TAP (puppet sync).
+     A channel is proven when it lights green in all panes it touches. */
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3;
+          --dim:#8b949e; --ok:#3fb950; --warn:#d29922; --off:#484f58;
+          --mouth:#ff5370; --eyeL:#82aaff; --eyeR:#c792ea; --head:#ffcb6b; --tongue:#f07178; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
+  h1 { font-size:14px; padding:10px 14px; border-bottom:1px solid var(--line); }
+  h1 small { color:var(--dim); font-weight:normal; }
+  #stage { display:grid; grid-template-columns: 480px 1fr 340px; gap:10px; padding:10px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim); }
+  .mirror { position:relative; transform:scaleX(-1); }           /* selfie view */
+  video, #overlay { width:480px; height:360px; display:block; object-fit:fill; }
+  #overlay { position:absolute; inset:0; }
+  #ghost { width:100%; height:360px; display:block; cursor:grab; }
+  .bar { margin:7px 10px; }
+  .bar label { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
+  .bar .tr { height:8px; background:#0a0d12; border-radius:4px; margin-top:2px; overflow:hidden; }
+  .bar .fl { height:100%; width:0%; border-radius:4px; transition:width .05s linear; }
+  #channels { padding:6px 10px; }
+  .ch { display:flex; align-items:center; gap:7px; padding:3px 0; font-size:12px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--off); flex:none; }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); }
+  .ch small { color:var(--dim); margin-left:auto; }
+  #hud { padding:6px 14px; color:var(--dim); font-size:11px; border-top:1px solid var(--line); }
+  button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+           padding:5px 10px; margin:4px; font:inherit; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button.armed { border-color:var(--warn); color:var(--warn); }
+  #calmsg { color:var(--warn); font-size:11px; padding:0 10px 8px; min-height:15px; }
+</style>
+</head>
+<body>
+<h1>riglab <small>— contract validation: GET → MID(ghost+cal) → TAP. Drag the ghost to orbit.</small></h1>
+<div id="stage">
+
+  <div class="pane"><h2>1 · GET — human capture (478 pts, live measures)</h2>
+    <div class="mirror">
+      <video id="vid" autoplay muted playsinline></video>
+      <canvas id="overlay" width="480" height="360"></canvas>
+    </div>
+    <div class="bar"><label><span style="color:var(--mouth)">mouth.open (MAR)</span><span id="v-mouth"></span></label><div class="tr"><div class="fl" id="b-mouth" style="background:var(--mouth)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--tongue)">tongue.out (pixel)</span><span id="v-tongue"></span></label><div class="tr"><div class="fl" id="b-tongue" style="background:var(--tongue)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--eyeL)">eye.L open (EAR | bs)</span><span id="v-eyeL"></span></label><div class="tr"><div class="fl" id="b-eyeL" style="background:var(--eyeL)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--eyeR)">eye.R open (EAR | bs)</span><span id="v-eyeR"></span></label><div class="tr"><div class="fl" id="b-eyeR" style="background:var(--eyeR)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--head)">head yaw / pitch / roll</span><span id="v-head"></span></label></div>
+  </div>
+
+  <div class="pane"><h2>2 · MID — floating landmark ghost + per-user calibration</h2>
+    <canvas id="ghost"></canvas>
+    <div>
+      <button id="btn-neutral">capture neutral (2s)</button>
+      <button id="btn-range">capture range (3s)</button>
+      <button id="btn-export">export cal json</button>
+    </div>
+    <div id="calmsg"></div>
+  </div>
+
+  <div class="pane"><h2>3 · TAP — puppet contract status</h2>
+    <div id="channels">loading contract…</div>
+  </div>
+
+</div>
+<div id="hud">boot…</div>
+
+<script type="module">
+import { initCamera, initTracking } from './sdk/core/tracking.js';
+import { PuppetInput } from './sdk/interaction/puppet.js';
+import { HUMAN_POINTS, probeHuman, normalize } from './sdk/interaction/face-measures.js';
+
+const $ = id => document.getElementById(id);
+const CH_COLOR = { mouth:'#ff5370', eyeL:'#82aaff', eyeR:'#c792ea', head:'#ffcb6b' };
+
+// Feature loops for the ghost/overlay (inner-lip loop = mouth.js INNER_LIP)
+const LIP_LOOP = [78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
+const EYE_L_LOOP = [362,385,387,263,373,380], EYE_R_LOOP = [33,160,158,133,153,144];
+const MOUTH_PTS = Object.values(HUMAN_POINTS.mouth).slice(0,4);   // the 4 contract points
+
+// ── per-user calibration (contract defaults until captured) ──
+let cal = JSON.parse(localStorage.getItem('riglab.cal.v1') || 'null') || {
+  'mouth.open': { neutral:0.05, max:0.7 },
+  'tongue.out': { neutral:0.0,  max:0.55 },
+  'eye.L':      { open:0.30, closed:0.08 },
+  'eye.R':      { open:0.30, closed:0.08 }
+};
+
+let contract = null;
+fetch('./assets/lizard/face.contract.json').then(r => r.json()).then(c => {
+  contract = c; renderContract();
+}).catch(e => { $('channels').textContent = 'contract load failed: ' + e; });
+
+function renderContract() {
+  const el = $('channels'); el.innerHTML = '';
+  for (const ch of contract.channels) {
+    const row = document.createElement('div'); row.className = 'ch';
+    const dot = document.createElement('span');
+    dot.className = 'dot' + (ch.status === 'calibrated' ? ' ok'
+                    : ch.status === 'awaiting_puppet_marks' ? ' warn' : '');
+    const missing = ch.puppet?.points
+      ? Object.values(ch.puppet.points).filter(v => v === null).length : null;
+    row.append(dot, Object.assign(document.createElement('span'), { textContent: ch.id }),
+      Object.assign(document.createElement('small'), {
+        textContent: missing ? `${missing} verts unmarked` : ch.status }));
+    el.append(row);
+  }
+  const note = document.createElement('div');
+  note.style.cssText = 'color:#8b949e;font-size:11px;padding-top:6px';
+  note.textContent = 'amber = human side live, puppet marks pending. Tap-sync pane goes live once marks + response curves exist.';
+  el.append(note);
+}
+
+// ── ghost: orbitable 3D point cloud of the live landmarks ──
+const g = $('ghost'), gc = g.getContext('2d');
+let orbit = { yaw: 0.35, pitch: 0.1, drag: null };
+g.addEventListener('pointerdown', e => { orbit.drag = [e.clientX, e.clientY]; g.setPointerCapture(e.pointerId); });
+g.addEventListener('pointermove', e => {
+  if (!orbit.drag) return;
+  orbit.yaw += (e.clientX - orbit.drag[0]) * 0.008;
+  orbit.pitch = Math.max(-1.2, Math.min(1.2, orbit.pitch + (e.clientY - orbit.drag[1]) * 0.008));
+  orbit.drag = [e.clientX, e.clientY];
+});
+g.addEventListener('pointerup', () => orbit.drag = null);
+
+function drawGhost(lm) {
+  const w = g.width = g.clientWidth, h = g.height = 360;
+  gc.clearRect(0, 0, w, h);
+  if (!lm) { gc.fillStyle = '#484f58'; gc.fillText('no face', w/2-20, h/2); return; }
+  // center on landmark centroid, mirror x for selfie parity, orbit-rotate
+  let cx=0, cy=0, cz=0;
+  for (const p of lm) { cx+=p.x; cy+=p.y; cz+=p.z; }
+  cx/=lm.length; cy/=lm.length; cz/=lm.length;
+  const cyw = Math.cos(orbit.yaw), syw = Math.sin(orbit.yaw);
+  const cpt = Math.cos(orbit.pitch), spt = Math.sin(orbit.pitch);
+  const S = h * 1.35;
+  const proj = p => {
+    let x = -(p.x-cx), y = p.y-cy, z = p.z-cz;          // mirror x
+    let X =  x*cyw + z*syw, Z = -x*syw + z*cyw;         // yaw
+    let Y =  y*cpt - Z*spt;  Z = y*spt + Z*cpt;         // pitch
+    return [w/2 + X*S, h/2 + Y*S, Z];
+  };
+  gc.fillStyle = 'rgba(139,148,158,0.55)';
+  for (let i = 0; i < lm.length; i++) {
+    const [x, y] = proj(lm[i]);
+    gc.fillRect(x, y, 1.5, 1.5);
+  }
+  const loop = (ids, color, close=true) => {
+    gc.strokeStyle = color; gc.lineWidth = 1.5; gc.beginPath();
+    ids.forEach((id, k) => { const [x,y] = proj(lm[id]); k ? gc.lineTo(x,y) : gc.moveTo(x,y); });
+    if (close) gc.closePath();
+    gc.stroke();
+  };
+  loop(LIP_LOOP, CH_COLOR.mouth); loop(EYE_L_LOOP, CH_COLOR.eyeL); loop(EYE_R_LOOP, CH_COLOR.eyeR);
+  // the 4 contract points, emphasized — these are what the puppet marks answer
+  gc.fillStyle = CH_COLOR.mouth;
+  for (const id of MOUTH_PTS) { const [x,y] = proj(lm[id]); gc.beginPath(); gc.arc(x,y,3.5,0,7); gc.fill(); }
+}
+
+// ── overlay on the raw video (coords are unmirrored; CSS mirrors the pane) ──
+const oc = $('overlay').getContext('2d');
+function drawOverlay(lm, mouthPoly) {
+  oc.clearRect(0, 0, 480, 360);
+  if (!lm) return;
+  oc.strokeStyle = CH_COLOR.mouth; oc.lineWidth = 1.5; oc.beginPath();
+  LIP_LOOP.forEach((id, k) => {
+    const x = lm[id].x*480, y = lm[id].y*360; k ? oc.lineTo(x,y) : oc.moveTo(x,y);
+  });
+  oc.closePath(); oc.stroke();
+  oc.fillStyle = CH_COLOR.mouth;
+  for (const id of MOUTH_PTS) oc.fillRect(lm[id].x*480-2.5, lm[id].y*360-2.5, 5, 5);
+  for (const [ids, col] of [[EYE_L_LOOP, CH_COLOR.eyeL], [EYE_R_LOOP, CH_COLOR.eyeR]]) {
+    oc.strokeStyle = col; oc.beginPath();
+    ids.forEach((id, k) => { const x=lm[id].x*480, y=lm[id].y*360; k?oc.lineTo(x,y):oc.moveTo(x,y); });
+    oc.closePath(); oc.stroke();
+  }
+}
+
+// ── calibration ritual ──
+let capture = null;   // {kind, until, acc}
+$('btn-neutral').onclick = () => { capture = { kind:'neutral', until: performance.now()+2000, acc: [] };
+  $('btn-neutral').classList.add('armed'); $('calmsg').textContent = 'hold still, face relaxed, mouth closed…'; };
+$('btn-range').onclick = () => { capture = { kind:'range', until: performance.now()+3000, acc: [] };
+  $('btn-range').classList.add('armed'); $('calmsg').textContent = 'open WIDE, blink hard, tongue OUT…'; };
+$('btn-export').onclick = () => {
+  const blob = new Blob([JSON.stringify({ contract_id: contract?.id, captured: new Date().toISOString(), cal }, null, 1)],
+                        { type: 'application/json' });
+  const a = Object.assign(document.createElement('a'),
+    { href: URL.createObjectURL(blob), download: 'face-cal.json' });
+  a.click();
+};
+
+function feedCapture(m, ears, tongue) {
+  if (!capture) return;
+  capture.acc.push({ mar: m, eL: ears.L, eR: ears.R, t: tongue });
+  if (performance.now() < capture.until) return;
+  const a = capture.acc, n = a.length || 1;
+  if (capture.kind === 'neutral') {
+    cal['mouth.open'].neutral = a.reduce((s,x)=>s+x.mar,0)/n;
+    cal['eye.L'].open = a.reduce((s,x)=>s+x.eL,0)/n;
+    cal['eye.R'].open = a.reduce((s,x)=>s+x.eR,0)/n;
+    $('calmsg').textContent = `neutral set: MAR ${cal['mouth.open'].neutral.toFixed(3)}, EAR L/R ${cal['eye.L'].open.toFixed(2)}/${cal['eye.R'].open.toFixed(2)}`;
+  } else {
+    cal['mouth.open'].max = Math.max(...a.map(x=>x.mar));
+    cal['tongue.out'].max = Math.max(cal['tongue.out'].max, ...a.map(x=>x.t));
+    cal['eye.L'].closed = Math.min(...a.map(x=>x.eL));
+    cal['eye.R'].closed = Math.min(...a.map(x=>x.eR));
+    $('calmsg').textContent = `range set: MAR max ${cal['mouth.open'].max.toFixed(2)}, tongue max ${cal['tongue.out'].max.toFixed(2)}, EAR closed ${cal['eye.L'].closed.toFixed(2)}/${cal['eye.R'].closed.toFixed(2)}`;
+  }
+  localStorage.setItem('riglab.cal.v1', JSON.stringify(cal));
+  capture = null;
+  $('btn-neutral').classList.remove('armed'); $('btn-range').classList.remove('armed');
+}
+
+// ── main loop ──
+const vid = $('vid');
+let faceMs = 0, lastFace = 0;
+(async () => {
+  await initCamera(null, vid);      // (bgVideoEl, detectionVideoEl) — see mouthlab
+  const tracker = await initTracking(vid, {
+    enableHands: false, enablePose: false, faceEvery: 1, faceMatrix: true });
+  const puppet = new PuppetInput(vid);      // production path: smoothed channels
+
+  const bar = (id, v) => { $('b-'+id).style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1)+'%'; };
+  function tick() {
+    const t = performance.now();
+    const frame = tracker.detect();
+    const s = puppet.update(frame, t);
+    const lm = frame?.face?.landmarks || null;
+
+    if (lm) {
+      if (lastFace) faceMs = faceMs*0.9 + (t-lastFace)*0.1;
+      lastFace = t;
+      const aspect = (vid.videoWidth||4)/(vid.videoHeight||3);
+      const raw = probeHuman(lm, aspect);
+
+      const mOpen = normalize(raw['mouth.open'], cal['mouth.open']);
+      const earL = raw['eye.blink.L'], earR = raw['eye.blink.R'];
+      const openL = normalize(earL, { neutral: cal['eye.L'].closed, max: cal['eye.L'].open });
+      const openR = normalize(earR, { neutral: cal['eye.R'].closed, max: cal['eye.R'].open });
+      const tongue = normalize(s.mouth.tongueAmount, cal['tongue.out']);
+
+      bar('mouth', mOpen);  $('v-mouth').textContent = `${raw['mouth.open'].toFixed(3)} → ${mOpen.toFixed(2)}`;
+      bar('tongue', tongue); $('v-tongue').textContent = `${s.mouth.tongueAmount.toFixed(2)} → ${tongue.toFixed(2)}`;
+      bar('eyeL', openL); $('v-eyeL').textContent = `${earL.toFixed(2)} | bs ${s.eyes.left.openAmount.toFixed(2)}`;
+      bar('eyeR', openR); $('v-eyeR').textContent = `${earR.toFixed(2)} | bs ${s.eyes.right.openAmount.toFixed(2)}`;
+      $('v-head').textContent = `${s.head.yaw.toFixed(0)}° / ${s.head.pitch.toFixed(0)}° / ${s.head.roll.toFixed(0)}°`;
+
+      drawOverlay(lm);
+      feedCapture(raw['mouth.open'], { L: earL, R: earR }, s.mouth.tongueAmount);
+    }
+    drawGhost(lm);
+    $('hud').textContent =
+      `face cadence ${faceMs ? faceMs.toFixed(0) : '–'} ms (${faceMs ? (1000/faceMs).toFixed(0) : '–'} Hz) · ` +
+      `matrix ${frame?.face?.matrix ? 'ON' : 'off'} · blendshapes ${frame?.face?.blendshapes ? 'ON' : 'off'} · ` +
+      `mouthOpen=${s.mouth.mouthOpen} tongueOut=${s.mouth.tongueOut} · cal ${localStorage.getItem('riglab.cal.v1') ? 'stored' : 'defaults'}`;
+    requestAnimationFrame(tick);
+  }
+  tick();
+})().catch(e => { $('hud').textContent = 'BOOT FAILED: ' + e; console.error(e); });
+</script>
+</body>
+</html>

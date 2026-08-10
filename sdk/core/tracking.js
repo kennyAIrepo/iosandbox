@@ -80,7 +80,9 @@ export async function createPoseLandmarker(opts = {}) {
   });
 }
 
-/** Create a FaceLandmarker (GPU, VIDEO, 478 pts + 52 blendshapes). */
+/** Create a FaceLandmarker (GPU, VIDEO, 478 pts + 52 blendshapes).
+ *  opts.matrix = true additionally outputs the 4×4 facial transformation
+ *  matrix (head pose) — off by default, costs a little inference time. */
 export async function createFaceLandmarker(opts = {}) {
   const V = await getVision();
   const fs = await getFileset();
@@ -90,25 +92,36 @@ export async function createFaceLandmarker(opts = {}) {
     numFaces: opts.numFaces || 1,
     minFaceDetectionConfidence: 0.5,
     minTrackingConfidence: 0.5,
-    outputFaceBlendshapes: true,
-    outputFacialTransformationMatrixes: false
+    outputFaceBlendshapes: opts.blendshapes !== false,
+    outputFacialTransformationMatrixes: !!opts.matrix
   });
 }
 
+/**
+ * opts (all additive — omitting everything keeps the historical behavior):
+ *   enableHands: false  → skip the HandLandmarker entirely (face-only games)
+ *   enablePose:  false  → skip the PoseLandmarker
+ *   enableFace:  false  → skip the FaceLandmarker
+ *   faceEvery:   N      → run face every Nth detect() call (default 3;
+ *                         use 1 for expression-TRIGGER games where jaw/tongue
+ *                         latency is gameplay, not cosmetics)
+ *   faceMatrix:  true   → face result includes 4×4 head-pose matrix
+ *   poseEvery, numHands, raw, handConfidence, trackingConfidence: as before
+ */
 export async function initTracking(videoEl, opts = {}) {
-  const handLandmarker = await createHandLandmarker({
+  const handLandmarker = opts.enableHands === false ? null : await createHandLandmarker({
     numHands: opts.numHands || 2,
     handConfidence: opts.handConfidence,
     trackingConfidence: opts.trackingConfidence
   });
 
-  const poseLandmarker = await createPoseLandmarker({ numPoses: 1 });
+  const poseLandmarker = opts.enablePose === false ? null : await createPoseLandmarker({ numPoses: 1 });
 
   // Face Landmarker (optional — 478 landmarks + 52 blendshapes)
   let faceLandmarker = null;
   if (opts.enableFace !== false) {
     try {
-      faceLandmarker = await createFaceLandmarker({ numFaces: 1 });
+      faceLandmarker = await createFaceLandmarker({ numFaces: 1, matrix: !!opts.faceMatrix });
       console.log('[tracking] FaceLandmarker loaded (478 pts + 52 blendshapes)');
     } catch (e) {
       console.warn('[tracking] FaceLandmarker not available:', e);
@@ -133,7 +146,7 @@ export async function initTracking(videoEl, opts = {}) {
     frameCount++;
 
     // Hands (every frame)
-    const hr = handLandmarker.detectForVideo(videoEl, now);
+    const hr = handLandmarker ? handLandmarker.detectForVideo(videoEl, now) : {};
     if (hr.landmarks && hr.landmarks.length) {
       result.handCount = hr.landmarks.length;
       result.hands = [];
@@ -154,7 +167,7 @@ export async function initTracking(videoEl, opts = {}) {
     }
 
     // Pose (every Nth frame for performance; body-mesh consumers want 2)
-    if (frameCount % (opts.poseEvery || 4) === 0) {
+    if (poseLandmarker && frameCount % (opts.poseEvery || 4) === 0) {
       const pr = poseLandmarker.detectForVideo(videoEl, now);
       if (pr.landmarks && pr.landmarks.length > 0) {
         // v = per-landmark visibility (0..1) — partial-body inference gates
@@ -166,13 +179,20 @@ export async function initTracking(videoEl, opts = {}) {
       }
     }
 
-    // Face (every 3rd frame — 478 landmarks + 52 blendshapes)
-    if (faceLandmarker && frameCount % 3 === 0) {
+    // Face (every faceEvery-th frame — 478 landmarks + 52 blendshapes).
+    // NOTE: face landmarks are RAW video coords (not selfie-mirrored, unlike
+    // hands above) — pixel-sampling consumers (interaction/mouth.js) rely on that.
+    if (faceLandmarker && frameCount % (opts.faceEvery || 3) === 0) {
       const fr = faceLandmarker.detectForVideo(videoEl, now);
       if (fr.faceLandmarks && fr.faceLandmarks.length > 0) {
+        // .categories unwrap: tasks-vision wraps the 52 blendshapes in a
+        // Classifications object; consumers (face.js, mouth.js) iterate a
+        // plain [{categoryName, score}] array. Passing the wrapper through
+        // was a latent TypeError — face was disabled everywhere until now.
         result.face = {
           landmarks: fr.faceLandmarks[0],
-          blendshapes: fr.faceBlendshapes?.[0] || null
+          blendshapes: fr.faceBlendshapes?.[0]?.categories || null,
+          matrix: fr.facialTransformationMatrixes?.[0]?.data || null
         };
       }
     }

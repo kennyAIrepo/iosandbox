@@ -28,6 +28,12 @@ assets/audio/*.mp3
 *.onnx
 *.engine
 
+# Blender working files — authoring source, not a web deliverable (~57 MB each,
+# and git can't delta them, so every save would add another full copy).
+# The SHIPPING artifact is the exported .glb, which IS committed.
+*.blend
+*.blend[0-9]
+
 # local-only footage samples — never deploy (source-video ToS + size)
 clips/
 tests/_frame_sample.jpg

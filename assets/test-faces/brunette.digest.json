@@ -1,0 +1,478 @@
+{
+ "_contract": "Landmarks are VERTEX INDICES, stable across GLB / Blender / three.js. Valid only while vert_count and geom_sha1 match; any boolean, decimate, or re-export renumbers them.",
+ "file": "brunette.glb",
+ "file_mb": 4.72,
+ "generator": "Ready Player Me",
+ "axes": "blender (x,y,z) = glb(x,-z,y)",
+ "region": null,
+ "vert_count": 8026,
+ "tri_count": 13317,
+ "geom_sha1": "458481b678b582c2",
+ "already_rigged": {
+  "skins": 1,
+  "joints": [
+   67
+  ],
+  "morph_targets": 288,
+  "animations": 0
+ },
+ "parts": [
+  {
+   "node": "EyeLeft",
+   "mesh": "EyeLeft",
+   "primitive": 0,
+   "vert_range": [
+    0,
+    120
+   ],
+   "material": 0
+  },
+  {
+   "node": "EyeRight",
+   "mesh": "EyeRight",
+   "primitive": 0,
+   "vert_range": [
+    120,
+    240
+   ],
+   "material": 0
+  },
+  {
+   "node": "Wolf3D_Head",
+   "mesh": "Wolf3D_Head",
+   "primitive": 0,
+   "vert_range": [
+    240,
+    2402
+   ],
+   "material": 1
+  },
+  {
+   "node": "Wolf3D_Teeth",
+   "mesh": "Wolf3D_Teeth",
+   "primitive": 0,
+   "vert_range": [
+    2402,
+    2486
+   ],
+   "material": 2
+  },
+  {
+   "node": "Wolf3D_Body",
+   "mesh": "Wolf3D_Body",
+   "primitive": 0,
+   "vert_range": [
+    2486,
+    3668
+   ],
+   "material": 3
+  },
+  {
+   "node": "Wolf3D_Outfit_Bottom",
+   "mesh": "Wolf3D_Outfit_Bottom",
+   "primitive": 0,
+   "vert_range": [
+    3668,
+    4920
+   ],
+   "material": 4
+  },
+  {
+   "node": "Wolf3D_Outfit_Footwear",
+   "mesh": "Wolf3D_Outfit_Footwear",
+   "primitive": 0,
+   "vert_range": [
+    4920,
+    5218
+   ],
+   "material": 5
+  },
+  {
+   "node": "Wolf3D_Outfit_Top",
+   "mesh": "Wolf3D_Outfit_Top",
+   "primitive": 0,
+   "vert_range": [
+    5218,
+    6480
+   ],
+   "material": 6
+  },
+  {
+   "node": "Wolf3D_Hair",
+   "mesh": "Wolf3D_Hair",
+   "primitive": 0,
+   "vert_range": [
+    6480,
+    7412
+   ],
+   "material": 7
+  },
+  {
+   "node": "Wolf3D_Glasses",
+   "mesh": "Wolf3D_Glasses",
+   "primitive": 0,
+   "vert_range": [
+    7412,
+    8026
+   ],
+   "material": 8
+  }
+ ],
+ "materials": [
+  "Wolf3D_Eye",
+  "Wolf3D_Skin",
+  "Wolf3D_Teeth",
+  "Wolf3D_Body",
+  "Wolf3D_Outfit_Bottom",
+  "Wolf3D_Outfit_Footwear",
+  "Wolf3D_Outfit_Top",
+  "Wolf3D_Hair",
+  "Wolf3D_Glasses"
+ ],
+ "bbox": {
+  "min": [
+   -0.464,
+   -0.1968,
+   -0.0062
+  ],
+  "max": [
+   0.464,
+   0.1462,
+   1.7657
+  ],
+  "size": [
+   0.9279,
+   0.343,
+   1.7719
+  ],
+  "center": [
+   0.0,
+   -0.0253,
+   0.8798
+  ],
+  "diagonal": 2.0294
+ },
+ "symmetry": {
+  "axis": "x",
+  "axis_index": 0,
+  "plane_offset": -0.00928,
+  "score": 0.8714
+ },
+ "body_axis": "z",
+ "extremes": {
+  "x_min": {
+   "vert": 2711,
+   "co": [
+    -0.464,
+    -0.133,
+    0.9157
+   ]
+  },
+  "x_max": {
+   "vert": 3303,
+   "co": [
+    0.464,
+    -0.133,
+    0.9157
+   ]
+  },
+  "y_min": {
+   "vert": 5019,
+   "co": [
+    -0.1485,
+    -0.1968,
+    0.0307
+   ]
+  },
+  "y_max": {
+   "vert": 6585,
+   "co": [
+    0.0023,
+    0.1462,
+    1.4703
+   ]
+  },
+  "z_min": {
+   "vert": 5004,
+   "co": [
+    -0.1986,
+    0.0264,
+    -0.0062
+   ]
+  },
+  "z_max": {
+   "vert": 6500,
+   "co": [
+    0.0186,
+    -0.0359,
+    1.7657
+   ]
+  }
+ },
+ "profile": {
+  "axis": "z",
+  "range": [
+   -0.0062,
+   1.7657
+  ],
+  "slices": [
+   {
+    "at": -0.0062,
+    "n": 530,
+    "w": 0.4266,
+    "h": 0.2944,
+    "girth": 0.3605,
+    "ctr": [
+     0.0,
+     0.0025,
+     0.1012
+    ]
+   },
+   {
+    "at": 0.2153,
+    "n": 144,
+    "w": 0.407,
+    "h": 0.1363,
+    "girth": 0.2717,
+    "ctr": [
+     0.0,
+     0.0312,
+     0.3426
+    ]
+   },
+   {
+    "at": 0.4368,
+    "n": 262,
+    "w": 0.3913,
+    "h": 0.1728,
+    "girth": 0.282,
+    "ctr": [
+     0.0,
+     -0.0089,
+     0.5472
+    ]
+   },
+   {
+    "at": 0.6583,
+    "n": 242,
+    "w": 0.9083,
+    "h": 0.2176,
+    "girth": 0.563,
+    "ctr": [
+     -0.0,
+     -0.0568,
+     0.7939
+    ]
+   },
+   {
+    "at": 0.8798,
+    "n": 1336,
+    "w": 0.9279,
+    "h": 0.2627,
+    "girth": 0.5953,
+    "ctr": [
+     0.0,
+     -0.093,
+     0.968
+    ]
+   },
+   {
+    "at": 1.1013,
+    "n": 990,
+    "w": 0.7807,
+    "h": 0.2185,
+    "girth": 0.4996,
+    "ctr": [
+     0.0062,
+     -0.0165,
+     1.2066
+    ]
+   },
+   {
+    "at": 1.3227,
+    "n": 1284,
+    "w": 0.4974,
+    "h": 0.2993,
+    "girth": 0.3984,
+    "ctr": [
+     -0.001,
+     0.0039,
+     1.4532
+    ]
+   },
+   {
+    "at": 1.5442,
+    "n": 3238,
+    "w": 0.1944,
+    "h": 0.2883,
+    "girth": 0.2414,
+    "ctr": [
+     0.0001,
+     -0.0958,
+     1.6167
+    ]
+   }
+  ]
+ },
+ "creases_concave": [
+  {
+   "n": 4,
+   "centroid": [
+    0.041,
+    -0.1087,
+    1.6318
+   ],
+   "extent": [
+    0.0262,
+    0.0048,
+    0.0054
+   ],
+   "rep_vert": 1948,
+   "sample_verts": [
+    1873,
+    1907,
+    1948,
+    2006
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    -0.0411,
+    -0.1087,
+    1.6318
+   ],
+   "extent": [
+    0.0258,
+    0.0048,
+    0.0054
+   ],
+   "rep_vert": 1949,
+   "sample_verts": [
+    1874,
+    1908,
+    1949,
+    2007
+   ]
+  },
+  {
+   "n": 3,
+   "centroid": [
+    -0.0564,
+    0.0453,
+    1.5563
+   ],
+   "extent": [
+    0.0196,
+    0.0096,
+    0.0221
+   ],
+   "rep_vert": 6590,
+   "sample_verts": [
+    6590,
+    6681,
+    6830
+   ]
+  },
+  {
+   "n": 2,
+   "centroid": [
+    0.0229,
+    -0.1261,
+    1.5647
+   ],
+   "extent": [
+    0.0013,
+    0.0009,
+    0.0002
+   ],
+   "rep_vert": 770,
+   "sample_verts": [
+    770,
+    781
+   ]
+  }
+ ],
+ "bumps_convex": [
+  {
+   "n": 6,
+   "centroid": [
+    -0.0045,
+    0.0557,
+    1.6622
+   ],
+   "extent": [
+    0.0064,
+    0.0047,
+    0.0074
+   ],
+   "rep_vert": 7333,
+   "sample_verts": [
+    7296,
+    7299,
+    7301,
+    7302,
+    7333,
+    7336
+   ]
+  },
+  {
+   "n": 4,
+   "centroid": [
+    -0.0578,
+    -0.0776,
+    1.4154
+   ],
+   "extent": [
+    0.0108,
+    0.0112,
+    0.0224
+   ],
+   "rep_vert": 6826,
+   "sample_verts": [
+    6826,
+    6837,
+    7120,
+    7121
+   ]
+  },
+  {
+   "n": 3,
+   "centroid": [
+    -0.0458,
+    -0.1298,
+    1.6625
+   ],
+   "extent": [
+    0.0205,
+    0.0259,
+    0.0044
+   ],
+   "rep_vert": 6697,
+   "sample_verts": [
+    6697,
+    6700,
+    7063
+   ]
+  },
+  {
+   "n": 3,
+   "centroid": [
+    -0.1058,
+    0.1001,
+    1.4024
+   ],
+   "extent": [
+    0.0092,
+    0.0176,
+    0.0298
+   ],
+   "rep_vert": 6849,
+   "sample_verts": [
+    6849,
+    6850,
+    7207
+   ]
+  }
+ ]
+}

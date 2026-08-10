@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pipeline — face → contract → puppet</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+          --mouth:#ff5370; --eyeL:#82aaff; --eyeR:#c792ea; --head:#ffcb6b; --tongue:#f07178; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
+  h1 { font-size:14px; padding:9px 14px; border-bottom:1px solid var(--line); }
+  h1 small { color:var(--dim); font-weight:normal; }
+
+  /* ── layout: two large stage panels, mid-calibration strip below ── */
+  #top { display:grid; grid-template-columns: minmax(480px,560px) 1fr; gap:10px; padding:10px 10px 0; }
+  #bottom { display:grid; grid-template-columns: 360px 1fr; gap:10px; padding:10px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim);
+             display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+
+  .mirror { position:relative; transform:scaleX(-1); }
+  video, #overlay { width:100%; aspect-ratio:4/3; display:block; object-fit:fill; }
+  #overlay { position:absolute; inset:0; }
+
+  #puppet { width:100%; height:520px; display:block; }
+  #model-tabs { margin-left:auto; display:flex; gap:4px; }
+  #model-tabs button { padding:3px 10px; }
+
+  #ghost { width:100%; height:230px; display:block; cursor:grab; }
+
+  .bar { margin:6px 10px; }
+  .bar label { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
+  .bar .tr { height:7px; background:#0a0d12; border-radius:4px; margin-top:2px; overflow:hidden; }
+  .bar .fl { height:100%; width:0%; border-radius:4px; }
+
+  button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+           padding:4px 10px; margin:3px; font:inherit; font-size:12px; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button.armed { border-color:var(--warn); color:var(--warn); }
+  button.tab.on { border-color:var(--warn); color:var(--warn); }
+  #calmsg { color:var(--warn); font-size:11px; padding:0 10px 6px; min-height:14px; }
+
+  .chrow { display:grid; grid-template-columns: 12px 100px 1fr; gap:6px; align-items:center;
+           padding:2px 10px; font-size:11.5px; }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--bad); flex:none; }
+  .dot.ok { background:var(--ok); }
+  .chrow select { background:#0a0d12; color:var(--tx); border:1px solid var(--line);
+                  border-radius:4px; font:inherit; font-size:11px; }
+  #channels { display:grid; grid-template-columns:1fr 1fr; padding:4px 0; }
+
+  #busgrid { display:grid; grid-template-columns: 1fr 1fr 1fr; height:100%; }
+  #busgrid > div { padding:8px 10px; font-size:10.5px; white-space:pre-wrap; color:var(--dim);
+                   border-right:1px solid var(--line); max-height:250px; overflow:auto; }
+  #busgrid > div:last-child { border-right:none; }
+  #busgrid b { color:var(--tx); font-size:11px; }
+  #hud { padding:5px 14px 10px; color:var(--dim); font-size:11px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<h1>pipeline <small>— you (raw capture) → contract → puppet. One page: capture, calibrate, and drive without leaving it.</small></h1>
+
+<div id="top">
+  <div class="pane"><h2>1 · YOU — raw landmark capture</h2>
+    <div class="mirror">
+      <video id="vid" autoplay muted playsinline></video>
+      <canvas id="overlay" width="560" height="420"></canvas>
+    </div>
+    <div class="bar"><label><span style="color:var(--mouth)">mouth.open</span><span id="v-mouth"></span></label><div class="tr"><div class="fl" id="b-mouth" style="background:var(--mouth)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--tongue)">tongue.out</span><span id="v-tongue"></span></label><div class="tr"><div class="fl" id="b-tongue" style="background:var(--tongue)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--eyeL)">blink L | R</span><span id="v-blink"></span></label><div class="tr"><div class="fl" id="b-blinkL" style="background:var(--eyeL)"></div></div></div>
+    <div class="bar"><label><span style="color:var(--head)">head yaw/pitch/roll</span><span id="v-head"></span></label></div>
+  </div>
+
+  <div class="pane">
+    <h2>3 · PUPPET — mediated output
+      <span id="tap-info" style="color:var(--dim);font-weight:normal"></span>
+      <div id="model-tabs"></div>
+    </h2>
+    <canvas id="puppet"></canvas>
+    <div id="channels"></div>
+  </div>
+</div>
+
+<div id="bottom">
+  <div class="pane"><h2>2 · MID — ghost + calibration
+      <button id="btn-neutral">neutral 2s</button>
+      <button id="btn-range">range 3s</button>
+      <button id="btn-hand">⇩ handshake</button></h2>
+    <canvas id="ghost"></canvas>
+    <div id="calmsg"></div>
+  </div>
+  <div class="pane"><h2>data bus — the JSON crossing the stages (live)</h2>
+    <div id="busgrid">
+      <div id="bus-values"><b>channel values (1→3 wire)</b> waiting for face…</div>
+      <div id="bus-cal"><b>human_cal (stage 2)</b></div>
+      <div id="bus-align"><b>puppet_alignment (stage 3)</b></div>
+    </div>
+  </div>
+</div>
+<div id="hud">boot…</div>
+
+<script type="module">
+import { HumanCapture } from './sdk/lab/human-capture.js';
+import { GhostView, drawOverlay } from './sdk/lab/ghost-view.js';
+import { CalStore } from './sdk/lab/calibration.js';
+import { PuppetStage, CHANNEL_RULES } from './sdk/lab/puppet-stage.js';
+
+const $ = id => document.getElementById(id);
+const MODELS = [
+  { id:'brunette', name:'human',     url:'assets/test-faces/brunette.glb' },
+  { id:'robot',    name:'humanoid',  url:'assets/test-faces/robot.glb' },
+  { id:'fox',      name:'non-human', url:'assets/test-faces/fox.glb' }
+];
+
+const cal = new CalStore();
+const capture = new HumanCapture($('vid'));
+const ghost = new GhostView($('ghost'), 230);
+const stage = new PuppetStage($('puppet'));
+const oc = $('overlay').getContext('2d');
+
+let contract = null;
+fetch('./assets/lizard/face.contract.json').then(r => r.json()).then(c => contract = c).catch(() => {});
+
+MODELS.forEach((m, i) => {
+  const b = document.createElement('button');
+  b.className = 'tab'; b.textContent = m.name;
+  b.onclick = () => loadModel(i);
+  $('model-tabs').append(b);
+});
+
+function renderChannels() {
+  const el = $('channels'); el.innerHTML = '';
+  for (const ch of CHANNEL_RULES) {
+    const m = stage.current.matches[ch.id];
+    const row = document.createElement('div'); row.className = 'chrow';
+    const dot = document.createElement('span'); dot.className = 'dot' + (m.target ? ' ok' : '');
+    const sel = document.createElement('select');
+    const pool = ch.kind === 'morph' ? stage.current.spec.morphNames : stage.current.spec.boneNames;
+    sel.append(new Option('— none —', ''));
+    for (const n of pool) sel.append(new Option(n, n));
+    sel.value = m.target || '';
+    sel.onchange = () => { stage.setOverride(ch.id, sel.value);
+      dot.className = 'dot' + (sel.value ? ' ok' : ''); busAlign(); };
+    row.append(dot, Object.assign(document.createElement('span'), { textContent: ch.id }), sel);
+    el.append(row);
+  }
+}
+
+async function loadModel(i) {
+  [...$('model-tabs').children].forEach((b, k) => b.classList.toggle('on', k === i));
+  $('tap-info').textContent = 'loading…';
+  await stage.load(MODELS[i].url, MODELS[i].id);
+  $('tap-info').textContent =
+    `${stage.current.spec.morphNames.length} morphs · ${stage.current.spec.boneNames.length} bones`;
+  renderChannels(); busAlign();
+}
+
+$('btn-neutral').onclick = () => { cal.start('neutral', 2000); $('btn-neutral').classList.add('armed'); };
+$('btn-range').onclick = () => { cal.start('range', 3000); $('btn-range').classList.add('armed'); };
+$('btn-hand').onclick = () => cal.download(contract?.id, stage.alignment());
+
+const busCal = () => $('bus-cal').innerHTML =
+  '<b>human_cal (stage 2)</b>\n' + JSON.stringify(cal.cal, null, 1);
+const busAlign = () => $('bus-align').innerHTML =
+  '<b>puppet_alignment (stage 3)</b>\n' +
+  JSON.stringify({ puppet: stage.current?.id, contract: contract?.id,
+                   matches: stage.alignment() }, null, 1);
+busCal();
+
+const bar = (id, v) => $('b-'+id).style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1)+'%';
+let busThrottle = 0;
+
+function tick(t) {
+  requestAnimationFrame(tick);
+  if (capture.booted) {
+    const faced = capture.tick(t, cal.cal);
+    if (faced) {
+      const v = capture.values;
+      if (cal.feed(capture.raw)) {
+        $('btn-neutral').classList.remove('armed'); $('btn-range').classList.remove('armed');
+        busCal();
+      }
+      $('calmsg').textContent = cal.message;
+      bar('mouth', v['mouth.open']); $('v-mouth').textContent = v['mouth.open'].toFixed(2);
+      bar('tongue', v['tongue.out']); $('v-tongue').textContent = v['tongue.out'].toFixed(2);
+      bar('blinkL', v['eye.blink.L']);
+      $('v-blink').textContent = `${v['eye.blink.L'].toFixed(2)} | ${v['eye.blink.R'].toFixed(2)}`;
+      const h = v['head.rot'];
+      $('v-head').textContent = `${h.yaw.toFixed(0)}° ${h.pitch.toFixed(0)}° ${h.roll.toFixed(0)}°`;
+      drawOverlay(oc, capture.landmarks, 560, 420);
+      stage.applyValues(v);                    // THE TAP — same keyed values, same frame
+      if (t - busThrottle > 250) {
+        busThrottle = t;
+        $('bus-values').innerHTML = '<b>channel values (1→3 wire)</b>\n' +
+          JSON.stringify({ ...v, 'head.rot': { yaw:+h.yaw.toFixed(1), pitch:+h.pitch.toFixed(1), roll:+h.roll.toFixed(1) } }, null, 1);
+      }
+    }
+    ghost.draw(capture.landmarks);
+    $('hud').textContent =
+      `face ${capture.faceMs ? capture.faceMs.toFixed(0)+' ms ('+(1000/capture.faceMs).toFixed(0)+' Hz)' : '–'} · ` +
+      `matrix ${capture.hasMatrix ? 'ON' : 'off'} · cal ${cal.stored ? 'stored' : 'defaults'} · ` +
+      `puppet ${stage.current?.id || 'loading'}`;
+  }
+  stage.render();
+}
+
+(async () => {
+  await loadModel(0);
+  await capture.boot();
+  $('hud').textContent = 'tracker live — capture → calibrate → drive, all here';
+})().catch(e => { $('hud').textContent = 'BOOT FAILED: ' + e; console.error(e); });
+tick(0);
+</script>
+</body>
+</html>
