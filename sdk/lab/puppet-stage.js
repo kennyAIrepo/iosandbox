@@ -21,14 +21,34 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-/** Contract channel → puppet-target matching rules (tier A). */
+/** Contract channel → puppet-target matching rules (tier A).
+ *  rx is an ORDERED array: earlier patterns win. This matters — e.g. RPM
+ *  avatars expose both jawOpen (the real jaw rotation) and mouthOpen (a
+ *  weak lips-apart shape); matching mouthOpen first gives the barely-open
+ *  avatar mouth while the user is wide open. */
 export const CHANNEL_RULES = [
-  { id: 'mouth.open',  kind: 'morph', rx: /jaw_?open|mouth_?open|viseme_aa/i },
-  { id: 'tongue.out',  kind: 'morph', rx: /tongue_?out/i },
-  { id: 'eye.blink.L', kind: 'morph', rx: /eye_?blink_?left|blink_?l\b|eyesclosed.*l/i },
-  { id: 'eye.blink.R', kind: 'morph', rx: /eye_?blink_?right|blink_?r\b/i },
-  { id: 'smile',       kind: 'morph', rx: /mouth_?smile(_?left)?|smile/i },
-  { id: 'head.rot',    kind: 'bone',  rx: /^(mixamorig)?head$|_head(_\d+)?$|^b_head/i }
+  { id: 'mouth.open',      kind: 'morph', rx: [/^jaw_?open$/i, /jaw_?open/i, /mouth_?open/i, /viseme_aa/i, /surprised/i] },
+  { id: 'mouth.stretch.L', kind: 'morph', rx: [/mouth_?stretch_?l(eft)?$/i] },
+  { id: 'mouth.stretch.R', kind: 'morph', rx: [/mouth_?stretch_?r(ight)?$/i] },
+  { id: 'mouth.smile.L',   kind: 'morph', rx: [/mouth_?smile_?l(eft)?$/i, /smile/i] },
+  { id: 'mouth.smile.R',   kind: 'morph', rx: [/mouth_?smile_?r(ight)?$/i] },
+  { id: 'mouth.pucker',    kind: 'morph', rx: [/mouth_?pucker/i, /viseme_(u|ou)/i] },
+  { id: 'tongue.out',      kind: 'morph', rx: [/tongue_?out/i] },
+  { id: 'eye.blink.L',     kind: 'morph', rx: [/eye_?blink_?left/i, /blink_?l\b/i, /eyesclosed.*l/i] },
+  { id: 'eye.blink.R',     kind: 'morph', rx: [/eye_?blink_?right/i, /blink_?r\b/i] },
+  { id: 'eye.wide.L',      kind: 'morph', rx: [/eye_?wide_?l(eft)?$/i] },
+  { id: 'eye.wide.R',      kind: 'morph', rx: [/eye_?wide_?r(ight)?$/i] },
+  { id: 'brow.inner.up',   kind: 'morph', rx: [/brow_?inner_?up/i, /brows?_?up/i] },
+  { id: 'brow.up.L',       kind: 'morph', rx: [/brow_?outer_?up_?l(eft)?$/i] },
+  { id: 'brow.up.R',       kind: 'morph', rx: [/brow_?outer_?up_?r(ight)?$/i] },
+  { id: 'brow.down.L',     kind: 'morph', rx: [/brow_?down_?l(eft)?$/i, /angry/i] },
+  { id: 'brow.down.R',     kind: 'morph', rx: [/brow_?down_?r(ight)?$/i] },
+  { id: 'cheek.raise.L',   kind: 'morph', rx: [/cheek_?squint_?l(eft)?$/i] },
+  { id: 'cheek.raise.R',   kind: 'morph', rx: [/cheek_?squint_?r(ight)?$/i] },
+  { id: 'cheek.puff',      kind: 'morph', rx: [/cheek_?puff/i] },
+  { id: 'nose.sneer.L',    kind: 'morph', rx: [/nose_?sneer_?l(eft)?$/i] },
+  { id: 'nose.sneer.R',    kind: 'morph', rx: [/nose_?sneer_?r(ight)?$/i] },
+  { id: 'head.rot',        kind: 'bone',  rx: [/^(mixamorig)?head$/i, /_head(_\d+)?$/i, /^b_head/i] }
 ];
 
 export class PuppetStage {
@@ -96,7 +116,12 @@ export class PuppetStage {
     const matches = {};
     for (const ch of CHANNEL_RULES) {
       const pool = ch.kind === 'morph' ? spec.morphNames : spec.boneNames;
-      matches[ch.id] = { kind: ch.kind, target: pool.find(n => ch.rx.test(n)) || null };
+      let target = null;
+      for (const rx of ch.rx) {                    // ordered: first pattern wins
+        target = pool.find(n => rx.test(n)) || null;
+        if (target) break;
+      }
+      matches[ch.id] = { kind: ch.kind, target };
     }
     return matches;
   }

@@ -33,6 +33,14 @@
   .bar label { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
   .bar .tr { height:7px; background:#0a0d12; border-radius:4px; margin-top:2px; overflow:hidden; }
   .bar .fl { height:100%; width:0%; border-radius:4px; }
+  /* dynamic channel meter bank — grows with the contract, stays compact */
+  #meters { max-height:230px; overflow-y:auto; display:grid; grid-template-columns:1fr 1fr; gap:0 8px; padding:4px 10px 0; }
+  .m { margin:2px 0; }
+  .m label { display:flex; justify-content:space-between; color:var(--dim); font-size:10px; }
+  .m .tr { height:5px; background:#0a0d12; border-radius:3px; margin-top:1px; overflow:hidden; position:relative; }
+  .m .fl { height:100%; width:0%; border-radius:3px; }
+  .m.signed .tr::after { content:''; position:absolute; left:50%; top:-1px; bottom:-1px;
+    width:1px; background:var(--line); }
 
   button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
            padding:4px 10px; margin:3px; font:inherit; font-size:12px; cursor:pointer; }
@@ -72,9 +80,7 @@
       <video id="vid" autoplay muted playsinline></video>
       <canvas id="overlay" width="560" height="420"></canvas>
     </div>
-    <div class="bar"><label><span style="color:var(--mouth)">mouth.open</span><span id="v-mouth"></span></label><div class="tr"><div class="fl" id="b-mouth" style="background:var(--mouth)"></div></div></div>
-    <div class="bar"><label><span style="color:var(--tongue)">tongue.out</span><span id="v-tongue"></span></label><div class="tr"><div class="fl" id="b-tongue" style="background:var(--tongue)"></div></div></div>
-    <div class="bar"><label><span style="color:var(--eyeL)">blink L | R</span><span id="v-blink"></span></label><div class="tr"><div class="fl" id="b-blinkL" style="background:var(--eyeL)"></div></div></div>
+    <div id="meters"></div>
     <div class="bar"><label><span style="color:var(--head)">head yaw/pitch/roll</span><span id="v-head"></span></label></div>
   </div>
 
@@ -174,7 +180,34 @@ const busAlign = () => $('bus-align').innerHTML =
                    matches: stage.alignment() }, null, 1);
 busCal();
 
-const bar = (id, v) => $('b-'+id).style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1)+'%';
+/* dynamic meter bank: a bar per scalar channel, created on first sight.
+   signed channels (gaze.*) render from a center line. */
+const meterColor = id =>
+  id.startsWith('mouth') ? 'var(--mouth)' : id.startsWith('tongue') ? 'var(--tongue)' :
+  id.startsWith('eye.blink') ? 'var(--eyeL)' : id.startsWith('eye') ? 'var(--eyeR)' :
+  id.startsWith('brow') ? 'var(--head)' : id.startsWith('cheek') ? 'var(--tongue)' :
+  id.startsWith('gaze') ? 'var(--eyeR)' : 'var(--dim)';
+const meters = {};
+function meter(id, v) {
+  let m = meters[id];
+  if (!m) {
+    const signed = id.startsWith('gaze');
+    const div = document.createElement('div');
+    div.className = 'm' + (signed ? ' signed' : '');
+    div.innerHTML = `<label><span style="color:${meterColor(id)}">${id}</span><span></span></label>` +
+                    `<div class="tr"><div class="fl" style="background:${meterColor(id)}"></div></div>`;
+    $('meters').append(div);
+    m = meters[id] = { fl: div.querySelector('.fl'), num: div.querySelector('label span:last-child'), signed };
+  }
+  if (m.signed) {                      // -1..1 from center
+    const c = Math.max(-1, Math.min(1, v));
+    m.fl.style.marginLeft = c < 0 ? (50 + c*50) + '%' : '50%';
+    m.fl.style.width = Math.abs(c)*50 + '%';
+  } else {
+    m.fl.style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1) + '%';
+  }
+  m.num.textContent = v.toFixed(2);
+}
 let busThrottle = 0;
 
 function tick(t) {
@@ -188,10 +221,9 @@ function tick(t) {
         busCal();
       }
       $('calmsg').textContent = cal.message;
-      bar('mouth', v['mouth.open']); $('v-mouth').textContent = v['mouth.open'].toFixed(2);
-      bar('tongue', v['tongue.out']); $('v-tongue').textContent = v['tongue.out'].toFixed(2);
-      bar('blinkL', v['eye.blink.L']);
-      $('v-blink').textContent = `${v['eye.blink.L'].toFixed(2)} | ${v['eye.blink.R'].toFixed(2)}`;
+      for (const [id, val] of Object.entries(v)) {
+        if (typeof val === 'number') meter(id, val);
+      }
       const h = v['head.rot'];
       $('v-head').textContent = `${h.yaw.toFixed(0)}° ${h.pitch.toFixed(0)}° ${h.roll.toFixed(0)}°`;
       drawOverlay(oc, capture.landmarks, 560, 420);
@@ -205,6 +237,7 @@ function tick(t) {
     ghost.draw(capture.landmarks);
     $('hud').textContent =
       `face ${capture.faceMs ? capture.faceMs.toFixed(0)+' ms ('+(1000/capture.faceMs).toFixed(0)+' Hz)' : '–'} · ` +
+      `channel math ${capture.probeUs ? capture.probeUs.toFixed(0) : '–'} µs/frame (all ${Object.keys(capture.values).length} channels) · ` +
       `matrix ${capture.hasMatrix ? 'ON' : 'off'} · cal ${cal.stored ? 'stored' : 'defaults'} · ` +
       `puppet ${stage.current?.id || 'loading'}`;
   }

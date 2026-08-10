@@ -113,17 +113,46 @@
       "map": { "gain": 1.0 }
     },
     {
-      "id": "cheek.puff",
-      "status": "v2",
-      "human": { "probe": "blendshape", "source": "cheekPuff" },
-      "puppet": { "note": "candidate: gecko throat/dewlap pouch scale" },
+      "id": "mouth.stretch.L+R",
+      "status": "human_live",
+      "human": {
+        "probe": "landmark_ratio", "formula": "mouthWidth",
+        "points": { "outerCornerL": 61, "outerCornerR": 291, "cheekR": 234, "cheekL": 454 },
+        "cal": { "neutral": 0.34, "max": 0.46, "per_user": true },
+        "note": "lateral opening toward the cheeks; one calibrated width measure fans to both corner channels (per-corner asymmetric split is a later human-capture change, contract shape unchanged)"
+      },
+      "puppet": { "note": "tier-A morphs mouthStretchLeft/Right; lizard: mouth-corner verts could join the jaw sweep later" },
       "target": null
     },
     {
-      "id": "mouth.width",
-      "status": "v2",
-      "human": { "probe": "landmark_ratio", "formula": "mouthWidth", "points": { "outerCornerL": 61, "outerCornerR": 291, "cheekR": 234, "cheekL": 454 } },
-      "puppet": { "note": "lizard slit is rigid; would need corner shape keys" },
+      "id": "blendshape_fringe",
+      "status": "human_live",
+      "human": {
+        "probe": "blendshape",
+        "note": "identity-normalized 0..1 straight from the SAME FaceLandmarker call (zero added inference; One-Euro only). Channel -> ARKit-style score name:",
+        "channels": {
+          "mouth.smile.L": "mouthSmileLeft", "mouth.smile.R": "mouthSmileRight",
+          "mouth.pucker": "mouthPucker",
+          "brow.inner.up": "browInnerUp",
+          "brow.up.L": "browOuterUpLeft", "brow.up.R": "browOuterUpRight",
+          "brow.down.L": "browDownLeft", "brow.down.R": "browDownRight",
+          "cheek.raise.L": "cheekSquintLeft", "cheek.raise.R": "cheekSquintRight",
+          "cheek.puff": "cheekPuff",
+          "eye.wide.L": "eyeWideLeft", "eye.wide.R": "eyeWideRight",
+          "nose.sneer.L": "noseSneerLeft", "nose.sneer.R": "noseSneerRight"
+        }
+      },
+      "puppet": { "note": "tier-A: same-name morphs (RPM auto-green). Lizard candidates: cheek.puff -> throat/dewlap pouch, brow/sneer -> none (no such anatomy), eye.wide -> pupil scale" },
+      "target": null
+    },
+    {
+      "id": "gaze.yaw+pitch",
+      "status": "human_live",
+      "human": {
+        "probe": "blendshape_derived", "formula": "gazeFromBlend (8 eyeLook* scores -> signed yaw/pitch)",
+        "note": "pupil direction, [-1,1]; identity-free, no iris landmark math needed"
+      },
+      "puppet": { "note": "tier-A: eyeLook* morphs or eye bones; lizard: eye-bulge bones later" },
       "target": null
     }
   ]

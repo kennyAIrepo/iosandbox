@@ -115,3 +115,43 @@ export function probeHuman(lm, aspect) {
     // head.* comes from the transform matrix (puppet.js _updateHead).
   };
 }
+
+/* ── Blendshape-sourced channels — ZERO added inference ─────────
+ * The FaceLandmarker already computes all 52 ARKit-style scores every
+ * frame (tracking.js: outputFaceBlendshapes defaults ON); consuming
+ * more of them costs a dictionary lookup, not model time. Geometry
+ * probes stay for channels where calibrated precision matters
+ * (mouth.open/width); blendshapes cover the expressive fringe —
+ * they are identity-normalized 0..1 out of the box.
+ */
+export const BLEND_CHANNELS = {
+  "mouth.smile.L": "mouthSmileLeft",   "mouth.smile.R": "mouthSmileRight",
+  "mouth.pucker":  "mouthPucker",
+  "brow.inner.up": "browInnerUp",
+  "brow.up.L":     "browOuterUpLeft",  "brow.up.R":     "browOuterUpRight",
+  "brow.down.L":   "browDownLeft",     "brow.down.R":   "browDownRight",
+  "cheek.raise.L": "cheekSquintLeft",  "cheek.raise.R": "cheekSquintRight",
+  "cheek.puff":    "cheekPuff",
+  "eye.wide.L":    "eyeWideLeft",      "eye.wide.R":    "eyeWideRight",
+  "nose.sneer.L":  "noseSneerLeft",    "nose.sneer.R":  "noseSneerRight"
+};
+
+/** blendshapes array → {categoryName: score} dict (one pass). */
+export function blendDict(blendshapes) {
+  const d = {};
+  if (blendshapes) for (const b of blendshapes) d[b.categoryName] = b.score;
+  return d;
+}
+
+/**
+ * Gaze from the 8 eyeLook* scores — signed, [-1,1]-ish, identity-free.
+ * yaw > 0 = looking toward subject-left (mirrored-view screen-right).
+ */
+export function gazeFromBlend(d) {
+  return {
+    yaw: ((d.eyeLookOutLeft || 0) + (d.eyeLookInRight || 0)
+        - (d.eyeLookInLeft || 0) - (d.eyeLookOutRight || 0)) / 2,
+    pitch: ((d.eyeLookUpLeft || 0) + (d.eyeLookUpRight || 0)
+          - (d.eyeLookDownLeft || 0) - (d.eyeLookDownRight || 0)) / 2
+  };
+}

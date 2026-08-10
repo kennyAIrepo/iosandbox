@@ -12,6 +12,7 @@ const KEY = 'riglab.cal.v1';
 
 export const DEFAULT_CAL = {
   'mouth.open': { neutral: 0.05, max: 0.7 },
+  'mouth.width': { neutral: 0.34, max: 0.46 },   // corners toward cheeks (smile-wide)
   'tongue.out': { neutral: 0.0, max: 0.55 },
   'eye.L': { open: 0.30, closed: 0.08 },
   'eye.R': { open: 0.30, closed: 0.08 }
@@ -32,30 +33,36 @@ export class CalStore {
     this.capture = { kind, until: performance.now() + ms, acc: [] };
     this.message = kind === 'neutral'
       ? 'hold still, face relaxed, mouth closed…'
-      : 'open WIDE, blink hard, tongue OUT…';
+      : 'open WIDE, smile WIDE, blink hard, tongue OUT…';
   }
 
   /** Feed raw measures each face frame; resolves the ritual when time is up. */
   feed(raw) {
     const c = this.capture;
     if (!c) return false;
-    c.acc.push({ mar: raw['mouth.open'], eL: raw['eye.blink.L'], eR: raw['eye.blink.R'],
+    c.acc.push({ mar: raw['mouth.open'], mw: raw['mouth.width'] || 0,
+                 eL: raw['eye.blink.L'], eR: raw['eye.blink.R'],
                  t: raw['tongue.out'] || 0 });
     if (performance.now() < c.until) return false;
 
     const a = c.acc, n = a.length || 1;
+    if (!this.cal['mouth.width']) this.cal['mouth.width'] = { neutral: 0.34, max: 0.46 };
     if (c.kind === 'neutral') {
       this.cal['mouth.open'].neutral = a.reduce((s, x) => s + x.mar, 0) / n;
+      this.cal['mouth.width'].neutral = a.reduce((s, x) => s + x.mw, 0) / n;
       this.cal['eye.L'].open = a.reduce((s, x) => s + x.eL, 0) / n;
       this.cal['eye.R'].open = a.reduce((s, x) => s + x.eR, 0) / n;
       this.message = `neutral set: MAR ${this.cal['mouth.open'].neutral.toFixed(3)}, ` +
+        `width ${this.cal['mouth.width'].neutral.toFixed(3)}, ` +
         `EAR ${this.cal['eye.L'].open.toFixed(2)}/${this.cal['eye.R'].open.toFixed(2)}`;
     } else {
       this.cal['mouth.open'].max = Math.max(...a.map(x => x.mar));
+      this.cal['mouth.width'].max = Math.max(...a.map(x => x.mw));
       this.cal['tongue.out'].max = Math.max(this.cal['tongue.out'].max, ...a.map(x => x.t));
       this.cal['eye.L'].closed = Math.min(...a.map(x => x.eL));
       this.cal['eye.R'].closed = Math.min(...a.map(x => x.eR));
       this.message = `range set: MAR max ${this.cal['mouth.open'].max.toFixed(2)}, ` +
+        `width max ${this.cal['mouth.width'].max.toFixed(2)}, ` +
         `tongue ${this.cal['tongue.out'].max.toFixed(2)}, ` +
         `EAR closed ${this.cal['eye.L'].closed.toFixed(2)}/${this.cal['eye.R'].closed.toFixed(2)}`;
     }
