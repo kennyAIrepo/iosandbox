@@ -2,6 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "rewrites": [
     { "source": "/play", "destination": "/play.html" },
+    { "source": "/riglab", "destination": "/riglab.html" },
     { "source": "/worlds", "destination": "/graph.html" },
     { "source": "/you", "destination": "/graph.html" },
     { "source": "/build", "destination": "/world.html" },
