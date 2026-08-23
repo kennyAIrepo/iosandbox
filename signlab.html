@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>signlab — sign dictation: any video source → sign contract → captions</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --warn:#d29922; --hand:#3fb950; --seg:#82aaff; --conf:#c792ea; --tok:#ffcb6b; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
+  h1 { font-size:14px; padding:9px 14px; border-bottom:1px solid var(--line); }
+  h1 small { color:var(--dim); font-weight:normal; }
+  #grid { display:grid; grid-template-columns:minmax(420px,500px) 1fr; gap:10px; padding:10px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim);
+             display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .pane h2 .right { margin-left:auto; display:flex; gap:4px; }
+  #viewwrap { position:relative; }
+  #mirrorbox { position:relative; }
+  #mirrorbox.mirror { transform:scaleX(-1); }
+  video, #overlay { width:100%; aspect-ratio:4/3; display:block; object-fit:fill; }
+  video { background:#000; }
+  /* overlay must stay transparent — it sits ON TOP of the video; giving it a
+     background paints over the camera footage (the black-screen regression) */
+  #overlay { position:absolute; inset:0; background:transparent; }
+  #viewwrap.droptarget::after { content:'drop video to caption it'; position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center; background:rgba(63,185,80,0.15);
+    border:2px dashed var(--hand); color:var(--hand); font-size:14px; pointer-events:none; }
+  #meters { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; padding:6px 10px; }
+  .m { margin:2px 0; }
+  .m label { display:flex; justify-content:space-between; color:var(--dim); font-size:10.5px; }
+  .m .tr { height:6px; background:#0a0d12; border-radius:3px; margin-top:1px; overflow:hidden; }
+  .m .fl { height:100%; width:0%; border-radius:3px; }
+  #stage { position:relative; height:375px; background:#080b0f; }
+  #stage .hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+                 color:#2e4a6e; font-size:12px; text-align:center; padding:0 40px; }
+  #tokens { padding:6px 10px; color:var(--dim); white-space:pre; max-height:150px; overflow:hidden;
+            border-top:1px solid var(--line); font-size:11px; }
+  #stats { padding:6px 10px; color:var(--dim); font-size:11.5px; border-top:1px solid var(--line); }
+  #stats b { color:var(--warn); }
+  #log { padding:6px 10px; color:var(--dim); white-space:pre; max-height:130px; overflow:hidden;
+         border-top:1px solid var(--line); font-size:11px; }
+  button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+           padding:3px 10px; font:inherit; font-size:12px; cursor:pointer; }
+  button.on { border-color:var(--warn); color:var(--warn); }
+  #hud { padding:5px 14px 10px; color:var(--dim); font-size:11px; }
+</style>
+</head>
+<body>
+<h1>signlab <small>— sign dictation lane: ANY video source (camera · tab/screen capture · file drop · ?video=URL) → normalized features → segmenter → temporal classifier (ONNX/WASM) → captions. All local; frames never leave the tab. ?toy=1 runs the ORT latency probe, &amp;autostart=1 boots the camera headless.</small></h1>
+<div id="grid">
+  <div class="pane">
+    <h2>SOURCE — features + segmentation
+      <div class="right">
+        <button id="go">camera</button>
+        <button id="cap" title="caption any tab/window — YouTube, Zoom, a dataset clip">capture tab</button>
+        <button id="file">video file</button>
+        <input id="filein" type="file" accept="video/*" style="display:none">
+      </div>
+    </h2>
+    <div id="viewwrap">
+      <div id="mirrorbox">
+        <video id="vid" autoplay muted playsinline></video>
+        <canvas id="overlay" width="500" height="375"></canvas>
+      </div>
+    </div>
+    <div id="meters"></div>
+    <div id="log"></div>
+  </div>
+  <div class="pane">
+    <h2>CAPTIONS — mediated output
+      <div class="right">
+        <button id="float" title="floats above other windows — Zoom, a video call — not just this tab">float captions</button>
+        <button id="voice">voice: off</button>
+      </div>
+    </h2>
+    <div id="stage"><div class="hint">recognized signs land here as captions —
+      SignNet v1 loads by default (2,731 ASL Citizen glosses, 74.5% top-1 unseen-signer).
+      Pass ?nomodel=1 for features-only debugging, or ?model=&amp;labels= to test another checkpoint</div></div>
+    <div id="stats">idle</div>
+    <div id="tokens"></div>
+  </div>
+</div>
+<div id="hud">boot…</div>
+
+<script type="module">
+import { initCamera, initTracking, POSE_MODELS } from './sdk/core/tracking.js';
+import { SignRecognizer } from './sdk/recognition/sign-recognizer.js';
+import { CaptionStrip, Speaker } from './sdk/recognition/captions.js';
+import { PipCaptions } from './sdk/recognition/pip-captions.js';
+import { SIGN_POSE_IDX, FEATURE_DIM, FEATURIZER_VERSION } from './sdk/recognition/sign-landmarks.js';
+
+const $ = id => document.getElementById(id);
+const qp = new URLSearchParams(location.search);
+// knobs: ?start=0.6 &stop=0.22 &quiet=400 (segmenter) · ?model=URL &labels=URL
+// &conf=0.5 (classifier) · ?video=URL (CORS-enabled clip) · ?toy=1 · &autostart=1
+const lines = [];
+const log = m => { lines.unshift(m); $('log').textContent = lines.slice(0, 9).join('\n'); console.log('[signlab] ' + m); };
+const tokLines = [];
+const tokLog = m => { tokLines.unshift(m); $('tokens').textContent = tokLines.slice(0, 11).join('\n'); };
+
+// two caption sinks: the stage panel AND a subtitle strip over the video itself
+const captions = new CaptionStrip($('stage'));
+const subtitles = new CaptionStrip($('viewwrap'), { maxLines: 2 });
+const speaker = new Speaker();
+
+// ── floating caption window: the always-on-top sink, separate from the
+// tab. Only relevant once a source other than "camera" is active — that's
+// when captions need to float above whatever the user is actually
+// looking at (a captured Zoom/Teams window, a played-back file). ──
+const pip = new PipCaptions();
+if (!pip.available) {
+  $('float').disabled = true;
+  $('float').title = 'Document Picture-in-Picture not supported in this browser (Chrome/Edge only)';
+} else {
+  $('float').onclick = async () => {
+    if (pip.open_) { pip.close(); $('float').classList.remove('on'); $('float').textContent = 'float captions'; return; }
+    try {
+      await pip.open();                                  // must be the first await after the click
+      $('float').classList.add('on'); $('float').textContent = 'floating ⤢';
+      pip.onClose(() => { $('float').classList.remove('on'); $('float').textContent = 'float captions'; });
+      log('caption window floating');
+    } catch (e) { log('float captions failed: ' + e.message); }
+  };
+}
+$('voice').onclick = () => {
+  speaker.prime();
+  speaker.enabled = !speaker.enabled;
+  $('voice').textContent = 'voice: ' + (speaker.enabled ? 'on' : 'off');
+  $('voice').classList.toggle('on', speaker.enabled);
+};
+
+// ── recognizer — defaults to the trained SignNet v1 (2,731 ASL Citizen
+// glosses, 74.5% top-1 / 93.6% top-5 unseen-signer, see the blueprint §9),
+// hosted on a persistent Modal endpoint (tools/sign-train/serve_model.py).
+// ?model=/&labels= still override for testing future checkpoints;
+// ?nomodel=1 forces features-only mode (debugging the capture/segmenter
+// lane without touching the network). Versioned /v1/ path is the cache
+// bust: a v2 checkpoint ships at a new path, v1-cached clients untouched. ──
+const DEFAULT_MODEL = 'https://kennyairepo--hopeos-sign-serve-web.modal.run/v1/signnet.onnx';
+const DEFAULT_LABELS = 'https://kennyairepo--hopeos-sign-serve-web.modal.run/v1/labels.json';
+let labels = null;
+const modelUrl = qp.get('nomodel') ? null : (qp.get('model') || DEFAULT_MODEL);
+const labelsUrl = qp.get('nomodel') ? null : (qp.get('labels') || DEFAULT_LABELS);
+if (labelsUrl) {
+  try { labels = await (await fetch(labelsUrl)).json(); }
+  catch (e) { log('labels fetch failed: ' + e.message); }
+}
+const signer = new SignRecognizer({
+  model: modelUrl,
+  labels,
+  // 0.35, not 0.5: live confidences run lower than offline validation
+  // (serve segments crop differently than training's whole-clip windows) —
+  // ground-truth clip eval showed correct answers at 23-39% dying at the
+  // old gate. ?conf= overrides.
+  minConf: parseFloat(qp.get('conf')) || 0.35,
+  buffer: {
+    ...(qp.get('start') ? { startEnergy: parseFloat(qp.get('start')) } : {}),
+    ...(qp.get('stop') ? { stopEnergy: parseFloat(qp.get('stop')) } : {}),
+    ...(qp.get('quiet') ? { quietMs: parseFloat(qp.get('quiet')) } : {})
+  }
+});
+signer.on('segment', seg => {
+  log(`segment ${(seg.durMs / 1000).toFixed(2)}s · ${seg.length} slots · peak ${seg.peakEnergy.toFixed(2)}`);
+  if (!signer.classifier) subtitles.push('▢', { dim: true });
+});
+signer.on('token', (gloss, conf, meta) => {
+  tokLog(`${gloss}  ${(conf * 100).toFixed(0)}%  ${meta.ms.toFixed(1)}ms`);
+  captions.push(gloss, { conf });
+  subtitles.push(gloss);
+  pip.push(gloss, { conf });                              // no-op if not floating
+  speaker.speak(gloss);
+});
+signer.on('lowconf', (gloss, conf) => {
+  tokLog(`(${gloss}? ${(conf * 100).toFixed(0)}% — below gate)`);
+  captions.push(`${gloss}?`, { dim: true, conf });
+  pip.push(`${gloss}?`, { dim: true, conf });
+});
+signer.on('error', e => log('classify error: ' + e.message));
+try {
+  await signer.init();
+  if (signer.classifier) log('classifier ready (wasm)');
+} catch (e) { log('classifier load failed: ' + e.message); }
+
+// ── toy ORT probe (?toy=1) — no video source needed ──
+if (qp.get('toy')) {
+  try {
+    const { buildToyModel } = await import('./sdk/recognition/toy-model.js');
+    const { SignClassifier } = await import('./sdk/recognition/sign-classifier.js');
+    const t0 = performance.now();
+    const bytes = buildToyModel();
+    log(`toy model built: ${(bytes.length / 1e6).toFixed(2)} MB in ${(performance.now() - t0).toFixed(0)}ms`);
+    const clf = new SignClassifier({ model: bytes, T: 64, F: FEATURE_DIM });
+    await clf.load();
+    const win = { data: new Float32Array(64 * FEATURE_DIM).map(() => 0.1), length: 64 };
+    for (let i = 0; i < 3; i++) await clf.classify(win);          // warmup
+    const times = [];
+    for (let i = 0; i < 20; i++) { const r = await clf.classify(win); times.push(r.ms); }
+    times.sort((a, b) => a - b);
+    const avg = times.reduce((s, v) => s + v, 0) / times.length;
+    log(`toy ok avg=${avg.toFixed(1)}ms p50=${times[10].toFixed(1)}ms p95=${times[18].toFixed(1)}ms (gate: <25ms)`);
+    $('stats').textContent = `ORT wasm live · toy 4×MatMul/64f: avg ${avg.toFixed(1)}ms`;
+  } catch (e) { log('toy FAILED: ' + (e.message || e)); }
+}
+
+// ══ SOURCE ADAPTERS — everything becomes the same <video>, the tracker
+//    never knows the difference. selfie sources mirror the display;
+//    external footage displays raw (features stay in one space either way,
+//    and mirror-augmented training makes the model chirality-robust —
+//    still: handedness labels on external footage are UNVERIFIED, per the
+//    standing rule never trust MediaPipe chirality). ══
+const vid = $('vid');
+let sourceKind = 'none';
+let camStreams = null;
+
+function setSource(kind, mirrored) {
+  sourceKind = kind;
+  $('mirrorbox').classList.toggle('mirror', mirrored);
+  for (const [id, k] of [['go', 'camera'], ['cap', 'capture'], ['file', 'file']]) {
+    $(id).classList.toggle('on', kind === k || (kind === 'url' && id === 'file'));
+  }
+  log(`source: ${kind}${mirrored ? ' (mirrored)' : ''}`);
+}
+
+function stopCurrent() {
+  if (camStreams) { camStreams.stream?.getTracks().forEach(t => t.stop()); camStreams = null; }
+  if (vid.srcObject) { vid.srcObject.getTracks?.().forEach(t => t.stop()); vid.srcObject = null; }
+  vid.removeAttribute('src'); vid.loop = false;
+}
+
+async function useCamera() {
+  stopCurrent();
+  camStreams = await initCamera(null, vid);
+  setSource('camera', true);
+}
+async function useCapture() {
+  const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+  stopCurrent();
+  vid.srcObject = s;
+  await vid.play();
+  s.getVideoTracks()[0].addEventListener('ended', () => setSource('none', false));
+  setSource('capture', false);
+}
+async function useFile(f) {
+  stopCurrent();
+  vid.src = URL.createObjectURL(f);
+  vid.loop = true;
+  await vid.play();
+  setSource('file', false);
+}
+async function useUrl(url) {
+  stopCurrent();
+  vid.crossOrigin = 'anonymous';    // WebGL upload needs untainted frames — URL must be CORS-enabled
+  vid.src = url;
+  vid.loop = true;
+  await vid.play();
+  setSource('url', false);
+}
+
+let tracker = null;
+async function ensureTracker() {
+  if (tracker) return;
+  log('loading landmarkers…');
+  // face is OFF by default: the v1 model consumes hands+pose only (51 points),
+  // so the face landmarker would cost inference time the classifier can't use.
+  // ?face=1 turns it on for display (and for the future non-manual-markers lane).
+  tracker = await initTracking(vid, {
+    numHands: 2, raw: true, poseEvery: 2,
+    enableFace: !!qp.get('face'), faceEvery: 2,
+    poseModel: POSE_MODELS[qp.get('pose')] || POSE_MODELS.full
+  });
+  log('tracker live' + (qp.get('face') ? ' (face display on)' : ''));
+}
+const boot = fn => (...a) => { speaker.prime(); fn(...a).then(ensureTracker).catch(e => log('source failed: ' + e.message)); };
+$('go').onclick = boot(useCamera);
+$('cap').onclick = boot(useCapture);
+$('file').onclick = () => $('filein').click();
+$('filein').onchange = e => { if (e.target.files[0]) boot(useFile)(e.target.files[0]); };
+$('viewwrap').addEventListener('dragover', e => { e.preventDefault(); $('viewwrap').classList.add('droptarget'); });
+$('viewwrap').addEventListener('dragleave', () => $('viewwrap').classList.remove('droptarget'));
+$('viewwrap').addEventListener('drop', e => {
+  e.preventDefault(); $('viewwrap').classList.remove('droptarget');
+  const f = e.dataTransfer.files?.[0];
+  if (f?.type.startsWith('video/')) boot(useFile)(f);
+});
+if (qp.get('video')) boot(useUrl)(qp.get('video'));
+else if (qp.get('autostart')) boot(useCamera)();
+
+// ── meters ──
+const meters = {};
+function meter(id, v, color) {
+  let m = meters[id];
+  if (!m) {
+    const div = document.createElement('div');
+    div.className = 'm';
+    div.innerHTML = `<label><span style="color:${color}">${id}</span><span></span></label>` +
+                    `<div class="tr"><div class="fl" style="background:${color}"></div></div>`;
+    $('meters').append(div);
+    m = meters[id] = { fl: div.querySelector('.fl'), num: div.querySelector('label span:last-child') };
+  }
+  m.fl.style.width = (Math.min(1, Math.max(0, v)) * 100).toFixed(1) + '%';
+  m.num.textContent = v.toFixed(2);
+}
+
+// ── overlay: draw the feature-frame inputs (debug truth — dots on the body
+// mean the normalization inputs are right). Tracker coords are selfie-
+// mirrored; drawing at (1-x) is correct BOTH ways: inside the CSS-flipped
+// box (camera) the double flip cancels, and on raw external footage
+// (1 - mirrored x) recovers the original x. Same function, both sources. ──
+const oc = $('overlay').getContext('2d');
+const POSE_BONES = [[1, 2], [1, 3], [3, 5], [2, 4], [4, 6], [1, 7], [2, 8], [7, 8]]; // into SIGN_POSE_IDX slots
+function drawCapture(frame) {
+  const w = oc.canvas.width, h = oc.canvas.height;
+  oc.clearRect(0, 0, w, h);
+  const X = p => (1 - p.x) * w;
+  if (frame.pose) {
+    oc.strokeStyle = '#2e4a6e'; oc.lineWidth = 2;
+    for (const [a, b] of POSE_BONES) {
+      const pa = frame.pose[SIGN_POSE_IDX[a]], pb = frame.pose[SIGN_POSE_IDX[b]];
+      if (!pa || !pb || (pa.v ?? 1) < 0.5 || (pb.v ?? 1) < 0.5) continue;
+      oc.beginPath(); oc.moveTo(X(pa), pa.y * h); oc.lineTo(X(pb), pb.y * h); oc.stroke();
+    }
+  }
+  if (frame.face?.landmarks) {
+    // face landmarks are RAW video coords (tracking.js does not selfie-mirror
+    // them, unlike hands/pose) — draw at p.x directly, no (1-x) flip
+    oc.fillStyle = 'rgba(139,148,158,0.5)';
+    for (let i = 0; i < frame.face.landmarks.length; i += 4) {   // every 4th of 478
+      const p = frame.face.landmarks[i];
+      oc.beginPath(); oc.arc(p.x * w, p.y * h, 0.8, 0, Math.PI * 2); oc.fill();
+    }
+  }
+  if (frame.hands) {
+    oc.fillStyle = signer.values['sign.segment.active'] ? '#82aaff' : '#3fb950';
+    for (const hand of frame.hands) for (const p of hand) {
+      oc.beginPath(); oc.arc(X(p), p.y * h, 1.6, 0, Math.PI * 2); oc.fill();
+    }
+  }
+}
+
+// ── main loop ──
+let frames = 0, lastFps = performance.now(), fps = 0, featMs = 0;
+function tick(t) {
+  requestAnimationFrame(tick);
+  if (!tracker || vid.readyState < 2) return;
+  const frame = tracker.detect();
+  const aspect = (vid.videoWidth || 4) / (vid.videoHeight || 3);
+  const f0 = performance.now();
+  const v = signer.update(frame, t, aspect);        // ← THE TAP
+  featMs = featMs * 0.9 + (performance.now() - f0) * 0.1;
+  drawCapture(frame);
+
+  meter('motion', v['sign.motion'] / 2, 'var(--hand)');
+  meter('segment', v['sign.segment.active'] ? 1 : 0, 'var(--seg)');
+  meter('window fill', v['sign.buffer.fill'], 'var(--seg)');
+  meter('confidence', v['sign.confidence'], 'var(--conf)');
+  meter('hand L', v['sign.hand.L.seen'] ? 1 : 0, 'var(--hand)');
+  meter('hand R', v['sign.hand.R.seen'] ? 1 : 0, 'var(--hand)');
+
+  frames++;
+  const now = performance.now();
+  if (now - lastFps > 1000) {
+    fps = frames * 1000 / (now - lastFps);
+    frames = 0; lastFps = now;
+    $('hud').textContent = `live · ${sourceKind} · ${fps.toFixed(0)} fps · featurize+seg ${featMs.toFixed(2)}ms · ` +
+      `hands ${['L', 'R'].filter(s => v[`sign.hand.${s}.seen`]).join('+') || 'none'} · ` +
+      `${signer.classifier?.ready ? 'model: wasm' : 'model: none (features-only)'}`;
+  }
+}
+tick(0);
+log('boot ok · featurizer ' + FEATURIZER_VERSION);
+</script>
+</body>
+</html>

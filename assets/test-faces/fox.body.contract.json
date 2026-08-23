@@ -1,0 +1,125 @@
+{
+  "_spec": "hopeOS body-puppet MOVEMENT contract v1 (body sibling of the face contract). One file = one puppet body. Keypoint positions never cross the human->puppet boundary; channels carry torso-normalized MEASURES (sdk/interaction/body-measures.js) and discrete GESTURE events (sdk/interaction/body-gestures.js). The animal-sync TRANSLATION lives here too: stance mapping, limb correspondence, gait rules, and movement constraints. Executable by sdk/interaction/quadruped.js.",
+  "version": 1,
+  "id": "fox-body-v1",
+
+  "human": {
+    "space": "mediapipe-pose-33",
+    "alt_spaces": { "movenet-17": "body-measures.js MOVENET_17 map — same formulas, swap the index map" },
+    "tracker_call": "initTracking(vid, { enableHands:false, enableFace:false, poseEvery:2 })",
+    "hands_note": "segmented finger tracking (HandLandmarker 21-pt) is a RESERVED lane: fox toes have no rig; fingers may later drive ear/tail flicks. Face channels come from the face contract on the same page (b_Neck_04/b_Head_05 accept head.rot directly).",
+    "smoothing": "One-Euro on the HUMAN side only (BodyProbe); puppet applies raw",
+    "gesture_source": "BodyGestureDetector events: jump, squat, kick(side), dodge, leanL/R, runInPlace",
+    "calibration_ritual": [
+      "stand tall 2s  -> body.legspan 'standing' (crouch cal)",
+      "deep squat 2s  -> body.legspan 'deep'",
+      "arms straight out + bent 2s -> extend bent_deg/straight_deg (defaults usually fine)"
+    ]
+  },
+
+  "puppet": {
+    "asset": "fox.glb",
+    "geom_sha1": "8792c6bcc80a3b42",
+    "skeleton_note": "Khronos Fox. QUADRUPED: the 'Arm' bones ARE the front legs.",
+    "joints": {
+      "root": "b_Root_00", "hip": "b_Hip_01",
+      "spine": ["b_Spine01_02", "b_Spine02_03"],
+      "neck": "b_Neck_04", "head": "b_Head_05",
+      "tail": ["b_Tail01_012", "b_Tail02_013", "b_Tail03_014"],
+      "frontL": ["b_LeftUpperArm_09", "b_LeftForeArm_010", "b_LeftHand_011"],
+      "frontR": ["b_RightUpperArm_06", "b_RightForeArm_07", "b_RightHand_08"],
+      "hindL": ["b_LeftLeg01_015", "b_LeftLeg02_016", "b_LeftFoot01_017", "b_LeftFoot02_018"],
+      "hindR": ["b_RightLeg01_019", "b_RightLeg02_020", "b_RightFoot01_021", "b_RightFoot02_022"]
+    },
+    "clips": { "idle": "Survey", "walk": "Walk", "run": "Run" },
+    "clip_rates_hz": "Walk cycle ~= 1.04s at rate 1 (2 full step-pairs); rate scales with human cadence",
+    "forward_axis_local": [0, 0, 1],
+    "up_axis": [0, 1, 0],
+    "scale_note": "fox bbox diagonal 175.5 units; lab normalizes to ~1.5 world units"
+  },
+
+  "stance_translation": {
+    "mode": "standing-drives-crawl",
+    "rule": "The STANDING human is the fox's NEUTRAL all-fours stance. The human never needs to crawl: upright = fox standing on four legs; human limbs map by anatomical correspondence (arms->front legs, legs->hind legs) — the crawl-scheme direct mapping shown most intuitive in quadruped-embodiment studies (Become the Beast, arXiv:2603.15428).",
+    "sides": "anatomical: player LEFT arm -> fox LEFT front leg. In the mirrored selfie view player-left appears screen-left; the lab renders the fox facing AWAY (same heading as player) so left/right feel identical.",
+    "advanced_mode_reserved": "on-all-fours human capture (wrists become front paws directly) — same channels, different raise reference; contract shape unchanged"
+  },
+
+  "channels": [
+    {
+      "id": "limb.armL.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.armL.raise", "range": [-1.0, 1.0] },
+      "puppet": { "target": { "kind": "bone_rot_additive", "bone": "b_LeftUpperArm_09", "axis": "x", "sign": -1 } },
+      "map": { "gain_deg": 40, "clamp_deg": [0, 45], "deadzone": 0.08 },
+      "meaning": "lift fox front-left paw (give-paw when isolated; gait step when cycled)"
+    },
+    {
+      "id": "limb.armR.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.armR.raise", "range": [-1.0, 1.0] },
+      "puppet": { "target": { "kind": "bone_rot_additive", "bone": "b_RightUpperArm_06", "axis": "x", "sign": -1 } },
+      "map": { "gain_deg": 40, "clamp_deg": [0, 45], "deadzone": 0.08 }
+    },
+    {
+      "id": "limb.legL.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.legL.raise (knee-referenced)", "range": [-1.0, 0.5] },
+      "puppet": { "target": { "kind": "bone_rot_additive", "bone": "b_LeftLeg01_015", "axis": "x", "sign": -1 } },
+      "map": { "gain_deg": 35, "clamp_deg": [0, 40], "deadzone": 0.06, "rest_offset": -0.85 }
+    },
+    {
+      "id": "limb.legR.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.legR.raise (knee-referenced)", "range": [-1.0, 0.5] },
+      "puppet": { "target": { "kind": "bone_rot_additive", "bone": "b_RightLeg01_019", "axis": "x", "sign": -1 } },
+      "map": { "gain_deg": 35, "clamp_deg": [0, 40], "deadzone": 0.06, "rest_offset": -0.85 }
+    },
+    {
+      "id": "body.crouch",
+      "human": { "probe": "measure", "source": "BodyProbe body.crouch", "cal": { "standing": 1.9, "deep": 1.0, "per_user": true } },
+      "puppet": { "target": { "kind": "composite", "parts": [
+        { "kind": "root_translate", "axis": "y", "gain": -0.22 },
+        { "kind": "bone_rot_additive", "bone": "b_Spine01_02", "axis": "x", "sign": 1, "gain_deg": 18 }
+      ] } },
+      "meaning": "human squat -> fox crouches/pounce-ready"
+    },
+    {
+      "id": "body.lean",
+      "human": { "probe": "measure", "source": "BodyProbe body.lean (deg)", "range_deg": [-35, 35] },
+      "puppet": { "target": { "kind": "yaw_steer" } },
+      "map": { "deg_per_sec_at_full": 90, "deadzone_deg": 6 },
+      "meaning": "lean left/right STEERS the fox's heading while walking"
+    },
+    {
+      "id": "head.rot",
+      "human": { "probe": "cross-contract", "source": "face contract head.yaw/pitch/roll (PuppetInput.state.head)" },
+      "puppet": { "target": { "kind": "bone_rot_additive", "bone": "b_Neck_04", "axes": ["yaw", "pitch", "roll"] } },
+      "map": { "gain": 0.7, "clamp_deg": [-40, 40] },
+      "meaning": "fox looks where you look; merges the face stack onto the body rig"
+    }
+  ],
+
+  "gait": {
+    "rule": "Each human limb raise->lower cycle past the step threshold = ONE step of the corresponding fox leg. Alternating limb cycles sustain locomotion: cadence (steps/sec over a sliding 2s window) drives Walk clip weight + playbackRate + forward speed. Your spec verbatim: move left arm -> fox front-left leg steps and the fox walks forward.",
+    "step_threshold_raise": 0.12,
+    "cadence_window_s": 2.0,
+    "walk_full_weight_at_cadence": 1.2,
+    "playback_rate": "cadence / 1.9 natural-walk steps-per-sec, clamped [0.5, 1.6]",
+    "forward_speed": "cadence * stride; stride = 0.32 fox-lengths per step, clamped 1.4 fox-lengths/s",
+    "idle_after_ms": 900,
+    "idle_clip_behavior": "crossfade to Survey; individual limb raises still play through additive bone offsets (give-paw preserved when not walking)"
+  },
+
+  "gesture_map": {
+    "jump":       { "action": "pounce", "impl": "Run clip burst 0.6s + root hop (parabolic y, 0.35 fox-heights) + forward lunge 0.5 fox-lengths" },
+    "squat":      { "action": "crouch", "impl": "body.crouch channel already carries it continuously; gesture event just gates the pounce-ready ear/tail pose" },
+    "dash":       { "trigger": "runInPlace OR |vel.hip.x| > 0.9 torso/s", "action": "gallop", "impl": "Run clip while active, forward speed x2.2" },
+    "kick":       { "action": "hind-leg kick", "impl": "burst additive rotation on that side's hind chain (b_*Leg01, 55deg, 350ms out-back), scaled by vel.legX.tip" },
+    "dodge":      { "action": "sidestep", "impl": "root lateral nudge 0.25 fox-lengths, 250ms" }
+  },
+
+  "constraints": {
+    "additive_over_clip": "per-limb offsets apply AFTER AnimationMixer update each frame (clip pose + additive), weight-faded 0 as Walk weight -> 1 for stepping legs so gait animation is never fought",
+    "clamps": "every bone_rot_additive channel carries clamp_deg; axis+sign are LAB-VERIFIED fields (bone local axes are asset facts, verify in foxlab before trusting)",
+    "speed_caps": { "forward_fox_lengths_s": 1.4, "turn_deg_s": 90 },
+    "ground_lock": "root y only changes via crouch/jump channels — no drift",
+    "hold_on_loss": "pose lost -> freeze channels, decay to Survey after idle_after_ms; never snap"
+  }
+}

@@ -1,0 +1,389 @@
+﻿[
+ {
+  "name": "Bone",
+  "parent": null,
+  "pos": [
+   -0.0032,
+   -0.0059,
+   -0.195
+  ]
+ },
+ {
+  "name": "Foot.L",
+  "parent": "Bone",
+  "pos": [
+   0.6335,
+   0.0247,
+   -0.138
+  ]
+ },
+ {
+  "name": "Body",
+  "parent": "Bone",
+  "pos": [
+   0.0021,
+   1.3725,
+   0.1127
+  ]
+ },
+ {
+  "name": "Hips",
+  "parent": "Body",
+  "pos": [
+   0.0,
+   1.2759,
+   -0.0
+  ]
+ },
+ {
+  "name": "Abdomen",
+  "parent": "Hips",
+  "pos": [
+   0.0,
+   1.5954,
+   -0.0777
+  ]
+ },
+ {
+  "name": "Torso",
+  "parent": "Abdomen",
+  "pos": [
+   0.0,
+   2.08,
+   -0.0814
+  ]
+ },
+ {
+  "name": "Neck",
+  "parent": "Torso",
+  "pos": [
+   0.0,
+   2.6606,
+   -0.0178
+  ]
+ },
+ {
+  "name": "Head",
+  "parent": "Neck",
+  "pos": [
+   -0.0171,
+   2.9699,
+   -0.0112
+  ]
+ },
+ {
+  "name": "Shoulder.L",
+  "parent": "Torso",
+  "pos": [
+   0.5827,
+   2.3714,
+   -0.0168
+  ]
+ },
+ {
+  "name": "UpperArm.L",
+  "parent": "Shoulder.L",
+  "pos": [
+   0.6173,
+   2.2948,
+   -0.0168
+  ]
+ },
+ {
+  "name": "LowerArm.L",
+  "parent": "UpperArm.L",
+  "pos": [
+   0.8977,
+   1.7114,
+   -0.1312
+  ]
+ },
+ {
+  "name": "Palm2.L",
+  "parent": "LowerArm.L",
+  "pos": [
+   1.3588,
+   0.902,
+   0.8709
+  ]
+ },
+ {
+  "name": "Middle1.L",
+  "parent": "Palm2.L",
+  "pos": [
+   1.2427,
+   0.6685,
+   1.1351
+  ]
+ },
+ {
+  "name": "Middle2.L",
+  "parent": "Middle1.L",
+  "pos": [
+   1.0548,
+   0.6448,
+   1.1355
+  ]
+ },
+ {
+  "name": "Thumb.L",
+  "parent": "LowerArm.L",
+  "pos": [
+   1.233,
+   1.0916,
+   0.9308
+  ]
+ },
+ {
+  "name": "Thumb2.L",
+  "parent": "Thumb.L",
+  "pos": [
+   1.1111,
+   1.1234,
+   0.9837
+  ]
+ },
+ {
+  "name": "Palm1.L",
+  "parent": "LowerArm.L",
+  "pos": [
+   1.3588,
+   0.902,
+   0.8709
+  ]
+ },
+ {
+  "name": "Index.L",
+  "parent": "Palm1.L",
+  "pos": [
+   1.2381,
+   0.799,
+   1.2624
+  ]
+ },
+ {
+  "name": "Index2.L",
+  "parent": "Index.L",
+  "pos": [
+   1.0493,
+   0.784,
+   1.2619
+  ]
+ },
+ {
+  "name": "Palm3.L",
+  "parent": "LowerArm.L",
+  "pos": [
+   1.3588,
+   0.902,
+   0.8709
+  ]
+ },
+ {
+  "name": "Ring1.L",
+  "parent": "Palm3.L",
+  "pos": [
+   1.2551,
+   0.5164,
+   1.0201
+  ]
+ },
+ {
+  "name": "Ring2.L",
+  "parent": "Ring1.L",
+  "pos": [
+   1.0663,
+   0.5021,
+   1.0187
+  ]
+ },
+ {
+  "name": "Shoulder.R",
+  "parent": "Torso",
+  "pos": [
+   -0.6368,
+   2.3714,
+   -0.0168
+  ]
+ },
+ {
+  "name": "UpperArm.R",
+  "parent": "Shoulder.R",
+  "pos": [
+   -0.6817,
+   2.2797,
+   -0.0168
+  ]
+ },
+ {
+  "name": "LowerArm.R",
+  "parent": "UpperArm.R",
+  "pos": [
+   -0.9332,
+   1.769,
+   0.0659
+  ]
+ },
+ {
+  "name": "Palm2.R",
+  "parent": "LowerArm.R",
+  "pos": [
+   -1.2898,
+   0.7584,
+   0.935
+  ]
+ },
+ {
+  "name": "Middle1.R",
+  "parent": "Palm2.R",
+  "pos": [
+   -1.1505,
+   0.4669,
+   1.1177
+  ]
+ },
+ {
+  "name": "Middle2.R",
+  "parent": "Middle1.R",
+  "pos": [
+   -0.9685,
+   0.4259,
+   1.0847
+  ]
+ },
+ {
+  "name": "Thumb.R",
+  "parent": "LowerArm.R",
+  "pos": [
+   -1.1431,
+   0.925,
+   1.0131
+  ]
+ },
+ {
+  "name": "Thumb2.R",
+  "parent": "Thumb.R",
+  "pos": [
+   -1.0604,
+   0.9843,
+   1.1044
+  ]
+ },
+ {
+  "name": "Palm1.R",
+  "parent": "LowerArm.R",
+  "pos": [
+   -1.2898,
+   0.7584,
+   0.935
+  ]
+ },
+ {
+  "name": "Index.R",
+  "parent": "Palm1.R",
+  "pos": [
+   -1.1167,
+   0.5645,
+   1.268
+  ]
+ },
+ {
+  "name": "Index2.R",
+  "parent": "Index.R",
+  "pos": [
+   -0.9306,
+   0.5305,
+   1.2604
+  ]
+ },
+ {
+  "name": "Palm3.R",
+  "parent": "LowerArm.R",
+  "pos": [
+   -1.2898,
+   0.7584,
+   0.935
+  ]
+ },
+ {
+  "name": "Ring1.R",
+  "parent": "Palm3.R",
+  "pos": [
+   -1.1914,
+   0.3457,
+   0.9758
+  ]
+ },
+ {
+  "name": "Ring2.R",
+  "parent": "Ring1.R",
+  "pos": [
+   -1.0096,
+   0.3235,
+   0.9278
+  ]
+ },
+ {
+  "name": "UpperLeg.L",
+  "parent": "Body",
+  "pos": [
+   0.6303,
+   1.4687,
+   -0.0699
+  ]
+ },
+ {
+  "name": "LowerLeg.L",
+  "parent": "UpperLeg.L",
+  "pos": [
+   0.6757,
+   0.9033,
+   0.1572
+  ]
+ },
+ {
+  "name": "UpperLeg.R",
+  "parent": "Body",
+  "pos": [
+   -0.6433,
+   1.4687,
+   -0.0699
+  ]
+ },
+ {
+  "name": "LowerLeg.R",
+  "parent": "UpperLeg.R",
+  "pos": [
+   -0.7133,
+   0.9033,
+   0.151
+  ]
+ },
+ {
+  "name": "PoleTarget.L",
+  "parent": "Bone",
+  "pos": [
+   0.9103,
+   1.0522,
+   1.5144
+  ]
+ },
+ {
+  "name": "Foot.R",
+  "parent": "Bone",
+  "pos": [
+   -0.6401,
+   0.0247,
+   -0.138
+  ]
+ },
+ {
+  "name": "PoleTarget.R",
+  "parent": "Bone",
+  "pos": [
+   -1.1041,
+   1.0522,
+   1.5144
+  ]
+ }
+]

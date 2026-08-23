@@ -1725,7 +1725,7 @@ function applyPrompt(raw) {
   }
   if (/(segment|people|everyone|mask)/.test(p)) {
     S.sam = true; S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
-    say('🎭 segmenting everyone — masks appear as SAM3 finds them'); return;
+    say('🎭 segmenting everyone — masks appear as the ML model finds them'); return;
   }
   // anything else = a CONCEPT to find & track ("track the floor" → floor)
   const text = p.replace(/^(track|find|add|show|segment)\s+(the\s+)?/, '').trim();
@@ -1733,7 +1733,7 @@ function applyPrompt(raw) {
   S.concepts.add(text); S.sam = true;
   S.ws?.send(JSON.stringify({ cmd: 'sam', on: 1 }));
   S.ws?.send(JSON.stringify({ cmd: 'concept', text, on: 1 }));
-  say(`🧿 tracking "${text}" — mask + label appear as SAM3 locks on`);
+  say(`🧿 tracking "${text}" — mask + label appear as the ML model locks on`);
 }
 document.getElementById('pgo').addEventListener('click', () => {
   const i = document.getElementById('pin'); applyPrompt(i.value); i.value = '';

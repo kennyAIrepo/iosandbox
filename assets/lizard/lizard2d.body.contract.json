@@ -1,0 +1,147 @@
+{
+  "_spec": "hopeOS body-puppet MOVEMENT contract v1 — 2D PROCEDURAL variant (sibling of fox.body.contract.json). Same human half (BodyProbe measures + PuppetInput face/mouth channels + BodyGestureDetector events); the puppet half targets a procedural 2D mock-3D rig (sdk/interaction/lizard2d.js) instead of GLB bones. Positions still never cross the human->puppet boundary: channels carry torso-normalized MEASURES; the 2D rig turns them into gait phase, aim angles, tongue length and leap impulses in its own world space.",
+  "version": 1,
+  "id": "lizard2d-v1",
+
+  "human": {
+    "space": "mediapipe-pose-33",
+    "tracker_call": "initTracking(vid, { enableHands:false, poseEvery:2, faceEvery:1, faceMatrix:true })",
+    "face_stack": "PuppetInput(vid) — WITH video pixels: tongue red-ratio drives tongue.out 1:1; mouth MAR drives jaw; head matrix drives aim",
+    "smoothing": "One-Euro on the HUMAN side only (BodyProbe / PuppetInput); rig applies raw",
+    "gesture_source": "BodyGestureDetector: jump | squat | duck. PLUS two game-side derived events (see derived_events)",
+    "calibration_ritual": [
+      "stand tall 2s        -> body.legspan 'standing' (crouch cal)",
+      "arms at sides        -> limb raise baseline (defaults fine)",
+      "stick tongue out 1s  -> tongue.max personal red-ratio ceiling"
+    ]
+  },
+
+  "puppet": {
+    "kind": "procedural-2d",
+    "renderer": "canvas2d, back-POV pseudo-3D: world (x lateral, y up, z depth into screen), perspective scale = f/(f+z), painter z-sort",
+    "asset": "none — rig is generated (sdk/interaction/lizard2d.js), shaded with gradients to read as 3D",
+    "rig": {
+      "spine": "9-point chain tail(near camera)->head(far), lateral sine undulation counter-phased to gait",
+      "limbs": "4x sprawled 2-segment (lizard posture: upper limb OUT sideways, lower limb DOWN to foot), anatomical correspondence arms->front, legs->hind",
+      "head": "yaw/pitch aim turret for hunting; jaw hinge from mouth.open; eyes blink from eye channels",
+      "tongue": "verlet-ish chain from jaw, length-driven; SHOOT is a ballistic extend with sticky tip + elastic retract",
+      "tail": "6-point chain, sway = -undulation phase, whips on leap"
+    },
+    "forward": "-z toward horizon (lizard faces AWAY, same heading as player — mirrored-selfie left/right feel identical)"
+  },
+
+  "stance_translation": {
+    "mode": "standing-drives-crawl",
+    "rule": "STANDING human = lizard neutral sprawl on the branch. Arms -> front legs, legs -> hind legs (crawl-scheme direct mapping, Become the Beast arXiv:2603.15428). Alternating arm raises = gait steps = forward scroll.",
+    "sides": "anatomical: player LEFT arm -> lizard LEFT front leg; lizard rendered from behind so left/right feel identical"
+  },
+
+  "channels": [
+    {
+      "id": "limb.armL.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.armL.raise", "range": [-1.0, 1.0] },
+      "puppet": { "target": { "kind": "gait_step", "limb": "frontL" } },
+      "map": { "step_threshold": 0.12, "lift_gain": 1.0, "deadzone": 0.08 },
+      "meaning": "lift lizard front-left foot; raise->lower cycle = one step"
+    },
+    {
+      "id": "limb.armR.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.armR.raise", "range": [-1.0, 1.0] },
+      "puppet": { "target": { "kind": "gait_step", "limb": "frontR" } },
+      "map": { "step_threshold": 0.12, "lift_gain": 1.0, "deadzone": 0.08 }
+    },
+    {
+      "id": "limb.legL.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.legL.raise (knee-referenced)", "range": [-1.0, 0.5] },
+      "puppet": { "target": { "kind": "gait_step", "limb": "hindL" } },
+      "map": { "step_threshold": 0.12, "lift_gain": 1.0, "deadzone": 0.06, "rest_offset": -0.85 }
+    },
+    {
+      "id": "limb.legR.raise",
+      "human": { "probe": "measure", "source": "BodyProbe limb.legR.raise (knee-referenced)", "range": [-1.0, 0.5] },
+      "puppet": { "target": { "kind": "gait_step", "limb": "hindR" } },
+      "map": { "step_threshold": 0.12, "lift_gain": 1.0, "deadzone": 0.06, "rest_offset": -0.85 }
+    },
+    {
+      "id": "body.crouch",
+      "human": { "probe": "measure", "source": "BodyProbe body.crouch", "cal": { "standing": 1.9, "deep": 1.0, "per_user": true } },
+      "puppet": { "target": { "kind": "body_lower", "belly_drop": 0.6, "leg_fold": 0.5 } },
+      "meaning": "human squat -> lizard hugs the branch, pre-leap coil (charges leap distance +25%)"
+    },
+    {
+      "id": "body.lean",
+      "human": { "probe": "measure", "source": "BodyProbe body.lean (deg)", "range_deg": [-35, 35] },
+      "puppet": { "target": { "kind": "lateral_strafe" } },
+      "map": { "branch_halfwidths_per_sec_at_full": 1.6, "deadzone_deg": 6 },
+      "meaning": "lean left/right slides the lizard across the branch width — dodge and line up jumps"
+    },
+    {
+      "id": "head.rot",
+      "human": { "probe": "cross-contract", "source": "face contract head.yaw/pitch (PuppetInput.state.head)" },
+      "puppet": { "target": { "kind": "aim_turret" } },
+      "map": { "yaw_gain": 1.15, "pitch_gain": 1.25, "clamp_deg": [-42, 42], "meaning_note": "slightly OVER 1:1 — hunting is the game; aim must feel powerful" },
+      "meaning": "lizard head aims where you look; tongue fires along this ray"
+    },
+    {
+      "id": "mouth.open",
+      "human": { "probe": "measure", "source": "PuppetInput mouth.mouthOpenAmount (MAR)", "range": [0, 1] },
+      "puppet": { "target": { "kind": "jaw_hinge", "max_deg": 38 } },
+      "map": { "dead": 0.06, "gamma": 1.15, "gain": 1.0, "max": 1.0 },
+      "meaning": "jaw opens with your mouth; tongue cannot fire through a closed jaw (open >= arm_threshold arms the shot)"
+    },
+    {
+      "id": "tongue.out",
+      "human": { "probe": "measure", "source": "PuppetInput mouth.tongueAmount (red-ratio 0..1)", "range": [0, 1] },
+      "puppet": { "target": { "kind": "tongue_length", "max_world_len": "2.5 body-lengths" } },
+      "map": { "dead": 0.05, "gamma": 1.1, "gain": 1.0, "max": 1.0 },
+      "meaning": "SAME-LENGTH RULE: your tongue reach = lizard tongue reach, live, 1:1"
+    },
+    {
+      "id": "eye.blink",
+      "human": { "probe": "measure", "source": "PuppetInput eyes.left/right openAmount" },
+      "puppet": { "target": { "kind": "eyelid_pair" } },
+      "meaning": "lizard blinks when you blink (nictitating shimmer)"
+    }
+  ],
+
+  "derived_events": {
+    "tongue.shoot": {
+      "detect": "d(tongue.out)/dt > shoot_vel while mouth.open > 0.08 — the sudden FAST extension, distinct from slow show-length. FALLBACK: the discrete MouthTriggers tongueOut event also fires the shot when velocity > 0.7/s (robust when red-ratio undershoots in dim light)",
+      "shoot_vel_per_s": 1.5,
+      "cooldown_ms": 450,
+      "impl": "ballistic tongue: tip flies along aim ray at tongue_speed, sticks to fly inside hit cone, elastic retract 140ms carrying prey"
+    },
+    "leap.hop": {
+      "detect": "RABBIT MOVE: both arms thrust forward together — limb.armL.extend AND limb.armR.extend rising > hop_extend_vel within 400ms of each other, both raises in band [-0.4, 0.6] (forward-ish thrust). BodyGestureDetector 'jump' also accepted. THE FIRST hop engages AUTO-RUN.",
+      "hop_extend_vel_per_s": 1.0,
+      "cooldown_ms": 700,
+      "impl": "lizard leap: crouch-coil 90ms -> parabolic launch (base 2.4 branch-gaps forward, +25% if body.crouch was >0.5) -> tail whip -> land compress. Realistic lizard timing: fast launch, floaty apex, sticky landing."
+    }
+  },
+
+  "gait": {
+    "rule": "AUTO-RUN (primary): the FIRST leap.hop engages a forward base speed — the lizard runs like an obstacle-runner; body.lean steers, head hunts, crouch charges leaps. Limb raise->lower cycles past step_threshold ADD speed on top (cadence bonus) and still drive per-leg lifts — sync enriches, but never blocks, locomotion.",
+    "step_threshold_raise": 0.12,
+    "cadence_window_s": 2.0,
+    "walk_full_at_cadence": 1.2,
+    "forward_speed": "cadence * 0.34 body-lengths per step, clamp 1.5 body-lengths/s (x2 during leap flight)",
+    "idle_after_ms": 900,
+    "idle_behavior": "sway breathing, tail curl, head micro-saccades toward nearest fly (the lizard WANTS the fly; keeps idle alive)"
+  },
+
+  "hunt": {
+    "rule": "Head aim ray (yaw/pitch) + tongue shoot speed decide the catch. Correct angle + timing = guaranteed hit (aim-assist cone). Distance check: fly must be within reach = tongue max length at shoot moment.",
+    "aim_assist_cone_deg_start": 13,
+    "aim_assist_cone_deg_min": 7,
+    "cone_shrink_per_10_flies": 0.5,
+    "fly_speed_ramp": "gentle asymptotic, soft-cap x2.1 (flies stay inside tongue range; the challenge is aim+timing, not chase)",
+    "reachability": "high flies need LEAP + mid-air shoot: cone widens x1.5 during flight (the payoff move)"
+  },
+
+  "constraints": {
+    "same_length_honesty": "tongue.out maps 1:1 (gamma 1.1 only denoises the floor) — the player's own tongue IS the controller; never fake extra reach outside the aim-assist cone",
+    "hold_on_loss": "pose/face lost -> freeze channels, decay to idle after idle_after_ms; never snap",
+    "ground_lock": "lizard y locked to branch surface except leap/fall channels",
+    "fall": "off branch edge with no branch below -> fall (score streak reset, respawn on last branch after climb-up beat); leap distance vs gap width is the honest physics check"
+  }
+}

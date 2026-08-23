@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>humanlab — full-body sync: you → contract → human avatar</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --warn:#d29922; --arm:#82aaff; --leg:#c792ea; --body:#ffcb6b; --hand:#3fb950; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
+  h1 { font-size:14px; padding:9px 14px; border-bottom:1px solid var(--line); }
+  h1 small { color:var(--dim); font-weight:normal; }
+  #grid { display:grid; grid-template-columns:minmax(420px,500px) 1fr; gap:10px; padding:10px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim);
+             display:flex; gap:6px; align-items:center; }
+  #model-tabs { margin-left:auto; display:flex; gap:4px; }
+  .mirror { position:relative; transform:scaleX(-1); }
+  video, #overlay { width:100%; aspect-ratio:4/3; display:block; object-fit:fill; }
+  #overlay { position:absolute; inset:0; }
+  #stage3d { width:100%; height:560px; display:block; }
+  #meters { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; padding:6px 10px; }
+  .m { margin:2px 0; }
+  .m label { display:flex; justify-content:space-between; color:var(--dim); font-size:10.5px; }
+  .m .tr { height:6px; background:#0a0d12; border-radius:3px; margin-top:1px; overflow:hidden; position:relative; }
+  .m .fl { height:100%; width:0%; border-radius:3px; }
+  .m.signed .tr::after { content:''; position:absolute; left:50%; top:-1px; bottom:-1px; width:1px; background:var(--line); }
+  #stats { padding:6px 10px; color:var(--dim); font-size:11.5px; border-top:1px solid var(--line); }
+  #stats b { color:var(--warn); }
+  #log { padding:6px 10px; color:var(--dim); white-space:pre; max-height:130px; overflow:hidden;
+         border-top:1px solid var(--line); font-size:11px; }
+  button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+           padding:5px 12px; margin:6px 10px; font:inherit; font-size:12px; cursor:pointer; }
+  button.tab { margin:0; padding:3px 10px; }
+  button.tab.on { border-color:var(--warn); color:var(--warn); }
+  #hud { padding:5px 14px 10px; color:var(--dim); font-size:11px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<h1>humanlab <small>— BODY sync for the human avatar: pose → body contract, MediaPipe hands → finger chains, face matrix → neck. Raise arms, squat, lean, make a fist.</small></h1>
+<div id="grid">
+  <div class="pane">
+    <h2>YOU — pose + hands + head (contract measures)</h2>
+    <button id="go">start camera</button>
+    <div class="mirror">
+      <video id="vid" autoplay muted playsinline></video>
+      <canvas id="overlay" width="500" height="375"></canvas>
+    </div>
+    <div id="meters"></div>
+    <div id="log"></div>
+  </div>
+  <div class="pane">
+    <h2>AVATAR — mediated output (auto-aligned rig)
+      <div id="model-tabs"></div>
+    </h2>
+    <canvas id="stage3d"></canvas>
+    <div id="stats">pick a model…</div>
+  </div>
+</div>
+<div id="hud">boot…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { initCamera, initTracking, POSE_MODELS } from './sdk/core/tracking.js';
+import { PuppetInput } from './sdk/interaction/puppet.js';
+import { BodyProbe } from './sdk/interaction/body-measures.js';
+import { HandProbe } from './sdk/interaction/hand-measures.js';
+import { BipedDriver } from './sdk/interaction/body-drive.js';
+import { POSE_LANDMARKS as LM } from './sdk/interaction/body-gestures.js';
+
+const $ = id => document.getElementById(id);
+// live tuning knobs: ?pose=lite|full|heavy  &pe=1|2 (pose cadence)
+// &cutoff=1.2 &beta=0.6 (One-Euro dirs)  &zscale=0.85 (depth damping)
+// &wflex=90 &wdev=30 &wtwist=20 (wrist ROM clamp, degrees)
+const qp = new URLSearchParams(location.search);
+const TUNE = {
+  poseModel: POSE_MODELS[qp.get('pose')] || POSE_MODELS.full,
+  poseEvery: parseInt(qp.get('pe')) || 2,
+  driver: {
+    ...(qp.get('cutoff') ? { dirCutoff: parseFloat(qp.get('cutoff')) } : {}),
+    ...(qp.get('beta') ? { dirBeta: parseFloat(qp.get('beta')) } : {}),
+    ...(qp.get('zscale') ? { zScale: parseFloat(qp.get('zscale')) } : {}),
+    ...(qp.get('wflex') || qp.get('wdev') || qp.get('wtwist') ? { wrist: {
+      ...(qp.get('wflex') ? { flexDeg: parseFloat(qp.get('wflex')) } : {}),
+      ...(qp.get('wdev') ? { devDeg: parseFloat(qp.get('wdev')) } : {}),
+      ...(qp.get('wtwist') ? { twistDeg: parseFloat(qp.get('wtwist')) } : {})
+    } } : {})
+  }
+};
+const MODELS = [
+  { id: 'brunette', name: 'human', url: 'assets/test-faces/brunette.glb' },
+  { id: 'robot', name: 'humanoid', url: 'assets/test-faces/robot.glb' }
+];
+const lines = [];
+const log = m => { lines.unshift(m); $('log').textContent = lines.slice(0, 9).join('\n'); };
+
+// ── avatar stage ──
+const ren = new THREE.WebGLRenderer({ canvas: $('stage3d'), antialias: true });
+const scn = new THREE.Scene();
+scn.background = new THREE.Color(0x0d1117);
+const cam = new THREE.PerspectiveCamera(38, 1, 0.01, 100);
+const orbit = new OrbitControls(cam, $('stage3d'));
+scn.add(new THREE.HemisphereLight(0xe6edf3, 0x30363d, 2.2));
+const key = new THREE.DirectionalLight(0xffffff, 1.8); key.position.set(1, 2, 3); scn.add(key);
+scn.add(new THREE.GridHelper(6, 24, 0x2e4a6e, 0x1b2536));
+function sizeRenderer() {
+  const w = $('stage3d').clientWidth, h = $('stage3d').clientHeight;
+  ren.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+let avatar = null, driver = null;
+const loader = new GLTFLoader();
+async function loadModel(i) {
+  [...$('model-tabs').children].forEach((b, k) => b.classList.toggle('on', k === i));
+  if (avatar) scn.remove(avatar);
+  const gltf = await loader.loadAsync(MODELS[i].url);
+  avatar = gltf.scene;
+  scn.add(avatar);
+  driver = new BipedDriver(TUNE.driver).bind(avatar);
+  const box = new THREE.Box3().setFromObject(avatar);
+  const size = box.getSize(new THREE.Vector3()), ctr = box.getCenter(new THREE.Vector3());
+  cam.position.set(ctr.x, ctr.y + size.y * 0.1, ctr.z + Math.max(size.y, size.x) * 1.6);
+  orbit.target.copy(ctr); orbit.update();
+  // alignment + finger report — the "assign the puppet's rigged landmarks" proof
+  const al = driver.alignment;
+  const nf = s => Object.keys(driver.fingers[s]).length;
+  $('stats').innerHTML = `<b>${MODELS[i].name}</b> · stance ${al.stance} · auto-aligned: ` +
+    `arms ${al.joints.frontL?.length ?? 0}/${al.joints.frontR?.length ?? 0} bones, ` +
+    `legs ${al.joints.hindL?.length ?? 0}/${al.joints.hindR?.length ?? 0}, ` +
+    `fingers L:${nf('L')} R:${nf('R')}` +
+    (al.conflicts.length ? ` · ${al.conflicts.length} conflicts (log)` : '');
+  for (const c of al.conflicts) log(`align conflict: ${c.note}`);
+  log(`bound ${MODELS[i].name}: neck=${driver.drive.neck} armL=${driver.drive.armL} legL=${driver.drive.legL}`);
+}
+MODELS.forEach((m, i) => {
+  const b = document.createElement('button');
+  b.className = 'tab'; b.textContent = m.name;
+  b.onclick = () => loadModel(i);
+  $('model-tabs').append(b);
+});
+await loadModel(0);
+sizeRenderer();
+
+// ── capture ──
+const bodyProbe = new BodyProbe();
+const handProbe = new HandProbe();
+let tracker = null, puppet = null, lastPose = null, lastHands = null, lastPoseWorld = null;
+let lastHandsWorld = null, lastHandedness = null;
+
+$('go').onclick = async e => {
+  e.target.disabled = true; e.target.textContent = 'loading models…';
+  await initCamera(null, $('vid'));
+  // FULL human spec: pose (body) + segmented hands (fingers) + face matrix (head)
+  tracker = await initTracking($('vid'), {
+    numHands: 2, raw: true, poseEvery: TUNE.poseEvery, faceEvery: 2, faceMatrix: true,
+    poseModel: TUNE.poseModel
+  });
+  puppet = new PuppetInput(null);   // head channel only
+  e.target.style.display = 'none';
+};
+
+const meters = {};
+function meter(id, v, color, signed = false) {
+  let m = meters[id];
+  if (!m) {
+    const div = document.createElement('div');
+    div.className = 'm' + (signed ? ' signed' : '');
+    div.innerHTML = `<label><span style="color:${color}">${id}</span><span></span></label>` +
+                    `<div class="tr"><div class="fl" style="background:${color}"></div></div>`;
+    $('meters').append(div);
+    m = meters[id] = { fl: div.querySelector('.fl'), num: div.querySelector('label span:last-child'), signed };
+  }
+  if (m.signed) {
+    const c = Math.max(-1, Math.min(1, v));
+    m.fl.style.marginLeft = c < 0 ? (50 + c*50) + '%' : '50%';
+    m.fl.style.width = Math.abs(c)*50 + '%';
+  } else m.fl.style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1) + '%';
+  m.num.textContent = v.toFixed(2);
+}
+
+const BONES = [
+  [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER], [LM.LEFT_HIP, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_HIP], [LM.RIGHT_SHOULDER, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_ELBOW], [LM.LEFT_ELBOW, LM.LEFT_WRIST],
+  [LM.RIGHT_SHOULDER, LM.RIGHT_ELBOW], [LM.RIGHT_ELBOW, LM.RIGHT_WRIST],
+  [LM.LEFT_HIP, LM.LEFT_KNEE], [LM.LEFT_KNEE, LM.LEFT_ANKLE],
+  [LM.RIGHT_HIP, LM.RIGHT_KNEE], [LM.RIGHT_KNEE, LM.RIGHT_ANKLE]
+];
+// ── GHOST SKELETON (debug truth): the mapped world landmarks rendered as
+// 3D lines beside the avatar. If the ghost mirrors you correctly, the
+// coordinate mapping is right and any avatar error is in the bone solve;
+// if the ghost is flipped, tune driver.opts.mapSigns — one knob.
+const ghostGeom = new THREE.BufferGeometry();
+const ghostPos = new Float32Array(12 * 2 * 3);   // 12 bone pairs
+ghostGeom.setAttribute('position', new THREE.BufferAttribute(ghostPos, 3));
+const ghostLines = new THREE.LineSegments(ghostGeom,
+  new THREE.LineBasicMaterial({ color: 0x3fb950, transparent: true, opacity: 0.8 }));
+scn.add(ghostLines);
+const gv = new THREE.Vector3();
+function updateGhost() {
+  if (!lastPoseWorld || !driver) { ghostLines.visible = false; return; }
+  ghostLines.visible = true;
+  const ox = -0.9, oy = driver.baseY + driver.height * 0.55;
+  let k = 0;
+  for (const [a, b] of BONES) {
+    for (const i of [a, b]) {
+      driver.mapPoint(lastPoseWorld[i] || { x: 0, y: 0, z: 0 }, gv);
+      ghostPos[k++] = gv.x + ox; ghostPos[k++] = gv.y + oy; ghostPos[k++] = gv.z;
+    }
+  }
+  ghostGeom.attributes.position.needsUpdate = true;
+}
+
+const oc = $('overlay').getContext('2d');
+function drawCapture() {
+  const w = oc.canvas.width, h = oc.canvas.height;
+  oc.clearRect(0, 0, w, h);
+  // tracker coords are ALREADY selfie-mirrored, and this canvas sits inside
+  // the CSS-flipped .mirror div — draw at (1-x) so the double flip cancels
+  const X = p => (1 - p.x) * w;
+  if (lastPose) {
+    oc.strokeStyle = '#2e4a6e'; oc.lineWidth = 2;
+    for (const [a, b] of BONES) {
+      const pa = lastPose[a], pb = lastPose[b];
+      if (!pa || !pb || (pa.v ?? 1) < 0.5 || (pb.v ?? 1) < 0.5) continue;
+      oc.beginPath(); oc.moveTo(X(pa), pa.y*h); oc.lineTo(X(pb), pb.y*h); oc.stroke();
+    }
+  }
+  if (lastHands) {
+    oc.fillStyle = '#3fb950';
+    for (const hand of lastHands) for (const p of hand) {
+      oc.beginPath(); oc.arc(X(p), p.y*h, 1.6, 0, Math.PI*2); oc.fill();
+    }
+  }
+}
+
+let lastT = 0;
+function tick(t) {
+  requestAnimationFrame(tick);
+  const dt = lastT ? Math.min((t - lastT) / 1000, 0.1) : 0;
+  lastT = t;
+  if (tracker && driver) {
+    const frame = tracker.detect();
+    puppet.update(frame, t);
+    if (frame.pose) lastPose = frame.pose;
+    if (frame.hands) lastHands = frame.hands;
+    const aspect = ($('vid').videoWidth || 4) / ($('vid').videoHeight || 3);
+    const bv = bodyProbe.update(frame.pose, t, aspect);
+    const hv = handProbe.update(frame.hands, frame.handedness, t);
+    if (frame.poseWorld) lastPoseWorld = frame.poseWorld;
+    if (frame.handsWorld) { lastHandsWorld = frame.handsWorld; lastHandedness = frame.handedness; }
+
+    // ← THE TAP: FK retarget (pose world) + palm-basis hands + head
+    driver.update(lastPoseWorld, bv, puppet.state.head, hv, dt, t,
+                  lastHandsWorld, lastHandedness);
+    updateGhost();
+
+    meter('arm L raise', ((bv['limb.armL.raise'] ?? -1)+1)/2, 'var(--arm)');
+    meter('arm R raise', ((bv['limb.armR.raise'] ?? -1)+1)/2, 'var(--arm)');
+    meter('leg L raise', ((bv['limb.legL.raise'] ?? -1)+1)/2, 'var(--leg)');
+    meter('leg R raise', ((bv['limb.legR.raise'] ?? -1)+1)/2, 'var(--leg)');
+    meter('crouch', bv['body.crouch'] ?? 0, 'var(--body)');
+    meter('lean', (bv['body.lean'] ?? 0)/35, 'var(--body)', true);
+    meter('grip L', hv['hand.L.grip'] ?? 0, 'var(--hand)');
+    meter('grip R', hv['hand.R.grip'] ?? 0, 'var(--hand)');
+    meter('index L curl', hv['finger.L.index.curl'] ?? 0, 'var(--hand)');
+    meter('index R curl', hv['finger.R.index.curl'] ?? 0, 'var(--hand)');
+    drawCapture();
+    const h = puppet.state.head;
+    $('hud').textContent = `live · head ${h.yaw.toFixed(0)}°/${h.pitch.toFixed(0)}°/${h.roll.toFixed(0)}° · ` +
+      `hands ${['L','R'].filter(s => hv[`hand.${s}.seen`]).join('+') || 'none'} · ` +
+      `pose ${lastPose ? 'ok' : '–'}`;
+  }
+  ren.render(scn, cam);
+}
+tick(0);
+</script>
+</body>
+</html>

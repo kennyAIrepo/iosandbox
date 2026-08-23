@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>junglelab — jungle host: scene · branches · insects · avatar</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --ok:#3fb950; --bad:#f85149; --warn:#d29922; --sel:#82aaff; }
+  * { box-sizing:border-box; margin:0; }
+  html, body { height:100%; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace;
+         display:flex; flex-direction:column; overflow:hidden; }
+  h1 { font-size:14px; padding:8px 14px; border-bottom:1px solid var(--line); flex:none; }
+  h1 small { color:var(--dim); font-weight:normal; }
+
+  #wrap { flex:1; display:flex; gap:8px; padding:8px; min-height:0; }
+
+  /* ── left: mini object-design panels ── */
+  #left { width:300px; flex:none; display:flex; flex-direction:column; gap:8px; min-height:0;
+          transition:width .2s, opacity .2s; }
+  #left.collapsed { width:0; opacity:0; overflow:hidden; padding:0; }
+  #leftHead { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+              padding:6px 10px; color:var(--dim); font-size:11px; display:flex; gap:8px; align-items:center; }
+  #panels { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; min-height:0; }
+  .mini { background:var(--panel); border:1px solid var(--line); border-radius:8px; flex:none; }
+  .mini.focus { border-color:var(--sel); }
+  .mini h3 { font-size:11.5px; padding:6px 9px; color:var(--tx); display:flex; gap:6px; align-items:center;
+             border-bottom:1px solid var(--line); cursor:pointer; }
+  .mini h3 .ic { color:var(--ok); }
+  .mini h3 .nm { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .mini h3 .b { color:var(--dim); cursor:pointer; padding:0 3px; font-size:12px; }
+  .mini h3 .b:hover { color:var(--tx); }
+  .mini.closed .bd { display:none; }
+  .mini.closed h3 { border-bottom:none; }
+  .mini .bd { padding:7px 9px; display:flex; flex-direction:column; gap:6px; font-size:11.5px; }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .row label { color:var(--dim); font-size:10.5px; min-width:34px; }
+  .row input[type=number] { width:58px; background:#0a0d12; color:var(--tx); border:1px solid var(--line);
+                            border-radius:4px; font:inherit; font-size:11px; padding:2px 4px; }
+  .row input[type=range] { flex:1; accent-color:var(--ok); }
+  .hint { color:var(--dim); font-size:10px; line-height:1.5; }
+
+  /* ── right: main scene ── */
+  #main { flex:1; display:flex; flex-direction:column; background:var(--panel);
+          border:1px solid var(--line); border-radius:8px; overflow:hidden; min-width:0; }
+  #main h2 { font-size:12px; padding:6px 10px; border-bottom:1px solid var(--line); color:var(--dim);
+             display:flex; align-items:center; gap:6px; flex-wrap:wrap; flex:none; }
+  #main h2 select { background:#0a0d12; color:var(--tx); border:1px solid var(--line); border-radius:4px;
+                    font:inherit; font-size:11px; max-width:170px; }
+  #sceneWrap { flex:1; position:relative; min-height:0; }
+  #scene { width:100%; height:100%; display:block; }
+  #status { position:absolute; left:10px; bottom:8px; color:#cfe0b8; font-size:11px;
+            background:rgba(6,10,6,.55); padding:3px 10px; border-radius:6px; pointer-events:none; }
+  #toasts { position:absolute; right:10px; top:8px; display:flex; flex-direction:column; gap:5px; }
+  .toast { background:rgba(8,14,8,.9); border:1px solid var(--line); color:var(--tx); font-size:11px;
+           padding:5px 10px; border-radius:6px; animation:tIn .15s ease; }
+  @keyframes tIn { from { opacity:0; transform:translateX(8px); } to { opacity:1; } }
+
+  button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+           padding:4px 10px; font:inherit; font-size:11.5px; cursor:pointer; }
+  button:hover { border-color:var(--dim); }
+  button.on { border-color:var(--ok); color:var(--ok); }
+  button.warn { border-color:var(--warn); color:var(--warn); }
+  button.sm { padding:2px 7px; font-size:10.5px; }
+
+  /* sketchfab modal */
+  #sf { position:absolute; inset:0; background:rgba(5,8,12,.8); display:none;
+        align-items:center; justify-content:center; z-index:20; }
+  #sf.show { display:flex; }
+  #sfCard { width:min(560px,92%); max-height:84%; background:var(--panel); border:1px solid var(--line);
+            border-radius:10px; display:flex; flex-direction:column; gap:8px; padding:12px; }
+  #sfCard .row input[type=text] { flex:1; background:#0a0d12; color:var(--tx); border:1px solid var(--line);
+                                  border-radius:6px; font:inherit; padding:6px 9px; }
+  #sfGrid { overflow-y:auto; display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+  #sfGrid .card { cursor:pointer; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  #sfGrid .card:hover { border-color:var(--ok); }
+  #sfGrid img { width:100%; aspect-ratio:1; object-fit:cover; display:block; }
+  #sfGrid .t { font-size:9.5px; color:var(--dim); padding:3px 5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<h1>junglelab <small>— forward host: place the jungle, grow branch spans, drop insects, drive the avatar. Left panels design one object; the scene on the right IS the live game session.</small></h1>
+
+<div id="wrap">
+  <div id="left">
+    <div id="leftHead">
+      <span>◧ OBJECT PANELS</span>
+      <button class="sm" id="collapseAll">collapse all</button>
+      <button class="sm" id="closeAll">close all</button>
+    </div>
+    <div id="panels"></div>
+  </div>
+
+  <div id="main">
+    <h2>
+      <button class="sm" id="toggleLeft" title="collapse the whole left column">◧</button>
+      <select id="objSelect" title="jump to any scene object"><option value="">— select object —</option></select>
+      <span style="color:var(--line)">|</span>
+      place:
+      <button class="sm place" data-p="fly">🪰 fly</button>
+      <button class="sm place" data-p="dragonfly">🜲 dragonfly</button>
+      <button class="sm place" data-p="butterfly">🦋 butterfly</button>
+      <button class="sm place" data-p="branch">🌿 branch</button>
+      <button class="sm place" data-p="tree">🌳 tree</button>
+      <button class="sm place" data-p="rock">🪨 rock</button>
+      <span style="color:var(--line)">|</span>
+      <button class="sm" id="sfOpen">🔍 sketchfab</button>
+      <label class="sm" style="cursor:pointer"><button class="sm" style="pointer-events:none">⬆ glb</button>
+        <input id="glbFile" type="file" accept=".glb,.gltf" hidden></label>
+      <button class="sm" id="glbURL">🔗 url</button>
+      <span style="color:var(--line)">|</span>
+      <button class="sm on" id="gridBtn">▦ grid</button>
+      <button class="sm" id="skyBtn">☀ sky: day</button>
+      <button class="sm" id="crawlBtn">⏵ crawl test</button>
+      <span style="color:var(--line)">|</span>
+      <button class="sm" id="saveBtn">💾 save</button>
+      <button class="sm" id="loadBtn">📂 load</button>
+    </h2>
+    <div id="sceneWrap">
+      <canvas id="scene"></canvas>
+      <div id="status">booting jungle…</div>
+      <div id="toasts"></div>
+      <div id="sf">
+        <div id="sfCard">
+          <div class="row">
+            <input type="text" id="sfQ" placeholder="search sketchfab… e.g. jungle tree, fly rigged">
+            <button id="sfGo">search</button><button id="sfX">✕</button>
+          </div>
+          <div id="sfGrid"></div>
+          <div class="hint">search is public · importing a model needs the hopeOS /api/sketchfab proxy
+            (server-side token). No proxy here → use ⬆ glb / 🔗 url instead.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { JungleWorld } from './sdk/world/jungle.js';
+import { InsectSystem } from './sdk/world/insects.js';
+import { searchModels, resolveGLB } from './sdk/world/sketchfab.js';
+import { initCamera, initTracking, POSE_MODELS } from './sdk/core/tracking.js';
+import { OneEuro } from './sdk/core/filters.js';
+import { PuppetInput } from './sdk/interaction/puppet.js';
+import { RuntimeJawRig, ProceduralTongue } from './sdk/interaction/jaw-rig.js';
+
+const $ = id => document.getElementById(id);
+const toast = (m, ms = 2600) => {
+  const el = document.createElement('div'); el.className = 'toast'; el.textContent = m;
+  $('toasts').appendChild(el); setTimeout(() => el.remove(), ms);
+};
+const status = m => { $('status').textContent = m; };
+addEventListener('error', e => status('ERR: ' + e.message + ' @' + (e.filename || '').split('/').pop() + ':' + e.lineno));
+addEventListener('unhandledrejection', e => status('ERR(promise): ' + (e.reason?.stack || e.reason?.message || e.reason)));
+
+/* ═══════════ renderer / scene ═══════════ */
+const canvas = $('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+const scene = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(50, 1, 0.05, 500);
+cam.position.set(0, 4.5, -13);
+const orbit = new OrbitControls(cam, canvas);
+orbit.target.set(0, 2.5, 2);
+orbit.update();
+function sizeR() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    renderer.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix();
+  }
+}
+
+/* ═══════════ jungle + insects ═══════════ */
+status('growing jungle…');
+const jungle = await JungleWorld.create(renderer, scene, { seed: 7 });
+jungle.presetRoute(8);
+const insects = await new InsectSystem(scene, jungle).ready();
+insects.populate({ flies: 6, dragonflies: 2, butterflies: 3 });
+status('jungle live — click objects to design them · pick a place-tool and click the ground');
+
+/* grid — the drop-in-and-go lattice */
+const grid = new THREE.GridHelper(40, 40, 0x3fb950, 0x233029);
+grid.material.transparent = true; grid.material.opacity = 0.35;
+grid.position.y = 0.02;
+scene.add(grid);
+$('gridBtn').onclick = () => { grid.visible = !grid.visible; $('gridBtn').classList.toggle('on', grid.visible); };
+
+/* ═══════════ light host: registry · lock · gravity · anchoring ═══════════
+   The concise re-do of world.html's WorldTemplate for THIS lab: objects are
+   {id,label,type,obj,locked,params}; gravity settles onto jungle.walkables;
+   branch spans anchor crawlers; locks freeze gizmo + panel edits.        */
+const host = {
+  objs: new Map(), n: 0,
+  add(type, obj, params = {}, label) {
+    const id = 'o' + (++this.n);
+    obj.userData.labId = id;
+    obj.traverse?.(c => c.userData.labId = id);
+    const e = { id, label: label || (type + ' ' + this.n), type, obj, locked: false, params };
+    this.objs.set(id, e); refreshSelect();
+    return e;
+  },
+  remove(id) {
+    const e = this.objs.get(id); if (!e) return;
+    if (e.type === 'insect') insects.remove(e.params.insect);
+    else e.obj.parent?.remove(e.obj);
+    this.objs.delete(id); closePanel(id); refreshSelect();
+    if (sel === e) select(null);
+  },
+  settle(e) {                             // gravity: drop onto whatever is below
+    if (e.locked) return toast('🔒 locked');
+    const from = e.obj.position.clone().add(new THREE.Vector3(0, 8, 0));
+    const ray = new THREE.Raycaster(from, new THREE.Vector3(0, -1, 0), 0.01, 60);
+    const hits = ray.intersectObjects(jungle.walkables, false);
+    if (hits.length) {
+      const box = new THREE.Box3().setFromObject(e.obj);
+      const lift = e.obj.position.y - box.min.y;
+      e.obj.position.y = hits[0].point.y + lift;
+      toast('⚓ settled on ' + (hits[0].object.name || 'surface'));
+    } else e.obj.position.y = jungle.groundY(e.obj.position.x, e.obj.position.z);
+    syncPanel(e);
+  }
+};
+let sel = null;
+
+/* gizmo */
+const gizmo = new TransformControls(cam, canvas);
+gizmo.addEventListener('dragging-changed', ev => { orbit.enabled = !ev.value; });
+gizmo.addEventListener('objectChange', () => { if (sel) syncPanel(sel); });
+scene.add(gizmo);
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'g') gizmo.setMode('translate');
+  if (e.key === 'r') gizmo.setMode('rotate');
+  if (e.key === 's') gizmo.setMode('scale');
+  if (e.key === 'Delete' && sel) host.remove(sel.id);
+});
+
+function select(e) {
+  if (sel) { panelOf(sel.id)?.classList.remove('focus'); }
+  sel = e;
+  gizmo.detach();
+  if (e) {
+    if (!e.locked) gizmo.attach(e.obj);
+    openPanel(e);
+    $('objSelect').value = e.id;
+    status(`selected: ${e.label}${e.locked ? ' 🔒' : ''} — g/r/s gizmo · Del delete`);
+  } else { $('objSelect').value = ''; }
+}
+
+/* ═══════════ selection + drop-in placement ═══════════ */
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
+let placeMode = null;
+document.querySelectorAll('.place').forEach(b => b.onclick = () => {
+  placeMode = placeMode === b.dataset.p ? null : b.dataset.p;
+  document.querySelectorAll('.place').forEach(x => x.classList.toggle('on', x.dataset.p === placeMode));
+  status(placeMode ? `place mode: ${placeMode} — click the ground/grid` : 'place mode off');
+});
+
+let downAt = null;
+canvas.addEventListener('pointerdown', e => { downAt = [e.clientX, e.clientY]; });
+canvas.addEventListener('pointerup', e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 5) return;  // it was a drag
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, cam);
+
+  if (placeMode) {
+    const hits = ray.intersectObjects([...jungle.walkables], false);
+    const p = hits.length ? hits[0].point : ray.ray.at(12, new THREE.Vector3());
+    placeAt(placeMode, p);
+    return;
+  }
+  // pick among host objects
+  const objs = [...host.objs.values()].map(o => o.obj);
+  const hits = ray.intersectObjects(objs, true);
+  if (hits.length) {
+    const id = hits[0].object.userData.labId;
+    select(host.objs.get(id) || null);
+  } else select(null);
+});
+
+function placeAt(kind, p) {
+  if (kind === 'fly' || kind === 'dragonfly' || kind === 'butterfly') {
+    const at = p.clone().add(new THREE.Vector3(0, kind === 'fly' ? 0.8 : 1.4, 0));
+    const ins = insects.spawn(kind, at);
+    const e = host.add('insect', ins.root, { insect: ins, kind });
+    select(e); toast('+ ' + kind);
+  } else if (kind === 'branch') {
+    const side = p.x >= 0 ? 1 : -1;
+    const span = jungle.addBranchSpan({ side, y: Math.max(1, p.y + 1.2), z: p.z });
+    const e = host.add('branch', span.group, { span });
+    select(e); toast('+ branch span (' + (side > 0 ? 'right' : 'left') + ' edge)');
+  } else if (kind === 'tree') {
+    const tree = jungle.makeTree(p.x, p.z, {});
+    const e = host.add('tree', tree, { x: p.x, z: p.z });
+    select(e); toast('+ tree');
+  } else if (kind === 'rock') {
+    const g = new THREE.IcosahedronGeometry(0.6, 1);
+    const m = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x5a6b4a, roughness: 0.95 }));
+    m.position.copy(p).add(new THREE.Vector3(0, 0.3, 0)); m.castShadow = m.receiveShadow = true;
+    scene.add(m); jungle.walkables.push(m);
+    const e = host.add('rock', m); select(e); toast('+ rock');
+  }
+}
+
+/* ═══════════ mini panels (left column) ═══════════ */
+const panelOf = id => document.querySelector(`.mini[data-id="${id}"]`);
+function closePanel(id) { panelOf(id)?.remove(); }
+function openPanel(e) {
+  let el = panelOf(e.id);
+  if (!el) { el = buildPanel(e); $('panels').prepend(el); }
+  document.querySelectorAll('.mini').forEach(m => m.classList.remove('focus'));
+  el.classList.add('focus'); el.classList.remove('closed');
+  el.scrollIntoView({ block: 'nearest' });
+  syncPanel(e);
+}
+function buildPanel(e) {
+  const el = document.createElement('div');
+  el.className = 'mini'; el.dataset.id = e.id;
+  const icon = { insect: '🪰', branch: '🌿', tree: '🌳', rock: '🪨', glb: '📦', avatar: '🦎' }[e.type] || '▦';
+  el.innerHTML = `
+    <h3><span class="ic">${icon}</span><span class="nm">${e.label}</span>
+      <span class="b lk" title="lock">${e.locked ? '🔒' : '🔓'}</span>
+      <span class="b co" title="collapse">▾</span><span class="b cx" title="close panel">✕</span></h3>
+    <div class="bd">
+      <div class="row"><label>pos</label>
+        <input type="number" step="0.1" data-k="px"><input type="number" step="0.1" data-k="py">
+        <input type="number" step="0.1" data-k="pz"></div>
+      <div class="row"><label>rot y</label><input type="range" min="-180" max="180" value="0" data-k="ry">
+        <label>scale</label><input type="number" step="0.05" value="1" data-k="sc" style="width:52px"></div>
+      <div class="row">
+        <button class="sm act" data-a="settle">⚓ settle (gravity)</button>
+        <button class="sm act" data-a="dup">⧉ dup</button>
+        <button class="sm act warn" data-a="del">🗑</button>
+      </div>
+      ${e.type === 'insect' ? `<div class="row">
+        <button class="sm act" data-a="perch">🛬 perch nearby</button>
+        <button class="sm act" data-a="takeoff">🛫 take off</button></div>` : ''}
+      ${e.type === 'branch' ? `<div class="hint">branch span — crawlable: the crawl test anchors to its curve. Move with the gizmo; y/z edits via pos.</div>` : ''}
+      <div class="hint sync"></div>
+    </div>`;
+  const h3 = el.querySelector('h3');
+  h3.onclick = ev => { if (!ev.target.classList.contains('b')) select(e); };
+  el.querySelector('.co').onclick = ev => { ev.stopPropagation(); el.classList.toggle('closed'); };
+  el.querySelector('.cx').onclick = ev => { ev.stopPropagation(); el.remove(); };
+  el.querySelector('.lk').onclick = ev => {
+    ev.stopPropagation();
+    e.locked = !e.locked;
+    ev.target.textContent = e.locked ? '🔒' : '🔓';
+    if (e.locked && sel === e) gizmo.detach(); else if (sel === e) gizmo.attach(e.obj);
+    toast((e.locked ? '🔒 locked ' : '🔓 unlocked ') + e.label);
+  };
+  el.querySelectorAll('input').forEach(inp => inp.oninput = () => {
+    if (e.locked) return;
+    const o = e.obj, k = inp.dataset.k, v = parseFloat(inp.value);
+    if (Number.isNaN(v)) return;
+    if (k === 'px') o.position.x = v; if (k === 'py') o.position.y = v; if (k === 'pz') o.position.z = v;
+    if (k === 'ry') o.rotation.y = v * Math.PI / 180;
+    if (k === 'sc') o.scale.setScalar(v);
+    if (e.type === 'insect') e.params.insect.setAnchor(o.position, e.params.insect.anchorR);
+  });
+  el.querySelectorAll('.act').forEach(b => b.onclick = () => {
+    const a = b.dataset.a;
+    if (a === 'settle') host.settle(e);
+    if (a === 'del') host.remove(e.id);
+    if (a === 'dup') {
+      if (e.type === 'insect') placeAt(e.params.kind, e.obj.position.clone().add(new THREE.Vector3(0.5, 0, 0.5)));
+      else if (e.type === 'branch') placeAt('branch', e.obj.position.clone().add(new THREE.Vector3(0, 0.8, 2)));
+      else toast('dup: use place tools for this type');
+    }
+    if (a === 'perch') {
+      const near = jungle.nearestSpanPoint(e.obj.position, 4);
+      if (near) e.params.insect.perchOn(near.point.clone().add(new THREE.Vector3(0, near.span.r0, 0)));
+      else toast('no branch span within 4m');
+    }
+    if (a === 'takeoff') e.params.insect.takeOff();
+  });
+  return el;
+}
+function syncPanel(e) {
+  const el = panelOf(e.id); if (!el) return;
+  const q = k => el.querySelector(`input[data-k="${k}"]`);
+  if (document.activeElement?.dataset?.k) return;      // don't fight typing
+  q('px').value = e.obj.position.x.toFixed(2);
+  q('py').value = e.obj.position.y.toFixed(2);
+  q('pz').value = e.obj.position.z.toFixed(2);
+  q('ry').value = (e.obj.rotation.y * 180 / Math.PI).toFixed(0);
+  q('sc').value = e.obj.scale.x.toFixed(2);
+  el.querySelector('.sync').textContent =
+    `${e.type} · ${e.locked ? 'locked' : 'editable'} · y=${e.obj.position.y.toFixed(2)}`;
+}
+
+/* left column controls */
+$('toggleLeft').onclick = () => $('left').classList.toggle('collapsed');
+$('collapseAll').onclick = () => document.querySelectorAll('.mini').forEach(m => m.classList.add('closed'));
+$('closeAll').onclick = () => document.querySelectorAll('.mini:not([data-id="avatar"])').forEach(m => m.remove());
+
+/* object dropdown */
+function refreshSelect() {
+  const s = $('objSelect');
+  const cur = s.value;
+  s.innerHTML = '<option value="">— select object —</option>' +
+    [...host.objs.values()].map(o => `<option value="${o.id}">${o.label}${o.locked ? ' 🔒' : ''}</option>`).join('');
+  s.value = cur;
+}
+$('objSelect').onchange = () => {
+  const e = host.objs.get($('objSelect').value);
+  if (e) { select(e); orbit.target.copy(e.obj.position); orbit.update(); }
+};
+
+/* ═══════════ AVATAR panel (default, special) ═══════════ */
+const avatarEntry = { id: 'avatar', label: 'avatar — lizard', type: 'avatar', obj: new THREE.Group(), locked: false, params: {} };
+avatarEntry.obj.position.set(0, 1.2, -4);
+scene.add(avatarEntry.obj);
+host.objs.set('avatar', avatarEntry); refreshSelect();
+{
+  const el = document.createElement('div');
+  el.className = 'mini'; el.dataset.id = 'avatar';
+  el.innerHTML = `
+    <h3><span class="ic">🦎</span><span class="nm">avatar — lizard</span>
+      <span class="b co">▾</span></h3>
+    <div class="bd">
+      <div class="row"><button class="sm" id="avLoad">load Lizard.glb (41 MB)</button>
+        <button class="sm" id="avProxy">use proxy capsule</button></div>
+      <div class="row"><button class="sm" id="avWalk">🦎 load walking lizard (rigged)</button>
+        <button class="sm" id="avSync">🎥 hand-crawl sync</button>
+        <button class="sm" id="avFlip" title="flip if it walks backwards">↺</button></div>
+      <div class="row"><label>size</label><input type="range" id="avScale" min="0.2" max="3" step="0.05" value="1"></div>
+      <div class="row"><button class="sm" id="avDrop">⚓ drop at grid centre</button>
+        <button class="sm" id="avAnchor">🌿 anchor to nearest branch</button></div>
+      <div class="hint" id="avInfo">no model yet — the crawl test will use whatever is loaded here.
+        Movement sync (face/body contracts) plugs in next; this panel owns the puppet.</div>
+    </div>`;
+  el.querySelector('h3').onclick = ev => { if (!ev.target.classList.contains('b')) select(avatarEntry); };
+  el.querySelector('.co').onclick = ev => { ev.stopPropagation(); el.classList.toggle('closed'); };
+  $('panels').appendChild(el);
+
+  $('avProxy').onclick = () => buildAvatarProxy();
+  $('avLoad').onclick = async () => {
+    $('avInfo').textContent = 'loading Lizard.glb…';
+    try {
+      const g = await new GLTFLoader().loadAsync('./Lizard.glb');
+      avatarEntry.obj.clear();
+      const m = g.scene;
+      const box = new THREE.Box3().setFromObject(m);
+      const span = box.getSize(new THREE.Vector3()).length() || 1;
+      m.scale.setScalar(1.4 / span);           // ~0.9m lizard
+      const b2 = new THREE.Box3().setFromObject(m);
+      m.position.y = -b2.min.y;
+      m.traverse(c => { if (c.isMesh) { c.castShadow = true; c.userData.labId = 'avatar'; } });
+      avatarEntry.obj.add(m);
+      $('avInfo').textContent = 'Lizard.glb loaded (static hi-poly — tier-C rig comes via contract next).';
+    } catch (err) { $('avInfo').textContent = 'load failed: ' + err.message; }
+  };
+  $('avScale').oninput = () => avatarEntry.obj.scale.setScalar(parseFloat($('avScale').value));
+  $('avDrop').onclick = () => { avatarEntry.obj.position.set(0, 2, 0); host.settle(avatarEntry); };
+  $('avAnchor').onclick = () => {
+    const near = jungle.nearestSpanPoint(avatarEntry.obj.position, 6);
+    if (!near) return toast('no branch span within 6m');
+    crawl.attach(near);
+    toast('🌿 anchored — ← → crawl · ↑ jump to higher span · ↓ drop');
+  };
+  buildAvatarProxy();
+  function buildAvatarProxy() {
+    avatarEntry.obj.clear();
+    const g = new THREE.Group();
+    const mat = new THREE.MeshStandardMaterial({ color: 0x7fae3e, roughness: 0.7 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.09, 0.34), mat);
+    body.rotation.x = Math.PI / 2; body.castShadow = true;
+    const tail = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.4, 8), mat);
+    tail.rotation.x = Math.PI / 2; tail.position.z = -0.42; tail.castShadow = true;
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.18, 8), mat);
+    head.rotation.x = -Math.PI / 2; head.position.z = 0.32;
+    g.add(body, tail, head);
+    g.traverse(c => c.userData.labId = 'avatar');
+    avatarEntry.obj.add(g);
+    $('avInfo').textContent = 'proxy capsule active — light stand-in until the GLB/rig is wired.';
+  }
+}
+
+/* ═══════════ AIR-CRAWL SYNC: two-hand crawl strokes drive the walking lizard ═══════════
+   lizardwalking.glb = pre-rigged, ONE clip (the crawl cycle, all 27 joints).
+   Sync model = CLIP SCRUBBING: the user "crawl walks" in the air — extending
+   hand+arm forward (wrist toward camera, relative to the shoulder, from pose
+   WORLD landmarks) — and stroke EFFORT drives the clip's timeScale + forward
+   travel. Stop stroking → effort decays in ~⅓s → lizard freezes mid-stance.
+   If the lizard is anchored to a branch (crawl test), strokes drive it along
+   the branch instead of the ground. */
+const walker = { loaded: false, mixer: null, model: null, rootBone: null, rootRest: null };
+
+async function loadWalkingLizard() {
+  $('avInfo').textContent = 'loading lizardwalking.glb (43 MB)…';
+  const g = await new GLTFLoader().loadAsync('./lizardwalking.glb');
+  avatarEntry.obj.clear();
+  const m = g.scene;
+  const box = new THREE.Box3().setFromObject(m);
+  const span = box.getSize(new THREE.Vector3()).length() || 1;
+  m.scale.setScalar(1.4 / span);
+  const b2 = new THREE.Box3().setFromObject(m);
+  m.position.y = -b2.min.y;
+  m.traverse(c => { c.userData.labId = 'avatar'; if (c.isMesh) c.castShadow = true; });
+  avatarEntry.obj.add(m);
+  walker.model = m;
+  walker.mixer = new THREE.AnimationMixer(m);
+  const clip = g.animations[0];
+  walker.mixer.clipAction(clip).play();
+  walker.mixer.timeScale = 0;                     // frozen until strokes arrive
+  // root-motion lock: if the clip translates the skeleton root forward (baked
+  // walks do), holding its horizontal rest position turns it into walk-in-place
+  m.traverse(o => {
+    if (!walker.rootBone && o.isBone && !(o.parent?.isBone)) {
+      walker.rootBone = o; walker.rootRest = o.position.clone();
+    }
+  });
+  // ── ENGINE-SIDE mouth rig: runtime jaw bone + weight migration on the
+  // ORIGINAL glb (no Blender round-trip). The clip has no 'jaw' tracks, so
+  // the mixer never fights it. Tongue = procedural tube on the jaw socket.
+  walker.jawRig = new RuntimeJawRig().rig(m);
+  walker.tongue = walker.jawRig?.socket
+    ? new ProceduralTongue(scene, walker.jawRig.socket) : null;
+
+  walker.loaded = true;
+  $('avInfo').textContent =
+    `walking lizard ready — clip "${clip.name}" ${clip.duration.toFixed(1)}s` +
+    (walker.jawRig ? ` · jaw rigged at runtime (${walker.jawRig.stats.selected} verts)` : ' · jaw rig FAILED') +
+    '. Start 🎥 hand-crawl sync, then crawl your hands forward in the air; open your mouth / tongue out to hunt.';
+}
+
+const air = {
+  active: false, tracker: null, vid: null, puppet: null, score: 0,
+  fL: new OneEuro(1.5, 0.4), fR: new OneEuro(1.5, 0.4),
+  prevL: null, prevR: null, upL: false, upR: false,
+  lastT: 0, effort: 0, strokes: 0, poseSeen: false,
+  async start() {
+    if (!this.tracker) {
+      this.vid = document.createElement('video');
+      this.vid.muted = true; this.vid.playsInline = true; this.vid.style.display = 'none';
+      document.body.appendChild(this.vid);
+      await initCamera(null, this.vid);
+      // FULL-STACK intake, same SDK as humanlab: pose (full model, every
+      // frame → air-crawl locomotion) + face (mouth/tongue triggers + head
+      // matrix → steering/strike). Hands stay off — no gameplay use yet.
+      this.tracker = await initTracking(this.vid, {
+        enableHands: false, poseEvery: 1, poseModel: POSE_MODELS.full,
+        faceEvery: 2, faceMatrix: true
+      });
+      // face-puppet contract lane: MouthTriggers (MAR + tongue red-ratio,
+      // pixels from this same video) + head degrees — the lizard game loop
+      this.puppet = new PuppetInput(this.vid);
+      this.puppet.on('mouthOpen', () => status('🦎 mouth open — tongue ARMED'));
+      this.puppet.on('tongueOut', () => tongueStrike());
+    }
+    this.active = true;
+  },
+  stop() { this.active = false; this.effort = 0; },
+  /** per-frame → effort 0..1 (0 = lizard must stop) */
+  update(t) {
+    if (!this.active || !this.tracker) return 0;
+    const dt = this.lastT ? Math.min((t - this.lastT) / 1000, 0.1) : 1 / 60;
+    this.lastT = t;
+    const frame = this.tracker.detect();
+    this.puppet?.update(frame, t);
+    const pw = frame.poseWorld;
+    if (pw) {
+      this.poseSeen = true;
+      const vis = i => pw[i]?.visibility ?? 1;
+      let vSum = 0, anyForward = false;
+      // reach = shoulder.z − wrist.z (world, meters): + = wrist toward camera
+      for (const [s, w, key] of [[11, 15, 'L'], [12, 16, 'R']]) {
+        if (vis(s) < 0.5 || vis(w) < 0.5) { this['prev' + key] = null; continue; }
+        const r = (key === 'L' ? this.fL : this.fR).filter(pw[s].z - pw[w].z, dt);
+        if (this['prev' + key] !== null) vSum += Math.abs(r - this['prev' + key]) / dt;
+        this['prev' + key] = r;
+        if (r > 0.12) anyForward = true;
+        // stroke counter (hysteresis) — HUD + debugging, effort does the driving
+        if (!this['up' + key] && r > 0.26) { this['up' + key] = true; this.strokes++; }
+        else if (this['up' + key] && r < 0.16) this['up' + key] = false;
+      }
+      if (!anyForward) vSum = 0;         // arms at rest: waving elbows won't drive
+      this.effort = Math.min(this.effort * Math.exp(-dt / 0.35) + vSum * dt * 2.2, 1.5);
+      if (this.effort < 0.06) this.effort = 0;   // decayed → hard stop
+    }
+    return Math.min(this.effort, 1);
+  }
+};
+
+$('avWalk').onclick = () => loadWalkingLizard().catch(e => { $('avInfo').textContent = 'load failed: ' + e.message; });
+$('avFlip').onclick = () => { if (walker.model) { walker.model.rotation.y += Math.PI; toast('↺ heading flipped'); } };
+$('avSync').onclick = async () => {
+  if (air.active) { air.stop(); $('avSync').classList.remove('on'); status('crawl-sync off'); return; }
+  try {
+    if (!walker.loaded) await loadWalkingLizard();
+    $('avSync').textContent = '🎥 booting…';
+    await air.start();
+    $('avSync').textContent = '🎥 hand-crawl sync';
+    $('avSync').classList.add('on');
+    toast('🦎 crawl your hands forward in the air — lizard walks; stop → it stops');
+  } catch (e) { $('avSync').textContent = '🎥 hand-crawl sync'; toast('sync failed: ' + e.message); }
+};
+
+/* tongue strike — the I-AM-LIZARD loop: mouth open arms it (enforced inside
+   MouthTriggers: tongueOut can only fire while the mouth is open), tongue out
+   FIRES at the nearest insect roughly ahead of the lizard. */
+const fx = { line: null, until: 0 };
+function strikeFx(from, to) {
+  if (!fx.line) {
+    fx.line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([from, to]),
+      new THREE.LineBasicMaterial({ color: 0xff5f7a, transparent: true, opacity: 0.95 }));
+    scene.add(fx.line);
+  } else fx.line.geometry.setFromPoints([from, to]);
+  fx.line.visible = true;
+  fx.until = performance.now() + 160;
+}
+function tongueStrike() {
+  if (!walker.loaded) return;
+  const from = avatarEntry.obj.position.clone().add(new THREE.Vector3(0, 0.25, 0));
+  avatarEntry.obj.getWorldDirection(_walkDir); _walkDir.y = 0; _walkDir.normalize();
+  let best = null;
+  for (const ins of insects.insects) {
+    const d = ins.root.position.distanceTo(from);
+    if (d > 3.0) continue;
+    const to = ins.root.position.clone().sub(from).normalize();
+    if (to.dot(_walkDir) < 0.35 && d > 0.8) continue;   // must be roughly ahead unless point-blank
+    if (!best || d < best.d) best = { ins, d };
+  }
+  const target = best ? best.ins.root.position.clone()
+                      : from.clone().addScaledVector(_walkDir, 1.6);
+  if (walker.tongue) walker.tongue.strike(target);   // real tongue shoots straight
+  else strikeFx(from, target);
+  if (best) {
+    const e = [...host.objs.values()].find(x => x.type === 'insect' && x.params.insect === best.ins);
+    if (e) host.remove(e.id); else insects.remove(best.ins);
+    air.score++;
+    toast(`🦎 gulp! +1 (eaten ${air.score})`);
+  }
+}
+
+const _walkDir = new THREE.Vector3();
+function updateAirCrawl(t, dt) {
+  if (fx.line && performance.now() > fx.until) fx.line.visible = false;
+  if (!air.active || !walker.loaded) return;
+  const eff = air.update(t);
+
+  // head-yaw steering (face matrix, mirrored-view degrees): turn your head
+  // past the deadzone to steer the lizard's heading. Sign is lab-verified —
+  // flip the minus if it steers the wrong way on this rig.
+  const hd = air.puppet?.state.head;
+  if (hd?.seen && Math.abs(hd.yaw) > 8) {
+    avatarEntry.obj.rotation.y -=
+      Math.sign(hd.yaw) * Math.min((Math.abs(hd.yaw) - 8) / 27, 1) * 1.6 * dt;
+  }
+  // effort → clip speed: dead-stop below threshold, else 0.4–1.8× cycle speed
+  walker.mixer.timeScale = eff === 0 ? 0 : 0.4 + eff * 1.4;
+  walker.mixer.update(dt);
+  if (walker.rootBone) {                 // hold clip's baked root travel in place
+    walker.rootBone.position.x = walker.rootRest.x;
+    walker.rootBone.position.z = walker.rootRest.z;
+  }
+  // mouth lane AFTER the mixer (decoupled: the clip has no jaw/tongue tracks):
+  // jaw follows your mouth degree; tongue pokes with your tongue channel
+  const mouthState = air.puppet?.state.mouth;
+  if (walker.jawRig) walker.jawRig.setOpen(mouthState?.mouthOpenAmount ?? 0);
+  if (walker.tongue) {
+    if (!walker.tongue.striking) walker.tongue.poke(mouthState?.tongueAmount ?? 0);
+    walker.tongue.update();
+  }
+  const speed = walker.mixer.timeScale * 0.30;   // m/s at cycle speed
+  if (speed > 0) {
+    if (crawl.active) {                  // anchored: strokes drive along the branch
+      crawl.t = THREE.MathUtils.clamp(
+        crawl.t + speed * dt / Math.max(crawl.span.length(), 1), 0.02, 0.98);
+      crawl._sync();
+    } else {                             // ground: walk forward along heading
+      avatarEntry.obj.getWorldDirection(_walkDir);
+      _walkDir.y = 0; _walkDir.normalize();
+      avatarEntry.obj.position.addScaledVector(_walkDir, speed * dt);
+      const p = avatarEntry.obj.position;
+      p.x = THREE.MathUtils.clamp(p.x, -18, 18);
+      p.z = THREE.MathUtils.clamp(p.z, -18, 18);
+      p.y = jungle.groundY(p.x, p.z);
+    }
+  }
+  const mouth = air.puppet?.state.mouth;
+  status(`🦎 crawl-sync ${eff === 0 ? 'IDLE' : 'WALKING'} · effort ${(eff * 100) | 0}% · ` +
+    `strokes ${air.strokes} · clip ×${walker.mixer.timeScale.toFixed(2)} · ` +
+    `mouth ${mouth?.mouthOpen ? 'OPEN' : '–'} tongue ${mouth?.tongueOut ? 'OUT!' : '–'} · ` +
+    `eaten ${air.score}` + (air.poseSeen ? '' : ' · waiting for pose…'));
+}
+
+/* ═══════════ crawl test — branch anchoring proof ═══════════ */
+const crawl = {
+  active: false, span: null, t: 0.5, keys: {},
+  attach(near) {
+    this.active = true; this.span = near.span; this.t = near.t;
+    $('crawlBtn').classList.add('on');
+    this._sync();
+  },
+  detach() { this.active = false; $('crawlBtn').classList.remove('on'); },
+  _sync() {
+    const p = this.span.pointAt(this.t);
+    const tan = this.span.tangentAt(this.t);
+    avatarEntry.obj.position.copy(p).add(new THREE.Vector3(0, this.span.r0 * 0.95, 0));
+    avatarEntry.obj.lookAt(p.clone().add(tan));
+  },
+  update(dt) {
+    if (!this.active) return;
+    const spd = 0.35 * dt / Math.max(this.span.length() / 10, 0.3);
+    if (this.keys.ArrowLeft) this.t -= spd;
+    if (this.keys.ArrowRight) this.t += spd;
+    // front/back along depth: hop crawl target toward a span deeper/nearer
+    this.t = THREE.MathUtils.clamp(this.t, 0.02, 0.98);
+    if (this.keys.ArrowUp) {                       // jump to a higher span within reach
+      this.keys.ArrowUp = false;
+      const p = avatarEntry.obj.position;
+      let best = null;
+      for (const s of jungle.spans) {
+        if (s === this.span) continue;
+        for (let i = 0; i <= 20; i++) {
+          const q = s.pointAt(i / 20);
+          const dy = q.y - p.y, d = q.distanceTo(p);
+          if (dy > 0.15 && dy < 2.2 && d < 3.2 && (!best || d < best.d)) best = { s, t: i / 20, d };
+        }
+      }
+      if (best) { this.span = best.s; this.t = best.t; toast('⤴ jumped to higher span'); }
+      else toast('no span within jump reach (↑)');
+    }
+    if (this.keys.ArrowDown) { this.keys.ArrowDown = false; this.detach(); host.settle(avatarEntry); toast('dropped off the branch'); }
+    this._sync();
+  }
+};
+addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (crawl.active && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+    crawl.keys[e.key] = true; e.preventDefault();
+  }
+});
+addEventListener('keyup', e => { crawl.keys[e.key] = false; });
+$('crawlBtn').onclick = () => {
+  if (crawl.active) return crawl.detach();
+  const near = jungle.nearestSpanPoint(avatarEntry.obj.position, 50);
+  if (near) { crawl.attach(near); toast('crawl test: ← → crawl · ↑ jump higher · ↓ drop off'); }
+};
+
+/* ═══════════ sky toggle ═══════════ */
+$('skyBtn').onclick = async () => {
+  const next = jungle.sky === 'day' ? 'rainforest' : 'day';
+  $('skyBtn').textContent = '☀ sky: …';
+  await jungle.setSky(next);
+  $('skyBtn').textContent = (next === 'day' ? '☀ sky: day' : '🌴 sky: rainforest');
+};
+
+/* ═══════════ GLB import: local · url · sketchfab ═══════════ */
+async function importGLB(url, label) {
+  status('importing ' + label + '…');
+  try {
+    const g = await new GLTFLoader().loadAsync(url);
+    const m = g.scene;
+    const box = new THREE.Box3().setFromObject(m);
+    const span = box.getSize(new THREE.Vector3()).length() || 1;
+    if (span > 12) m.scale.setScalar(8 / span);       // sane default size
+    m.position.set(0, 3, 2);
+    m.traverse(c => { if (c.isMesh) c.castShadow = true; });
+    scene.add(m);
+    const e = host.add('glb', m, { url: url.startsWith('blob:') ? null : url }, label);
+    host.settle(e); select(e);
+    status('imported ' + label);
+  } catch (err) { toast('import failed: ' + err.message); status('import failed'); }
+}
+$('glbFile').onchange = e => {
+  const f = e.target.files[0];
+  if (f) importGLB(URL.createObjectURL(f), f.name);
+};
+$('glbURL').onclick = () => {
+  const u = prompt('direct .glb URL:');
+  if (u) importGLB(u, u.split('/').pop());
+};
+
+/* sketchfab modal — proxy first, public API fallback for search */
+$('sfOpen').onclick = () => $('sf').classList.add('show');
+$('sfX').onclick = () => $('sf').classList.remove('show');
+$('sfGo').onclick = doSearch;
+$('sfQ').onkeydown = e => { if (e.key === 'Enter') doSearch(); };
+async function doSearch() {
+  const q = $('sfQ').value.trim(); if (!q) return;
+  $('sfGrid').innerHTML = '<div class="hint">searching…</div>';
+  let results = [];
+  try { ({ results } = await searchModels(q, { count: 16 })); }
+  catch {
+    try {   // no proxy (static server) → public API direct
+      const r = await fetch(`https://api.sketchfab.com/v3/search?type=models&downloadable=true&count=16&q=${encodeURIComponent(q)}`);
+      const d = await r.json();
+      results = (d.results || []).map(m => ({
+        uid: m.uid, name: m.name,
+        thumb: (m.thumbnails?.images || []).sort((a, b) => a.width - b.width).find(i => i.width >= 256)?.url
+      })).filter(x => x.thumb);
+    } catch (e2) { $('sfGrid').innerHTML = '<div class="hint">search failed: ' + e2.message + '</div>'; return; }
+  }
+  $('sfGrid').innerHTML = '';
+  for (const m of results) {
+    const c = document.createElement('div'); c.className = 'card';
+    c.innerHTML = `<img src="${m.thumb}"><div class="t">${m.name || ''}</div>`;
+    c.onclick = async () => {
+      try { const url = await resolveGLB(m.uid); $('sf').classList.remove('show'); importGLB(url, m.name || 'sketchfab'); }
+      catch { toast('needs the /api/sketchfab proxy (server token) — use ⬆ glb or 🔗 url'); }
+    };
+    $('sfGrid').appendChild(c);
+  }
+}
+
+/* ═══════════ save / load ═══════════ */
+$('saveBtn').onclick = () => {
+  const doc = {
+    sky: jungle.sky,
+    spans: jungle.spans.map(s => ({ side: s.side, y: s.y, z: s.z, len: s.len })),
+    objects: [...host.objs.values()].filter(e => e.type === 'insect' || e.type === 'glb').map(e => ({
+      type: e.type, kind: e.params.kind, url: e.params.url,
+      p: e.obj.position.toArray(), ry: e.obj.rotation.y, s: e.obj.scale.x, locked: e.locked
+    })),
+    avatar: { p: avatarEntry.obj.position.toArray(), s: avatarEntry.obj.scale.x }
+  };
+  localStorage.setItem('junglelab.scene', JSON.stringify(doc));
+  toast('💾 saved (' + doc.objects.length + ' objects, ' + doc.spans.length + ' spans)');
+};
+$('loadBtn').onclick = () => {
+  const raw = localStorage.getItem('junglelab.scene');
+  if (!raw) return toast('nothing saved yet');
+  const doc = JSON.parse(raw);
+  for (const sp of doc.spans || []) {
+    if (!jungle.spans.find(s => Math.abs(s.z - sp.z) < 0.5 && Math.abs(s.y - sp.y) < 0.3))
+      jungle.addBranchSpan(sp);
+  }
+  for (const o of doc.objects || []) {
+    if (o.type === 'insect') {
+      const ins = insects.spawn(o.kind || 'fly', new THREE.Vector3(...o.p));
+      const e = host.add('insect', ins.root, { insect: ins, kind: o.kind });
+      e.locked = !!o.locked;
+    } else if (o.type === 'glb' && o.url) importGLB(o.url, 'saved glb');
+  }
+  if (doc.avatar) { avatarEntry.obj.position.fromArray(doc.avatar.p); avatarEntry.obj.scale.setScalar(doc.avatar.s); }
+  toast('📂 loaded');
+};
+
+/* ═══════════ main loop ═══════════ */
+let last = 0;
+function tick(t) {
+  requestAnimationFrame(tick);
+  const dt = last ? Math.min((t - last) / 1000, 0.05) : 0;
+  last = t;
+  sizeR();
+  jungle.update(dt);
+  insects.update(dt);
+  crawl.update(dt);
+  updateAirCrawl(t, dt);
+  if (sel && !gizmo.dragging) syncPanel(sel);
+  renderer.render(scene, cam);
+}
+tick(0);
+</script>
+</body>
+</html>

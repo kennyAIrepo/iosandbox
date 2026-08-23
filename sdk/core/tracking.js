@@ -34,6 +34,13 @@ const VISION_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18
 const WASM_URL   = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.18/wasm';
 const HAND_MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const POSE_MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
+// lite = cheapest, noisiest world-z (fine for gesture triggers). full/heavy
+// give much stabler 3D world landmarks — use for retargeting (body-drive.js).
+export const POSE_MODELS = {
+  lite: POSE_MODEL,
+  full: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
+  heavy: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/1/pose_landmarker_heavy.task'
+};
 const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 let _visionP = null;
@@ -106,6 +113,8 @@ export async function createFaceLandmarker(opts = {}) {
  *                         use 1 for expression-TRIGGER games where jaw/tongue
  *                         latency is gameplay, not cosmetics)
  *   faceMatrix:  true   → face result includes 4×4 head-pose matrix
+ *   poseModel:   URL    → pose .task model (see POSE_MODELS; default lite —
+ *                         retargeting pages should pass POSE_MODELS.full)
  *   poseEvery, numHands, raw, handConfidence, trackingConfidence: as before
  */
 export async function initTracking(videoEl, opts = {}) {
@@ -115,7 +124,8 @@ export async function initTracking(videoEl, opts = {}) {
     trackingConfidence: opts.trackingConfidence
   });
 
-  const poseLandmarker = opts.enablePose === false ? null : await createPoseLandmarker({ numPoses: 1 });
+  const poseLandmarker = opts.enablePose === false ? null
+    : await createPoseLandmarker({ numPoses: 1, model: opts.poseModel });
 
   // Face Landmarker (optional — 478 landmarks + 52 blendshapes)
   let faceLandmarker = null;

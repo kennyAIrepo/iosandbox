@@ -364,6 +364,11 @@ export { BodyGestureDetector, POSE_LANDMARKS, jointAngle } from './interaction/b
 export { FaceExpressionDetector } from './interaction/face.js';
 export { MouthTriggers } from './interaction/mouth.js';
 export { PuppetInput } from './interaction/puppet.js';
+export { BodyProbe, probeBody, MEDIAPIPE_POSE_33, MOVENET_17 } from './interaction/body-measures.js';
+export { QuadrupedDriver } from './interaction/quadruped.js';
+export { BipedDriver } from './interaction/body-drive.js';
+export { HandProbe, probeHand, fingerCurl, FINGER_POINTS } from './interaction/hand-measures.js';
+export { classifySkeleton, alignBodyContract, graphFromScene, BODY_CHANNEL_RULES } from './interaction/skeleton-align.js';
 export { FireEffect } from './interaction/effects.js';
 export { VoiceCommander } from './interaction/voice.js';
 export { GrabState, isPinch, pinchPoint, palmCenter, handQuaternion } from './interaction/grab.js';

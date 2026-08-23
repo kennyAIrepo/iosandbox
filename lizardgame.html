@@ -1,0 +1,1248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I AM LIZARD — 2D mock-3D embodiment hunt (your body drives the lizard)</title>
+<style>
+  * { box-sizing:border-box; margin:0; }
+  html, body { height:100%; overflow:hidden; background:#09140a;
+    font:13px/1.4 ui-monospace,Consolas,monospace; color:#e6edf3; }
+  #stage { position:fixed; inset:0; }
+  canvas.layer { position:absolute; inset:0; width:100%; height:100%; display:block; }
+  /* ── wooden score board ── */
+  #board { position:absolute; top:14px; right:16px; min-width:190px; padding:10px 16px 12px;
+    background:linear-gradient(160deg,#8a6134 0%,#6d4a24 45%,#59391a 100%);
+    border:3px solid #3e2812; border-radius:10px; box-shadow:0 6px 18px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,235,180,.25);
+    color:#f7ecd2; text-shadow:0 1px 2px rgba(0,0,0,.5); user-select:none; }
+  #board::before, #board::after { content:''; position:absolute; top:-9px; width:8px; height:8px;
+    border-radius:50%; background:#2c1c0a; box-shadow:inset 0 -1px 1px rgba(255,255,255,.2); }
+  #board::before { left:18px; } #board::after { right:18px; }
+  #board .score { font-size:30px; font-weight:bold; letter-spacing:1px; }
+  #board .row { display:flex; justify-content:space-between; gap:14px; font-size:11.5px; opacity:.92; }
+  #board .streak.hot { color:#ffb347; }
+  /* ── selfie PiP ── */
+  #pip { position:absolute; left:14px; bottom:14px; width:176px; border:2px solid rgba(20,40,16,.8);
+    border-radius:10px; overflow:hidden; opacity:.92; background:#000; }
+  #pip .mirror { position:relative; transform:scaleX(-1); }
+  #pip video, #pip canvas { width:100%; aspect-ratio:4/3; display:block; object-fit:cover; }
+  #pip canvas { position:absolute; inset:0; }
+  #pip .tag { position:absolute; left:0; right:0; bottom:0; padding:2px 6px; font-size:10px;
+    background:rgba(8,16,6,.65); color:#9fd48a; }
+  /* ── overlays ── */
+  .ovl { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+    background:radial-gradient(ellipse at 50% 40%, rgba(10,26,10,.55), rgba(4,10,4,.88));
+    z-index:10; }
+  .card { max-width:640px; padding:28px 34px; background:rgba(14,26,12,.92); border:1px solid #2c4a24;
+    border-radius:14px; box-shadow:0 10px 40px rgba(0,0,0,.6); }
+  .card h1 { font-size:30px; color:#a8d95a; letter-spacing:2px; margin-bottom:4px; }
+  .card h1 small { display:block; font-size:12px; color:#7fae6a; letter-spacing:0; margin-top:4px; }
+  .card table { margin:14px 0; border-collapse:collapse; font-size:12px; }
+  .card td { padding:3px 10px 3px 0; color:#cfe0b8; }
+  .card td:first-child { color:#8fc46a; white-space:nowrap; }
+  .card .btns { display:flex; gap:12px; margin-top:16px; }
+  button { background:#31511f; color:#e9f5d0; border:1px solid #4f7a2e; border-radius:8px;
+    padding:10px 20px; font:inherit; font-size:14px; cursor:pointer; }
+  button:hover { background:#3d6526; }
+  button.ghost { background:#1b2a16; border-color:#33502a; color:#a9c391; }
+  #fallovl .card { text-align:center; }
+  #fallovl h2 { color:#e88a5a; font-size:22px; margin-bottom:8px; }
+  #msgs { position:absolute; inset:0; pointer-events:none; overflow:hidden; }
+  .float { position:absolute; font-weight:bold; font-size:20px; color:#ffe36e;
+    text-shadow:0 2px 6px rgba(0,0,0,.6); animation:rise 1.1s ease-out forwards; }
+  @keyframes rise { from { opacity:1; transform:translateY(0) scale(1); }
+                    to { opacity:0; transform:translateY(-70px) scale(1.25); } }
+  #hint { position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
+    color:rgba(230,240,210,.75); font-size:11.5px; background:rgba(8,16,6,.45);
+    padding:4px 12px; border-radius:999px; white-space:nowrap; }
+  .hidden { display:none !important; }
+  /* ── catch celebration ── */
+  #flash { position:absolute; inset:0; pointer-events:none; background:rgba(255,230,120,.28);
+    opacity:0; z-index:9; }
+  #flash.go { animation:flashfade .45s ease-out; }
+  @keyframes flashfade { from { opacity:1; } to { opacity:0; } }
+  .bigcatch { position:absolute; left:50%; top:34%; transform:translate(-50%,-50%) scale(.4);
+    font-size:44px; font-weight:bold; color:#ffe36e; letter-spacing:2px;
+    text-shadow:0 0 18px rgba(255,200,60,.8), 0 3px 8px rgba(0,0,0,.7);
+    animation:bigpop 1.3s cubic-bezier(.2,1.6,.4,1) forwards; pointer-events:none; }
+  .bigcatch small { display:block; text-align:center; font-size:16px; color:#c9f08e; }
+  @keyframes bigpop {
+    0% { opacity:0; transform:translate(-50%,-50%) scale(.4); }
+    14% { opacity:1; transform:translate(-50%,-50%) scale(1.15); }
+    24% { transform:translate(-50%,-50%) scale(1); }
+    78% { opacity:1; }
+    100% { opacity:0; transform:translate(-50%,-62%) scale(1.05); }
+  }
+  #board.pop { animation:boardpop .5s cubic-bezier(.2,1.8,.4,1); }
+  @keyframes boardpop { 0% { transform:scale(1); } 35% { transform:scale(1.12) rotate(-1.5deg); } 100% { transform:scale(1); } }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="sky" class="layer"></canvas>
+  <canvas id="game" class="layer"></canvas>
+  <div id="flash"></div>
+  <div id="msgs"></div>
+
+  <div id="board">
+    <div class="score" id="score">0</div>
+    <div class="row"><span>flies</span><span id="flies">0</span></div>
+    <div class="row"><span>streak</span><span class="streak" id="streak">×0</span></div>
+    <div class="row"><span>best</span><span id="best">0</span></div>
+    <div class="row"><span>pace</span><span id="pace">idle</span></div>
+  </div>
+
+  <div id="pip" class="hidden">
+    <div class="mirror">
+      <video id="vid" autoplay muted playsinline></video>
+      <canvas id="pose" width="352" height="264"></canvas>
+    </div>
+    <div class="tag" id="piptag">tracking…</div>
+  </div>
+
+  <div id="hint" class="hidden"></div>
+
+  <div class="ovl" id="startovl">
+    <div class="card">
+      <h1>I AM LIZARD <small>a 2D mock-3D embodiment hunt — your body is the controller
+        (lizard2d-v1 contract: measures, not positions)</small></h1>
+      <table>
+        <tr><td>MOVE = HOP</td><td>rabbit-hop: raise BOTH arms and push them forward — each pump = one hop.
+          No hop, no move: the lizard stays put. (squat first = longer hop)</td></tr>
+        <tr><td>steer</td><td>lean left / right to slide across the branch</td></tr>
+        <tr><td>aim</td><td>turn + tilt your head — the lizard looks where you look</td></tr>
+        <tr><td>HUNT!</td><td>aim your head near a fly and stick your tongue out — the lizard
+          takes the shot for you (fast thrust also works)</td></tr>
+        <tr><td>danger</td><td>gaps in the branch — leap them or fall into the mist and climb back up</td></tr>
+      </table>
+      <div class="btns">
+        <button id="startcam">▶ start with camera</button>
+        <button id="startkb" class="ghost">keyboard / mouse demo</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="ovl hidden" id="fallovl">
+    <div class="card">
+      <h2 id="falltitle">YOU FELL!</h2>
+      <p id="falltext">Down into the mist… climbing back up the trunk.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import { initCamera, initTracking } from './sdk/core/tracking.js';
+import { PuppetInput } from './sdk/interaction/puppet.js';
+import { BodyProbe } from './sdk/interaction/body-measures.js';
+import { BodyGestureDetector, POSE_LANDMARKS as LM } from './sdk/interaction/body-gestures.js';
+import { Lizard2DRig } from './sdk/interaction/lizard2d.js';
+
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const rnd = (a, b) => a + Math.random() * (b - a);
+const D2R = Math.PI / 180;
+
+const contract = await (await fetch('./assets/lizard/lizard2d.body.contract.json')).json();
+
+/* ════════════════════ canvas / projection ════════════════════ */
+const DPR = Math.min(devicePixelRatio || 1, 2);
+const sky = $('sky'), game = $('game');
+const sctx = sky.getContext('2d'), ctx = game.getContext('2d');
+let W = 0, H = 0, F = 0, CY = 0;
+function resize() {
+  W = innerWidth; H = innerHeight;
+  for (const c of [sky, game]) {
+    c.width = W * DPR; c.height = H * DPR;
+    c.getContext('2d').setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  F = H * 1.05; CY = H * 0.42;
+}
+addEventListener('resize', resize); resize();
+
+const cam = { x: 0, y: 1.02, z: -2.55 };
+let shakeX = 0, shakeY = 0, shakeAmp = 0;
+const DRAW = 13, FOG_D = 3;
+const HAZE = [188, 214, 196];                       // rgb of horizon haze
+function fogOf(dz) { return 1 - Math.exp(-((dz / DRAW) ** 2) * FOG_D); }
+function P(x, y, z) {
+  const dz = Math.max(z - cam.z, 0.12);        // never behind the eye — negative
+  const k = F / dz;                            // scale crashes canvas radii
+  return { x: W / 2 + (x - cam.x) * k + shakeX, y: CY - (y - cam.y) * k + shakeY, s: k, dz };
+}
+const litW = z => 1 - fogOf(z - cam.z) * 0.85;
+function hazeMix(rgb, fog) {
+  return `rgb(${rgb.map((c, i) => Math.round(lerp(c, HAZE[i], fog))).join(',')})`;
+}
+
+/* ════════════════════ baked sprites (pay gradient cost ONCE) ═════ */
+function bake(w, h, fn) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  fn(c.getContext('2d'), w, h); return c;
+}
+// smoky cloud: many soft radial blobs
+function bakeCloud(seed) {
+  return bake(260, 130, (g, w, h) => {
+    let s = seed;
+    const rr = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 22; i++) {
+      const x = 30 + rr() * (w - 60), y = 34 + rr() * (h - 62), r = 16 + rr() * 34;
+      const gr = g.createRadialGradient(x, y, 1, x, y, r);
+      const a = 0.05 + rr() * 0.09;
+      gr.addColorStop(0, `rgba(255,255,255,${a})`);
+      gr.addColorStop(0.7, `rgba(245,248,252,${a * 0.5})`);
+      gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    }
+    for (let i = 0; i < 6; i++) {   // grey underbelly
+      const x = 40 + rr() * (w - 80), y = h * 0.68 + rr() * 14, r = 14 + rr() * 22;
+      const gr = g.createRadialGradient(x, y, 1, x, y, r);
+      gr.addColorStop(0, 'rgba(150,165,175,0.08)'); gr.addColorStop(1, 'rgba(150,165,175,0)');
+      g.fillStyle = gr; g.beginPath(); g.arc(x, y, r, 0, 7); g.fill();
+    }
+  });
+}
+// jungle prop sprites: 0 frond-cluster, 1 trunk+vines, 2 fern, 3 big leaf, 4 flowers
+function bakeProp(kind, hazed) {
+  return bake(220, 260, (g, w, h) => {
+    const sat = hazed ? 0.72 : 1;
+    const col = (r, gg, b, a = 1) =>
+      `rgba(${lerp(HAZE[0], r, sat) | 0},${lerp(HAZE[1], gg, sat) | 0},${lerp(HAZE[2], b, sat) | 0},${a})`;
+    const leaf = (x, y, len, ang, cr, cg, cb) => {
+      g.save(); g.translate(x, y); g.rotate(ang);
+      const gr = g.createLinearGradient(0, 0, len, 0);
+      gr.addColorStop(0, col(cr * 0.55, cg * 0.55, cb * 0.55));
+      gr.addColorStop(0.5, col(cr, cg, cb));
+      gr.addColorStop(1, col(cr * 0.75, cg * 0.85, cb * 0.6));
+      g.fillStyle = gr;
+      g.beginPath(); g.moveTo(0, 0);
+      g.quadraticCurveTo(len * 0.5, -len * 0.16, len, 0);
+      g.quadraticCurveTo(len * 0.5, len * 0.16, 0, 0);
+      g.fill(); g.restore();
+    };
+    if (kind === 0) {              // canopy frond cluster
+      for (let i = 0; i < 26; i++) {
+        const a = rnd(-Math.PI, 0), l = rnd(50, 105);
+        leaf(w / 2, h * 0.62, l, a, rnd(30, 60), rnd(90, 130), rnd(30, 55));
+      }
+      const gr = g.createRadialGradient(w / 2, h * 0.5, 8, w / 2, h * 0.52, 90);
+      gr.addColorStop(0, col(70, 140, 60, 0.5)); gr.addColorStop(1, col(20, 60, 25, 0));
+      g.fillStyle = gr; g.beginPath(); g.arc(w / 2, h * 0.5, 90, 0, 7); g.fill();
+    } else if (kind === 1) {       // trunk with vines
+      const gr = g.createLinearGradient(w * 0.4, 0, w * 0.6, 0);
+      gr.addColorStop(0, col(64, 46, 26)); gr.addColorStop(0.5, col(96, 72, 44)); gr.addColorStop(1, col(42, 30, 18));
+      g.fillStyle = gr;
+      g.beginPath(); g.moveTo(w * 0.42, h); g.quadraticCurveTo(w * 0.38, h * 0.4, w * 0.45, 0);
+      g.lineTo(w * 0.58, 0); g.quadraticCurveTo(w * 0.62, h * 0.5, w * 0.6, h); g.fill();
+      g.strokeStyle = col(60, 110, 45, 0.85); g.lineWidth = 2;
+      for (let i = 0; i < 4; i++) {
+        g.beginPath(); g.moveTo(w * rnd(0.42, 0.6), rnd(0, h * 0.3));
+        g.bezierCurveTo(w * rnd(0.3, 0.7), h * rnd(0.3, 0.6), w * rnd(0.35, 0.65), h * rnd(0.5, 0.8), w * rnd(0.4, 0.6), h);
+        g.stroke();
+      }
+      for (let i = 0; i < 8; i++) leaf(w * rnd(0.4, 0.6), rnd(10, h * 0.75), rnd(20, 38), rnd(0, Math.PI * 2), 40, 100, 40);
+    } else if (kind === 2) {       // fern
+      for (let i = 0; i < 12; i++) {
+        const a = -Math.PI / 2 + rnd(-1.1, 1.1);
+        leaf(w / 2, h * 0.92, rnd(60, 120), a, rnd(25, 45), rnd(80, 120), rnd(30, 50));
+      }
+    } else if (kind === 3) {       // big paddle leaf
+      leaf(w * 0.2, h * 0.8, 150, -0.7, 35, 105, 45);
+      leaf(w * 0.3, h * 0.9, 130, -1.2, 45, 120, 50);
+      leaf(w * 0.45, h * 0.85, 140, -0.35, 30, 92, 40);
+    } else {                       // flowering bush
+      for (let i = 0; i < 16; i++) leaf(w / 2 + rnd(-40, 40), h * 0.7 + rnd(-20, 20), rnd(30, 55), rnd(0, 6.3), 30, 85, 38);
+      for (let i = 0; i < 7; i++) {
+        const x = w / 2 + rnd(-50, 50), y = h * 0.62 + rnd(-30, 24);
+        g.fillStyle = col(220, rnd(60, 110), 70);
+        for (let p = 0; p < 5; p++) {
+          g.beginPath(); g.ellipse(x + Math.cos(p * 1.256) * 5, y + Math.sin(p * 1.256) * 5, 4.5, 3, p * 1.256, 0, 7); g.fill();
+        }
+        g.fillStyle = col(255, 220, 120); g.beginPath(); g.arc(x, y, 2.6, 0, 7); g.fill();
+      }
+    }
+  });
+}
+// far canopy silhouette strip — tileable: silhouette starts/ends at yS
+function bakeCanopy(top, alpha) {
+  return bake(1024, 200, (g, w, h) => {
+    const yS = h * 0.55;
+    g.fillStyle = `rgba(${top},${alpha})`;
+    g.beginPath(); g.moveTo(0, h); g.lineTo(0, yS);
+    let x = 0;
+    while (x < w - 130) {
+      const bw = rnd(40, 120), bh = rnd(30, 105);
+      g.quadraticCurveTo(x + bw * 0.5, h - bh - rnd(0, 30), x + bw, h - bh * rnd(0.2, 0.6));
+      x += bw;
+    }
+    g.quadraticCurveTo((x + w) / 2, yS - rnd(20, 60), w, yS);   // close the loop at yS
+    g.lineTo(w, h); g.closePath(); g.fill();
+  });
+}
+const CLOUDS = [1, 2, 3, 4, 5].map(bakeCloud);
+const PROPS_NEAR = [0, 1, 2, 3, 4].map(k => bakeProp(k, false));
+const PROPS_FAR = [0, 1, 2, 3, 4].map(k => bakeProp(k, true));
+const CANOPY1 = bakeCanopy('44,84,66', 0.85), CANOPY2 = bakeCanopy('30,66,48', 0.95);
+const VIGNETTE = bake(512, 512, (g, w, h) => {
+  const gr = g.createRadialGradient(w / 2, h / 2, h * 0.32, w / 2, h / 2, h * 0.72);
+  gr.addColorStop(0, 'rgba(10,20,6,0)'); gr.addColorStop(1, 'rgba(8,16,6,0.34)');
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+});
+const GODRAY = bake(560, 560, (g, w, h) => {
+  g.translate(w / 2, h / 2);
+  for (let i = 0; i < 7; i++) {
+    g.rotate(0.55 + i * 0.13);
+    const gr = g.createLinearGradient(0, 0, 0, h * 0.52);
+    gr.addColorStop(0, 'rgba(255,244,190,0.10)'); gr.addColorStop(1, 'rgba(255,244,190,0)');
+    g.fillStyle = gr;
+    g.beginPath(); g.moveTo(0, 0); g.lineTo(-14 - i * 3, h * 0.52); g.lineTo(26 + i * 3, h * 0.52);
+    g.closePath(); g.fill();
+  }
+});
+
+/* ════════════════════ world: branch track ════════════════════ */
+const branches = [];
+let genZ = -3, chunkIdx = 0;
+function genTrack(untilZ) {
+  while (genZ < untilZ) {
+    const len = rnd(5.5, 9.5);
+    const prev = branches[branches.length - 1];
+    let y = prev ? prev.y : 0, x = prev ? prev.x : 0, gap = 0;
+    if (prev) {
+      gap = chunkIdx < 2 ? 0 : rnd(0.9, 1.15 + Math.min(0.8, catches * 0.05));
+      const highStep = chunkIdx > 3 && Math.random() < 0.25;
+      y = clamp(y + (highStep ? rnd(0.4, 0.7) : rnd(-0.45, 0.4)), -0.6, 2.4);
+      x = clamp(x + rnd(-0.25, 0.25), -0.9, 0.9);
+    }
+    const z0 = genZ + gap;
+    const b = { z0, z1: z0 + len, x, y, r: 0.17, seed: (chunkIdx * 2654435761) >>> 0, moss: [] };
+    const MOSSPAL = [[88, 118, 52], [66, 100, 44], [112, 136, 66], [96, 108, 40], [74, 112, 58]];
+    for (let m = 0; m < len * 2.2; m++) b.moss.push({
+      z: rnd(z0, z0 + len), u: rnd(-0.8, 0.8), r: rnd(0.014, 0.05),
+      c: MOSSPAL[(Math.random() * MOSSPAL.length) | 0] });
+    branches.push(b); genZ = b.z1; chunkIdx++;
+  }
+  while (branches.length && branches[0].z1 < cam.z - 2) branches.shift();
+}
+const branchAt = z => branches.find(b => z >= b.z0 - 0.02 && z <= b.z1 + 0.02) || null;
+
+// side jungle props, world-anchored
+const props = [];
+let propZ = -3;
+function genProps(untilZ) {
+  while (propZ < untilZ) {
+    propZ += rnd(0.45, 0.9);
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const roll = Math.random();
+    let k, y, sc;
+    if (roll < 0.2) {         // tall trunk spanning the view — anchors the jungle
+      k = 1; y = rnd(0.2, 1.2); sc = rnd(3.0, 4.5);
+    } else if (roll < 0.62) { // undergrowth below branch level
+      k = [2, 3, 4][(Math.random() * 3) | 0]; y = rnd(-2.4, -0.7); sc = rnd(1.0, 2.0);
+    } else {                  // overhead canopy edge — mostly off the top frame
+      k = 0; y = rnd(3.4, 4.6); sc = rnd(2.2, 3.4);
+    }
+    props.push({ z: propZ, x: side * rnd(1.4, 5.5), y, k, sc, sway: rnd(0, 6.3) });
+  }
+  while (props.length && props[0].z < cam.z + 0.3) props.shift();
+}
+
+/* ════════════════════ flies ════════════════════ */
+const flies = [];
+let catches = 0, score = 0, streak = 0, missRun = 0, rubberUntil = 0;
+let best = +(localStorage.getItem('lizard2d.best') || 0);
+$('best').textContent = best;
+function difficulty() {
+  // asymptotic — never impossible; rubber-band 15% after 3 straight misses
+  const k = 1 + 1.1 * (1 - Math.exp(-catches / 16));   // gentler: caps ~2.1x
+  return k * (performance.now() < rubberUntil ? 0.85 : 1);
+}
+function spawnFly(liz) {
+  const b = branchAt(liz.z + rnd(1.4, 3.2)) || branches[branches.length - 1];
+  const high = Math.random() < 0.3 && catches >= 3;
+  // spawn INSIDE tongue range — the hunt is aim + timing, not chasing dots
+  const az = clamp(rnd(liz.z + 1.2, liz.z + 3.2), b.z0 + 0.3, b.z1 + 2);
+  const f = {
+    ax: b.x + rnd(-0.5, 0.5), ay: b.y + (high ? rnd(0.9, 1.3) : rnd(0.35, 0.75)), az,
+    x: 0, y: 0, z: 0, px: 0, py: 0, pz: 0, vx: 0, vy: 0, vz: 0,
+    ph: rnd(0, 6.3), amp: rnd(0.05, 0.13) * difficulty(), frq: rnd(0.7, 1.3) * difficulty(),
+    dartT: rnd(1.5, 3.5), high, hist: [], state: 'alive', wob: rnd(20, 34)
+  };
+  f.x = f.ax; f.y = f.ay; f.z = f.az;
+  flies.push(f);
+}
+function updateFlies(dt, t, liz) {
+  const want = 2 + Math.min(2, catches / 8 | 0);
+  while (flies.length < want) spawnFly(liz);
+  for (const f of flies) {
+    if (f.state !== 'alive') continue;
+    f.dartT -= dt;
+    if (f.dartT <= 0) {           // dart: relocate anchor — the dodge
+      f.dartT = rnd(1.6, 3.6) / Math.sqrt(difficulty());
+      f.ax = clamp(f.ax + rnd(-0.35, 0.35), -1.2, 1.2);
+      f.ay = clamp(f.ay + rnd(-0.25, 0.25), 0.2, 2.6);
+      f.az = clamp(f.az + rnd(-0.4, 0.5), liz.z + 1.0, liz.z + 3.6);   // darts stay in range
+    }
+    f.px = f.x; f.py = f.y; f.pz = f.z;
+    const A = f.amp;
+    f.x = lerp(f.x, f.ax + Math.sin(t * f.frq * 2.1 + f.ph) * A, dt * 4);
+    f.y = lerp(f.y, f.ay + Math.sin(t * f.frq * 2.7 + f.ph * 2) * A * 0.7, dt * 4);
+    f.z = lerp(f.z, f.az + Math.cos(t * f.frq * 1.7 + f.ph) * A * 0.8, dt * 4);
+    if (dt > 0) {
+      f.vx = lerp(f.vx, (f.x - f.px) / dt, 0.3);
+      f.vy = lerp(f.vy, (f.y - f.py) / dt, 0.3);
+      f.vz = lerp(f.vz, (f.z - f.pz) / dt, 0.3);
+    }
+    f.hist.push({ t, x: f.x, y: f.y, z: f.z });
+    while (f.hist.length && t - f.hist[0].t > 0.12) f.hist.shift();
+    if (f.z < liz.z + 0.4) {      // escaped behind — recycle
+      f.state = 'gone';
+    }
+  }
+  for (let i = flies.length - 1; i >= 0; i--) if (flies[i].state === 'gone') flies.splice(i, 1);
+}
+
+/* ════════════════════ lizard controller ════════════════════ */
+const rig = new Lizard2DRig(contract);
+const liz = { x: 0, y: 0, z: 0, state: 'ground', leapT: 0, leapDur: 0.55, leapFrom: null, leapDist: 0, leapPeak: 0.55, fallV: 0, fallFromB: null };
+// AUTO-RUN: first hop starts the runner — lizard advances by itself, the body
+// steers (lean) and hunts (head/tongue); arm cycles only ADD speed on top.
+let autoRun = false;
+const baseRunSpeed = () => 0.5 + Math.min(0.35, catches * 0.015);
+let hitstopUntil = 0, timeScale = 1;
+const INPUT_LAT = 0.38;           // measured motion→packet pipeline (st-45)
+
+function tryLeap(charged) {
+  if (liz.state !== 'ground') return;
+  if (!autoRun) { autoRun = true; toast('AUTO-RUN! lean to steer · hunt with your head', '#9fe86a'); }
+  liz.state = 'leap'; liz.leapT = -0.09;          // 90ms anticipation coil
+  liz.leapDist = 2.0 + (charged ? 0.6 : 0);
+  liz.leapPeak = 0.5 + (charged ? 0.12 : 0);
+  liz.leapFrom = { y: liz.y, z: liz.z };
+  audio.whoosh(); toast('LEAP!', '#9fe86a');
+}
+function updateLizard(dt, v) {
+  const b = branchAt(liz.z);
+  // strafe from lean (channel body.lean → lateral_strafe)
+  const leanCh = contract.channels.find(c => c.id === 'body.lean');
+  // stale-hold protection: no live body → no steering either
+  const lean = bodyFresh ? (v['body.lean'] ?? 0) : 0, dz = leanCh.map.deadzone_deg;
+  if (Math.abs(lean) > dz && liz.state === 'ground' && b) {
+    const f = clamp((Math.abs(lean) - dz) / (35 - dz), 0, 1) * Math.sign(lean);
+    liz.x -= f * leanCh.map.branch_halfwidths_per_sec_at_full * b.r * dt * 4;
+  }
+  if (b) liz.x = clamp(liz.x, b.x - b.r * 0.8, b.x + b.r * 0.8);
+
+  if (liz.state === 'ground') {
+    // AUTO-RUN after the FIRST hop: the lizard runs forward on its own like
+    // an obstacle-runner — lean steers, head hunts, hops cross gaps. Before
+    // that first hop it stays put. Freshness gate still applies: body not
+    // seen → the run pauses (stale-hold must never drive motion).
+    if (autoRun && (kbMode || bodyFresh)) liz.z += rig.speed * dt;
+    const nb = branchAt(liz.z);
+    if (nb) { liz.y = nb.y; liz.fallFromB = nb; }
+    else if (b || liz.fallFromB) {          // walked off the edge
+      liz.state = 'fall'; liz.fallV = 0; audio.fallCry();
+    }
+    rig.setAirborne(-1);
+  } else if (liz.state === 'leap') {
+    liz.leapT += dt;
+    if (liz.leapT < 0) { rig.setAirborne(0); return; }   // coil
+    const p = clamp(liz.leapT / liz.leapDur, 0, 1);
+    // fast launch, floaty apex: ease the z advance
+    const zp = 1 - (1 - p) * (1 - p);
+    liz.z = liz.leapFrom.z + liz.leapDist * zp;
+    liz.y = liz.leapFrom.y + Math.sin(p * Math.PI) * liz.leapPeak;
+    rig.setAirborne(p);
+    if (p >= 1) {
+      const nb = branchAt(liz.z);
+      if (nb && Math.abs(nb.y - liz.leapFrom.y) < 1.1) {
+        liz.state = 'ground'; liz.y = nb.y; liz.fallFromB = nb;
+        rig.setAirborne(-1);
+        burst(liz.x, liz.y, liz.z, 8, 'leaf'); audio.land();
+        shakeAmp = Math.max(shakeAmp, 3);
+      } else { liz.state = 'fall'; liz.fallV = 0; audio.fallCry(); }
+    }
+  } else if (liz.state === 'fall') {
+    rig.setFalling(true);
+    liz.fallV += 6.5 * dt; liz.y -= liz.fallV * dt;
+    if (liz.y < (liz.fallFromB?.y ?? 0) - 3.2) {
+      rig.setFalling(false);
+      startClimb();
+    }
+  } else if (liz.state === 'climb') {
+    // rise back up at the start of the branch we fell from
+    liz.climbT += dt;
+    const cb = liz.fallFromB;
+    liz.y = lerp(cb.y - 2.5, cb.y, clamp(liz.climbT / 1.6, 0, 1));
+    if (liz.climbT >= 1.6) {
+      liz.state = 'ground'; liz.y = cb.y;
+      $('fallovl').classList.add('hidden');
+      rubberUntil = performance.now() + 6000;   // gentle re-entry
+    }
+  }
+}
+function startClimb() {
+  streak = 0; missRun = 0; updateBoard();
+  const cb = liz.fallFromB || branches[0];
+  liz.z = cb.z0 + 0.6; liz.x = cb.x; liz.climbT = 0; liz.state = 'climb';
+  cam.z = liz.z - 2.55; cam.x = liz.x * 0.7; cam.y = cb.y + 1.02;  // snap with respawn
+  $('falltitle').textContent = 'YOU FELL!';
+  $('falltext').textContent = 'Down into the mist… climbing back up. Streak lost — the jungle forgets fast.';
+  $('fallovl').classList.remove('hidden');
+  audio.climb();
+}
+
+/* ════════════════════ hunt: aim assist + shoot ════════════════ */
+let lockedFly = null, shootBufferedAt = -1, lastShotAt = -1;
+function coneDeg() {
+  const h = contract.hunt;
+  let c = Math.max(h.aim_assist_cone_deg_min, h.aim_assist_cone_deg_start - h.cone_shrink_per_10_flies * (catches / 10));
+  c *= 1.5;              // generous bias: head aimed ROUGHLY at the fly is enough
+  if (liz.state === 'leap') c *= 1.5;          // mid-air payoff move
+  return c;
+}
+function mouthWorld() {
+  const m = rig.mouthLocal();
+  return { x: liz.x + m.x, y: liz.y + m.y, z: liz.z + m.z };
+}
+function pickTarget(reach) {
+  const mw = mouthWorld(), dir = rig.aimDir(), cone = coneDeg() * D2R;
+  let bestF = null, bestScore = 1e9;
+  for (const f of flies) {
+    if (f.state !== 'alive') continue;
+    // dead-reckoning: with a ~380ms motion pipeline this is mandatory
+    const lead = INPUT_LAT + Math.hypot(f.x - mw.x, f.y - mw.y, f.z - mw.z) / 24;
+    const ex = f.x + f.vx * lead, ey = f.y + f.vy * lead, ez = f.z + f.vz * lead;
+    const dx = ex - mw.x, dy = ey - mw.y, dzz = ez - mw.z;
+    const d = Math.hypot(dx, dy, dzz);
+    if (d > reach || dzz < 0.15) continue;
+    const dot = clamp((dx * dir.x + dy * dir.y + dzz * dir.z) / d, -1, 1);
+    const ang = Math.acos(dot);
+    if (ang > cone) continue;
+    const s = (ang / cone) * 0.7 + (d / reach) * 0.3;
+    if (s < bestScore) { bestScore = s; bestF = f; }
+  }
+  return bestF;
+}
+function doShoot(power) {
+  const reach = rig.tongue.maxReach * clamp(power, 0.7, 1.15);
+  const target = pickTarget(reach);
+  const mw = mouthWorld();
+  const localTarget = target
+    ? { x: target.x - liz.x, y: target.y - liz.y, z: target.z - liz.z } : null;
+  if (rig.fireTongue(power, localTarget)) {
+    lockedFly = target; lastShotAt = performance.now();
+    audio.snap();
+  }
+}
+function updateHunt(dt, t) {
+  const tg = rig.tongue;
+  if (tg.mode === 'shoot') {
+    if (lockedFly && lockedFly.state === 'alive') {
+      rig.setTongueTarget({ x: lockedFly.x - liz.x, y: lockedFly.y - liz.y, z: lockedFly.z - liz.z });
+      const tip = rig.tongueTipLocal();
+      const tipW = { x: liz.x + tip.x, y: liz.y + tip.y, z: liz.z + tip.z };
+      // logical hit radius >> visual (a locked shot should basically land),
+      // + 90ms coyote window on fly history
+      let hit = dist3(tipW, lockedFly) < 0.34;
+      if (!hit) for (const hh of lockedFly.hist) if (t - hh.t < 0.09 && dist3(tipW, hh) < 0.34) { hit = true; break; }
+      if (hit) {
+        lockedFly.state = 'stuck';
+        rig.stick(lockedFly, dist3(mouthWorld(), lockedFly));
+        hitstopUntil = performance.now() + 60; shakeAmp = Math.max(shakeAmp, 2.5);
+        burst(lockedFly.x, lockedFly.y, lockedFly.z, 10, 'spark');
+      }
+    }
+  } else if (tg.mode === 'follow' && lockedFly) {
+    if (lockedFly.state === 'alive') { missRun++; streak = 0; toast('miss', '#e8a05a'); updateBoard();
+      if (missRun >= 3) { rubberUntil = performance.now() + 10000; missRun = 0; } }
+    lockedFly = null;
+  }
+  // stuck fly rides the tip home
+  if (lockedFly && lockedFly.state === 'stuck') {
+    const tip = rig.tongueTipLocal();
+    lockedFly.x = liz.x + tip.x; lockedFly.y = liz.y + tip.y; lockedFly.z = liz.z + tip.z;
+  }
+  // input buffer: shot fired while tongue busy lands as soon as it's free
+  if (shootBufferedAt > 0 && !rig.tongueBusy) {
+    if (performance.now() - shootBufferedAt < 150) doShoot(1);
+    shootBufferedAt = -1;
+  }
+}
+function celebrate(pts, high) {
+  const fl = $('flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+  const el = document.createElement('div');
+  el.className = 'bigcatch';
+  el.innerHTML = `🪰 CAUGHT! +${pts}<small>${high ? 'golden fly!' : streak >= 3 ? 'streak ×' + streak + '!' : 'gulp.'}</small>`;
+  $('msgs').appendChild(el);
+  setTimeout(() => el.remove(), 1350);
+  const bd = $('board'); bd.classList.remove('pop'); void bd.offsetWidth; bd.classList.add('pop');
+  burst(liz.x, liz.y + 0.3, liz.z + 0.4, 16, 'spark');
+  shakeAmp = Math.max(shakeAmp, 2);
+}
+rig.onPreyDelivered = () => {
+  if (!lockedFly) return;
+  lockedFly.state = 'gone';
+  catches++; streak++; missRun = 0;
+  const pts = Math.round((lockedFly.high ? 25 : 10) * (1 + 0.1 * (streak - 1)));
+  score += pts;
+  if (score > best) { best = score; localStorage.setItem('lizard2d.best', best); }
+  celebrate(pts, lockedFly.high);
+  audio.reward(streak);
+  lockedFly = null; updateBoard();
+};
+const dist3 = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+
+/* ════════════════════ derived-event detectors (contract) ═══════ */
+const DE = contract.derived_events;
+let prevTongue = 0, tongueVel = 0, tongueCeil = 0.55;
+let prevExtL = 0, prevExtR = 0, lastThrustL = -1, lastThrustR = -1, lastHopAt = -1, hopArmed = true;
+function detectDerived(v, face, dt, tNow) {
+  // tongue.shoot — d(tongue)/dt spike while jaw open
+  const rawT = face?.mouth?.tongueAmount ?? 0;
+  tongueCeil = Math.max(0.4, Math.max(tongueCeil * 0.9995, rawT));    // personal cal, slow decay
+  const tn = rawT / tongueCeil;
+  if (dt > 0) tongueVel = lerp(tongueVel, (tn - prevTongue) / dt, 0.5);
+  prevTongue = tn;
+  const now = performance.now();
+  if (tongueVel > DE['tongue.shoot'].shoot_vel_per_s &&
+      (face?.mouth?.mouthOpenAmount ?? 0) > 0.08 &&
+      now - lastShotAt > DE['tongue.shoot'].cooldown_ms) {
+    if (rig.tongueBusy) shootBufferedAt = now;
+    else doShoot(0.85 + tn * 0.3);
+  }
+  // leap.hop — the rabbit move, and the ONLY way the lizard moves forward.
+  // HARD GATE: hop detection runs only while the FULL BODY is live-tracked
+  // (fresh pose this instant + both arm chains visible). BodyProbe HOLDS
+  // stale values on dropout (correct for retargeting, catastrophic for
+  // triggers) — freshness gating is what stops phantom nonstop movement.
+  // The gesture itself must be unmistakable: BOTH wrists raised to
+  // shoulder height or above AND both arms pushed out. Re-arms only when
+  // you pull back/down — pump the pose to hop repeatedly. No velocity
+  // path: frame noise on the extend channel was firing it from idle.
+  if (bodyFresh && (v['limb.armL.seen'] && v['limb.armR.seen'])) {
+    const eL = v['limb.armL.extend'] ?? 0, eR = v['limb.armR.extend'] ?? 0;
+    const rL = v['limb.armL.raise'] ?? -1, rR = v['limb.armR.raise'] ?? -1;
+    const poseHop = rL > -0.05 && rR > -0.05 && eL > 0.6 && eR > 0.6;   // slightly generous — near-shoulder + pushed-out counts
+    if (poseHop && hopArmed && now - lastHopAt > 600) {
+      lastHopAt = now; hopArmed = false;
+      tryLeap((v['body.crouch'] ?? 0) > 0.5);
+    }
+    if (!poseHop && (rL < -0.15 || rR < -0.15 || eL < 0.4 || eR < 0.4)) hopArmed = true;
+  }
+  // CATCH ASSIST auto-fire: head aimed at a fly + tongue clearly out =
+  // the shot fires by itself — no fast-thrust skill check needed
+  if ((face?.mouth?.tongueAmount ?? 0) > 0.32 &&
+      (face?.mouth?.mouthOpenAmount ?? 0) > 0.10 &&
+      !rig.tongueBusy && now - lastShotAt > 900) {
+    if (pickTarget(rig.tongue.maxReach)) doShoot(1);
+  }
+}
+
+/* ════════════════════ particles ════════════════════ */
+const parts = [];
+function burst(x, y, z, n, kind) {
+  for (let i = 0; i < n; i++) parts.push({
+    x, y, z, vx: rnd(-0.8, 0.8), vy: rnd(0.4, 1.6), vz: rnd(-0.5, 0.5),
+    life: rnd(0.35, 0.8), age: 0, kind, sz: rnd(2, 5), rot: rnd(0, 6.3)
+  });
+}
+// ambient drifting leaves
+setInterval(() => { if (running && parts.length < 90)
+  parts.push({ x: liz.x + rnd(-3, 3), y: liz.y + rnd(1.5, 3), z: liz.z + rnd(1, 8),
+    vx: rnd(-0.2, 0.2), vy: rnd(-0.45, -0.2), vz: rnd(-0.1, 0.1),
+    life: rnd(4, 8), age: 0, kind: 'leaf', sz: rnd(3, 6), rot: rnd(0, 6.3) }); }, 380);
+// dust motes hanging in the sunlit air (drift slow, twinkle)
+setInterval(() => { if (running && parts.length < 130)
+  parts.push({ x: liz.x + rnd(-1.2, 2.8), y: liz.y + rnd(0.2, 2.6), z: liz.z + rnd(0.6, 6.5),
+    vx: rnd(-0.05, 0.05), vy: rnd(-0.06, -0.015), vz: 0,
+    life: rnd(3, 6.5), age: 0, kind: 'mote', sz: rnd(0.7, 1.7), rot: rnd(0, 6.3) }); }, 230);
+function updateParts(dt, t) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i];
+    p.age += dt;
+    if (p.age > p.life) { parts.splice(i, 1); continue; }
+    if (p.kind === 'leaf') { p.vx += Math.sin(t * 2 + p.rot) * 0.4 * dt; p.rot += p.vx * dt * 3; }
+    else if (p.kind !== 'mote') p.vy -= 2.2 * dt;   // motes float, no gravity
+    p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
+  }
+}
+
+/* ════════════════════ audio: lookahead scheduler ═══════════════ */
+const audio = new (class {
+  constructor() { this.ac = null; }
+  boot() {
+    if (this.ac) return;
+    const ac = this.ac = new (window.AudioContext || window.webkitAudioContext)();
+    this.master = ac.createGain(); this.master.gain.value = 0.8; this.master.connect(ac.destination);
+    this.mus = ac.createGain(); this.mus.gain.value = 0.55; this.mus.connect(this.master);
+    this.amb = ac.createGain(); this.amb.gain.value = 0.5; this.amb.connect(this.master);
+    this.noise = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+    const d = this.noise.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    // wind bed: looped noise → LP, cutoff LFO'd
+    const wind = ac.createBufferSource(); wind.buffer = this.noise; wind.loop = true;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 520;
+    const wg = ac.createGain(); wg.gain.value = 0.055;
+    const lfo = ac.createOscillator(); lfo.frequency.value = 0.1;
+    const lfoG = ac.createGain(); lfoG.gain.value = 200;
+    lfo.connect(lfoG); lfoG.connect(lp.frequency);
+    wind.connect(lp); lp.connect(wg); wg.connect(this.amb);
+    wind.start(); lfo.start();
+    // insects: AM'd saw bursts
+    this._insects();
+    this._birds();
+    // music scheduler (Chris Wilson two-clock pattern)
+    this.next = ac.currentTime + 0.1; this.step = 0;
+    setInterval(() => this._sched(), 25);
+  }
+  get bpm() { return 96 + 44 * clamp(rig.speed / 1.5, 0, 1) + Math.min(catches, 20) * 0.6; }
+  _sched() {
+    const ac = this.ac;
+    while (this.next < ac.currentTime + 0.1) {
+      this._note(this.step, this.next);
+      this.next += (60 / this.bpm) / 4;          // 16ths
+      this.step = (this.step + 1) % 16;
+    }
+  }
+  _note(s, t) {
+    if (!running) return;
+    const active = rig.walkW > 0.05 || catches > 0;
+    if (!active) return;
+    if (s % 4 === 0) this.kick(t);
+    if ([3, 6, 10, 13].includes(s) && Math.random() < 0.8) this.conga(t, s === 10 ? 340 : 260);
+    if (s % 2 === 0) this.shaker(t, s % 8 === 0 ? 0.10 : 0.05);
+    if (catches >= 3 && [0, 7, 8, 11].includes(s)) this.bass(t, [98, 98, 131, 87][(this.step / 4 | 0) % 4]);
+    if (catches >= 8 && Math.random() < 0.35 && s % 2 === 1) this.pluck(t, PENTA[(Math.random() * PENTA.length) | 0]);
+  }
+  env(g, t, a, peak, dec) {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + a);
+    g.gain.exponentialRampToValueAtTime(0.001, t + a + dec);
+  }
+  osc(type, f, t, dur, peak, dest, bend) {
+    const o = this.ac.createOscillator(), g = this.ac.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t);
+    if (bend) o.frequency.exponentialRampToValueAtTime(bend, t + dur * 0.8);
+    this.env(g, t, 0.006, peak, dur);
+    o.connect(g); g.connect(dest || this.mus); o.start(t); o.stop(t + dur + 0.05);
+  }
+  nz(t, dur, peak, hp, dest) {
+    const src = this.ac.createBufferSource(); src.buffer = this.noise;
+    src.loop = true; src.playbackRate.value = rnd(0.8, 1.2);
+    const f = this.ac.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = hp;
+    const g = this.ac.createGain(); this.env(g, t, 0.004, peak, dur);
+    src.connect(f); f.connect(g); g.connect(dest || this.mus);
+    src.start(t); src.stop(t + dur + 0.05);
+  }
+  kick(t) { this.osc('sine', 150, t, 0.24, 0.5, this.mus, 48); }
+  conga(t, f) { this.osc('sine', f, t, 0.1, 0.22, this.mus, f * 0.7); }
+  shaker(t, p) { this.nz(t, 0.07, p, 3000); }
+  bass(t, f) { this.osc('triangle', f, t, 0.32, 0.3); }
+  pluck(t, f) { this.osc('triangle', f, t, 0.28, 0.16); this.osc('sine', f * 4, t, 0.1, 0.03); }
+  // stingers
+  snap() { if (!this.ac) return; const t = this.ac.currentTime; this.nz(t, 0.05, 0.35, 1400, this.master); this.osc('sine', 900, t, 0.05, 0.2, this.master, 400); }
+  reward(stk) {
+    if (!this.ac) return;
+    const t = Math.max(this.next, this.ac.currentTime);     // quantized = musical
+    const base = 392 * Math.pow(1.122, Math.min(stk, 6));   // +2 semitones per combo
+    [0, 4, 7, 12].forEach((iv, i) => this.osc('triangle', base * Math.pow(2, iv / 12), t + i * 0.06, 0.22, 0.2, this.master));
+  }
+  whoosh() { if (!this.ac) return; const t = this.ac.currentTime; this.nz(t, 0.4, 0.25, 600, this.master); }
+  land() { if (!this.ac) return; const t = this.ac.currentTime; this.osc('sine', 120, t, 0.12, 0.3, this.master, 60); this.nz(t, 0.08, 0.12, 900, this.master); }
+  fallCry() { if (!this.ac) return; const t = this.ac.currentTime; this.osc('sawtooth', 600, t, 0.7, 0.12, this.master, 90); }
+  climb() { if (!this.ac) return; const t = this.ac.currentTime; [200, 260, 330].forEach((f, i) => this.osc('sine', f, t + i * 0.3, 0.2, 0.1, this.master)); }
+  footstep() { if (!this.ac) return; const t = this.ac.currentTime; this.conga(t, rnd(210, 250)); this.nz(t, 0.04, 0.06, 2000); }
+  _birds() {
+    const call = () => {
+      if (this.ac && running) {
+        const t = this.ac.currentTime + 0.05, f0 = rnd(1800, 3500), n = 2 + (Math.random() * 3 | 0);
+        const pan = this.ac.createStereoPanner ? this.ac.createStereoPanner() : null;
+        const dest = pan ? (pan.pan.value = rnd(-0.8, 0.8), pan.connect(this.amb), pan) : this.amb;
+        for (let i = 0; i < n; i++)
+          this.osc('sine', f0 * rnd(0.92, 1.08), t + i * rnd(0.1, 0.16), 0.07, 0.09, dest, f0 * rnd(1.5, 2.4));
+      }
+      setTimeout(call, -Math.log(Math.random()) * 6000);
+    };
+    setTimeout(call, 1500);
+  }
+  _insects() {
+    const buzz = () => {
+      if (this.ac && running) {
+        const ac = this.ac, t = ac.currentTime;
+        const o = ac.createOscillator(); o.type = 'sawtooth'; o.frequency.value = rnd(4000, 6000);
+        const am = ac.createOscillator(); am.frequency.value = rnd(25, 40);
+        const amG = ac.createGain(); amG.gain.value = 0.5;
+        const g = ac.createGain(); g.gain.value = 0.0001;
+        const dur = rnd(1, 3);
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.03, t + 0.3);
+        g.gain.setValueAtTime(0.03, t + dur - 0.3); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        am.connect(amG); amG.connect(g.gain);
+        o.connect(g); g.connect(this.amb);
+        o.start(t); am.start(t); o.stop(t + dur); am.stop(t + dur);
+      }
+      setTimeout(buzz, rnd(2000, 7000));
+    };
+    setTimeout(buzz, 3000);
+  }
+})();
+const PENTA = [523, 587, 659, 784, 880, 1046];
+rig.onStep = () => { audio.footstep(); if (liz.state === 'ground') burst(liz.x, liz.y, liz.z - 0.2, 2, 'dust'); };
+
+/* ════════════════════ rendering ════════════════════ */
+let cloudsState = CLOUDS.map((c, i) => ({ img: c, x: rnd(0, 1), y: 0.06 + i * 0.05, sp: rnd(0.004, 0.012), sc: rnd(0.9, 1.9) }));
+function drawSky(t) {
+  const g = sctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#4c9dd6'); g.addColorStop(0.42, '#8cc9e6');
+  g.addColorStop(0.62, '#d9e9c6'); g.addColorStop(0.76, '#c4d6a2'); g.addColorStop(1, '#2e4a33');
+  sctx.fillStyle = g; sctx.fillRect(0, 0, W, H);
+  // warm atmospheric glow pooling at the horizon under the sun
+  const hg = sctx.createRadialGradient(W * 0.72, H * 0.56, 10, W * 0.72, H * 0.56, W * 0.45);
+  hg.addColorStop(0, 'rgba(255,232,170,0.30)'); hg.addColorStop(1, 'rgba(255,232,170,0)');
+  sctx.fillStyle = hg; sctx.fillRect(0, 0, W, H);
+  // sun + god rays
+  const sx = W * 0.72, sy = H * 0.2;
+  const sg = sctx.createRadialGradient(sx, sy, 4, sx, sy, H * 0.3);
+  sg.addColorStop(0, 'rgba(255,252,230,0.95)'); sg.addColorStop(0.12, 'rgba(255,244,190,0.55)');
+  sg.addColorStop(1, 'rgba(255,244,190,0)');
+  sctx.fillStyle = sg; sctx.beginPath(); sctx.arc(sx, sy, H * 0.3, 0, 7); sctx.fill();
+  sctx.save(); sctx.translate(sx, sy); sctx.rotate(t * 0.02); sctx.globalAlpha = 0.8;
+  sctx.drawImage(GODRAY, -280, -280); sctx.restore();
+  // smoky clouds
+  for (const c of cloudsState) {
+    c.x += c.sp * 0.016;
+    if (c.x > 1.25) c.x = -0.25;
+    const bob = Math.sin(t * 0.15 + c.y * 40) * 6;
+    sctx.drawImage(c.img, c.x * W - 130 * c.sc, c.y * H + bob, 260 * c.sc, 130 * c.sc);
+  }
+  // far canopy parallax strips (sway with lizard x + slow drift)
+  const p1 = ((-liz.x * 20 - t * 3) % 1024 + 1024) % 1024;
+  const p2 = ((-liz.x * 42 - t * 6) % 1024 + 1024) % 1024;
+  const hillBob = Math.sin(liz.z * 0.4) * 8;
+  sctx.globalAlpha = 0.85;
+  for (let x = -p1; x < W; x += 1023) sctx.drawImage(CANOPY1, x, H * 0.52 + hillBob * 0.3, 1024, 200);
+  sctx.fillStyle = 'rgba(44,84,66,0.85)';
+  sctx.fillRect(0, H * 0.52 + hillBob * 0.3 + 200, W, H);       // no seam under strip 1
+  sctx.globalAlpha = 1;
+  for (let x = -p2; x < W; x += 1023) sctx.drawImage(CANOPY2, x, H * 0.6 + hillBob, 1024, 220);
+  sctx.fillStyle = 'rgba(30,66,48,0.95)';
+  sctx.fillRect(0, H * 0.6 + hillBob + 220, W, H);              // no seam under strip 2
+  // mist below (the deadly drop)
+  const mg = sctx.createLinearGradient(0, H * 0.66, 0, H);
+  mg.addColorStop(0, 'rgba(188,214,196,0)'); mg.addColorStop(0.5, 'rgba(188,214,196,0.55)');
+  mg.addColorStop(1, 'rgba(150,180,160,0.9)');
+  sctx.fillStyle = mg; sctx.fillRect(0, H * 0.66, W, H * 0.34);
+}
+
+function drawBranchChunk(b, out) {
+  const zNear = Math.max(b.z0, cam.z + 0.35), zFar = Math.min(b.z1, cam.z + DRAW);
+  if (zFar <= zNear) return;
+  const stepZ = 0.45;
+  for (let z = zFar; z > zNear; z -= stepZ) {
+    const zA = Math.max(zNear, z - stepZ), zB = z;
+    out.push({ z: (zA + zB) / 2 - 0.001, draw: () => {
+      const f = P(b.x, b.y, zB), n = P(b.x, b.y, zA);
+      const rf = b.r * f.s, rn = b.r * n.s;
+      const fog = fogOf((zA + zB) / 2 - cam.z);
+      // top surface
+      ctx.fillStyle = hazeMix([125, 96, 58], fog);
+      ctx.beginPath();
+      ctx.moveTo(f.x - rf, f.y); ctx.lineTo(f.x + rf, f.y);
+      ctx.lineTo(n.x + rn, n.y); ctx.lineTo(n.x - rn, n.y);
+      ctx.closePath(); ctx.fill();
+      // rounded flank falling away below
+      ctx.fillStyle = hazeMix([74, 53, 30], fog);
+      ctx.beginPath();
+      ctx.moveTo(f.x - rf, f.y); ctx.lineTo(f.x + rf, f.y);
+      ctx.lineTo(n.x + rn, n.y);
+      ctx.quadraticCurveTo(n.x, n.y + rn * 1.7, n.x - rn, n.y);
+      ctx.closePath(); ctx.fill();
+      // lit top edge (sun) + core shadow line
+      ctx.strokeStyle = `rgba(228,206,150,${0.5 * (1 - fog)})`;
+      ctx.lineWidth = Math.max(1, rn * 0.09);
+      ctx.beginPath(); ctx.moveTo(f.x - rf * 0.9, f.y + 1); ctx.lineTo(n.x - rn * 0.9, n.y + 1); ctx.stroke();
+      // bark rings at world-z marks
+      const ring = Math.ceil(zA * 2) / 2;
+      if (ring < zB) {
+        const rp = P(b.x, b.y, ring), rr = b.r * rp.s;
+        ctx.strokeStyle = `rgba(52,36,20,${0.5 * (1 - fog)})`;
+        ctx.lineWidth = Math.max(1, rr * 0.06);
+        ctx.beginPath(); ctx.ellipse(rp.x, rp.y + rr * 0.5, rr * 0.96, rr * 0.5, 0, Math.PI, Math.PI * 2, true); ctx.stroke();
+      }
+    } });
+  }
+  // moss patches (cheap blobs pinned to surface)
+  for (const m of b.moss) {
+    if (m.z < zNear || m.z > zFar) continue;
+    out.push({ z: m.z - 0.002, draw: () => {
+      const p = P(b.x + m.u * b.r * 0.8, b.y, m.z);
+      const fog = fogOf(m.z - cam.z);
+      ctx.globalAlpha = 0.55;
+      ctx.fillStyle = hazeMix(m.c || [88, 118, 52], fog);
+      ctx.beginPath(); ctx.ellipse(p.x, p.y + 1, m.r * p.s, m.r * p.s * 0.4, 0, 0, 7); ctx.fill();
+      ctx.globalAlpha = 1;
+    } });
+  }
+}
+
+function drawFly(f, t, out) {
+  out.push({ z: f.z, draw: () => {
+    const p = P(f.x, f.y, f.z);
+    const r = Math.max(1.6, p.s * 0.032);
+    const fog = fogOf(f.dz ?? (f.z - cam.z));
+    // motion blur streak
+    const pp = P(f.px, f.py, f.pz);
+    ctx.strokeStyle = 'rgba(40,32,22,0.25)'; ctx.lineWidth = r * 0.8;
+    ctx.beginPath(); ctx.moveTo(pp.x, pp.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    // wings: alpha flicker ≈ wingbeat blur
+    const wob = Math.sin(t * f.wob * 2);
+    ctx.fillStyle = `rgba(220,230,240,${0.35 + 0.25 * wob})`;
+    ctx.beginPath(); ctx.ellipse(p.x - r * 1.1, p.y - r * 0.9, r * 1.3, r * 0.55, -0.5 + wob * 0.2, 0, 7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(p.x + r * 1.1, p.y - r * 0.9, r * 1.3, r * 0.55, 0.5 - wob * 0.2, 0, 7); ctx.fill();
+    // body
+    const bg = ctx.createRadialGradient(p.x - r * 0.3, p.y - r * 0.3, r * 0.1, p.x, p.y, r * 1.2);
+    bg.addColorStop(0, hazeMix([90, 110, 70], fog)); bg.addColorStop(0.6, hazeMix([42, 36, 26], fog)); bg.addColorStop(1, hazeMix([20, 16, 10], fog));
+    ctx.fillStyle = bg;
+    ctx.beginPath(); ctx.ellipse(p.x, p.y, r * 1.15, r * 0.85, 0, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.beginPath(); ctx.arc(p.x - r * 0.3, p.y - r * 0.35, r * 0.22, 0, 7); ctx.fill();
+    if (f.high) {   // high-value glow
+      ctx.strokeStyle = `rgba(255,215,90,${0.35 + 0.2 * Math.sin(t * 5)})`;
+      ctx.lineWidth = 1.2; ctx.beginPath(); ctx.arc(p.x, p.y, r * 2.1, 0, 7); ctx.stroke();
+    }
+  } });
+}
+
+function drawReticle(t) {
+  if (liz.state === 'fall' || liz.state === 'climb') return;
+  const mw = mouthWorld(), dir = rig.aimDir();
+  const reach = rig.tongue.maxReach;
+  const cand = pickTarget(reach);
+  const d = cand ? dist3(mw, cand) : Math.min(reach, 3);
+  const q = P(mw.x + dir.x * d, mw.y + dir.y * d, mw.z + dir.z * d);
+  const locked = !!cand;
+  ctx.save();
+  ctx.strokeStyle = locked ? 'rgba(180,255,120,0.9)' : 'rgba(240,248,230,0.5)';
+  ctx.lineWidth = locked ? 2 : 1.2;
+  const rr = locked ? 13 + Math.sin(t * 8) * 2 : 10;
+  ctx.beginPath(); ctx.arc(q.x, q.y, rr, 0, 7); ctx.stroke();
+  ctx.beginPath(); ctx.arc(q.x, q.y, 1.8, 0, 7); ctx.fill();
+  // arm meter: jaw (left arc) + tongue length (right arc)
+  const jaw = rig.jaw, tl = rig.tongue.len / rig.tongue.maxReach;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = jaw > 0.15 ? 'rgba(160,230,110,0.85)' : 'rgba(230,170,110,0.6)';
+  ctx.beginPath(); ctx.arc(q.x, q.y, rr + 6, Math.PI * 0.75, Math.PI * (0.75 + 0.5 * jaw)); ctx.stroke();
+  ctx.strokeStyle = 'rgba(240,86,111,0.9)';
+  ctx.beginPath(); ctx.arc(q.x, q.y, rr + 6, Math.PI * 0.25, Math.PI * (0.25 - 0.5 * tl), true); ctx.stroke();
+  ctx.restore();
+}
+
+function render(t) {
+  drawSky(t);
+  ctx.clearRect(0, 0, W, H);
+  const out = [];
+  for (const pr of props) {
+    if (pr.z > cam.z + DRAW || pr.z < cam.z + 0.3) continue;
+    out.push({ z: pr.z, draw: () => {
+      const fog = fogOf(pr.z - cam.z);
+      const p = P(pr.x + Math.sin(t * 0.5 + pr.sway) * 0.05, pr.y, pr.z);
+      const img = fog > 0.45 ? PROPS_FAR[pr.k] : PROPS_NEAR[pr.k];
+      const w = 220 * pr.sc * p.s / 300, h = 260 * pr.sc * p.s / 300;
+      // haze via the pre-baked FAR palette; alpha only fades the spawn edge
+      // (mid-distance translucency reads as ghosting, never do it)
+      ctx.globalAlpha = fog < 0.75 ? 1 : clamp((0.93 - fog) / 0.18, 0, 1);
+      if (pr.k === 1) ctx.drawImage(img, p.x - w / 2, p.y - h * 0.9, w, h * 1.8);  // trunks root below frame
+      else ctx.drawImage(img, p.x - w / 2, p.y - h * 0.7, w, h);
+      ctx.globalAlpha = 1;
+    } });
+  }
+  for (const b of branches) drawBranchChunk(b, out);
+  for (const f of flies) if (f.state === 'alive') drawFly(f, t, out);
+  // contact shadow — pins the lizard to the branch (fades/shrinks with height)
+  const shB = branchAt(liz.z);
+  if (shB && (liz.state === 'ground' || liz.state === 'leap')) {
+    const hAbove = clamp(liz.y - shB.y, 0, 1.3);
+    out.push({ z: liz.z + 0.09, draw: () => {
+      const p = P(liz.x, shB.y, liz.z);
+      const k = 1 - hAbove / 1.5;
+      ctx.globalAlpha = 0.32 * k;
+      ctx.fillStyle = '#160f07';
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.y + shB.r * p.s * 0.1, 0.30 * p.s * (0.65 + 0.35 * k),
+                  0.085 * p.s * (0.65 + 0.35 * k), 0, 0, 7);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    } });
+  }
+  const rigProj = { P, lit: lz => litW(liz.z + lz) };
+  out.push({ z: liz.z + 0.1, draw: () => rig.draw(ctx, rigProj, liz, 'body') });
+  out.push({ z: liz.z - 0.9, draw: () => rig.draw(ctx, rigProj, liz, 'tail') });
+  for (const p of parts) out.push({ z: p.z, draw: () => {
+    const q = P(p.x, p.y, p.z), a = 1 - p.age / p.life;
+    if (p.kind === 'leaf') {
+      ctx.fillStyle = `rgba(110,150,60,${0.8 * a})`;
+      ctx.save(); ctx.translate(q.x, q.y); ctx.rotate(p.rot);
+      ctx.beginPath(); ctx.ellipse(0, 0, p.sz * q.s / 300 + 2, (p.sz * q.s / 300 + 2) * 0.45, 0, 0, 7); ctx.fill();
+      ctx.restore();
+    } else if (p.kind === 'spark') {
+      ctx.fillStyle = `rgba(255,225,120,${a})`;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 1.5 + p.sz * a * 0.5, 0, 7); ctx.fill();
+    } else if (p.kind === 'mote') {
+      const tw = 0.5 + 0.5 * Math.sin(p.age * 5 + p.rot);   // twinkle in the light
+      ctx.fillStyle = `rgba(255,242,204,${0.38 * a * tw})`;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 0.6 + p.sz * q.s / 900, 0, 7); ctx.fill();
+    } else {
+      ctx.fillStyle = `rgba(150,130,95,${0.5 * a})`;
+      ctx.beginPath(); ctx.arc(q.x, q.y, 2 + p.sz * (1.8 - a), 0, 7); ctx.fill();
+    }
+  } });
+  out.sort((a, b) => b.z - a.z);
+  for (const o of out) o.draw();
+  drawReticle(t);
+  ctx.drawImage(VIGNETTE, 0, 0, W, H);
+  // filmic grade: warm key light from the sun corner, cool green shadow foot
+  ctx.globalCompositeOperation = 'overlay';
+  const gg = ctx.createLinearGradient(W, 0, 0, H);
+  gg.addColorStop(0, 'rgba(255,214,150,0.14)');
+  gg.addColorStop(0.55, 'rgba(140,160,120,0.05)');
+  gg.addColorStop(1, 'rgba(24,52,38,0.16)');
+  ctx.fillStyle = gg; ctx.fillRect(0, 0, W, H);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/* ════════════════════ HUD ════════════════════ */
+function updateBoard() {
+  $('score').textContent = score;
+  $('flies').textContent = catches;
+  const st = $('streak');
+  st.textContent = '×' + streak;
+  st.classList.toggle('hot', streak >= 3);
+  $('best').textContent = best;
+}
+function toast(txt, color) {
+  const el = document.createElement('div');
+  el.className = 'float'; el.textContent = txt;
+  el.style.left = (W * 0.5 + rnd(-60, 60)) + 'px';
+  el.style.top = (H * 0.38) + 'px';
+  el.style.color = color;
+  $('msgs').appendChild(el);
+  setTimeout(() => el.remove(), 1150);
+}
+
+/* ════════════════════ input wiring ════════════════════ */
+let tracker = null, puppet = null, probe = null, gestures = null;
+let running = false, kbMode = false;
+let lastPoseAt = -1e9, bodyFresh = false;   // full-body live-tracking gate
+
+// keyboard/mouse simulation state (demo mode + local dev)
+const sim = {
+  yaw: 0, pitch: 0, tongue: 0, tHold: false, jaw: 0.5, crouch: 0, lean: 0,
+  face() {
+    return {
+      head: { seen: true, yaw: -this.yaw, pitch: this.pitch, roll: 0 },
+      mouth: { mouthOpenAmount: this.jaw, tongueAmount: this.tongue, tongueOut: this.tongue > 0.3, tongueTip: null },
+      eyes: { left: { open: true, openAmount: 1 }, right: { open: true, openAmount: 1 } }
+    };
+  },
+  v: { 'body.lean': 0, 'body.crouch': 0 },
+  pulse(ch) {   // fake one limb raise→lower cycle
+    this.v[ch] = 0.5;
+    setTimeout(() => { this.v[ch] = -0.2; }, 160);
+  }
+};
+addEventListener('mousemove', e => {
+  if (!kbMode) return;
+  sim.yaw = clamp((e.clientX / W - 0.5) * 84, -42, 42);
+  sim.pitch = clamp((0.5 - e.clientY / H) * 70, -42, 42);
+});
+addEventListener('mousedown', () => { if (kbMode && running) { sim.tongue = 1; doShoot(1); setTimeout(() => sim.tongue = 0, 200); } });
+let autoWalkT = 0, autoSide = 0;
+addEventListener('keydown', e => {
+  if (!kbMode || !running || e.repeat) return;
+  if (e.code === 'KeyA') sim.pulse('limb.armL.raise');
+  if (e.code === 'KeyD') sim.pulse('limb.armR.raise');
+  if (e.code === 'KeyS') sim.v['body.crouch'] = 1;
+  if (e.code === 'KeyQ') sim.v['body.lean'] = 22;
+  if (e.code === 'KeyE') sim.v['body.lean'] = -22;
+  if (e.code === 'KeyT') { sim.tHold = true; }
+  if (e.code === 'Space') { e.preventDefault(); tryLeap(sim.v['body.crouch'] > 0.5); }
+});
+addEventListener('keyup', e => {
+  if (e.code === 'KeyS') sim.v['body.crouch'] = 0;
+  if (e.code === 'KeyQ' || e.code === 'KeyE') sim.v['body.lean'] = 0;
+  if (e.code === 'KeyT') sim.tHold = false;
+});
+
+const BONES = [
+  [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER], [LM.LEFT_HIP, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_HIP], [LM.RIGHT_SHOULDER, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_ELBOW], [LM.LEFT_ELBOW, LM.LEFT_WRIST],
+  [LM.RIGHT_SHOULDER, LM.RIGHT_ELBOW], [LM.RIGHT_ELBOW, LM.RIGHT_WRIST],
+  [LM.LEFT_HIP, LM.LEFT_KNEE], [LM.LEFT_KNEE, LM.LEFT_ANKLE],
+  [LM.RIGHT_HIP, LM.RIGHT_KNEE], [LM.RIGHT_KNEE, LM.RIGHT_ANKLE]
+];
+const poseCtx = $('pose').getContext('2d');
+function drawPose(pose) {
+  const w = poseCtx.canvas.width, h = poseCtx.canvas.height;
+  poseCtx.clearRect(0, 0, w, h);
+  if (!pose) return;
+  poseCtx.strokeStyle = 'rgba(140,220,110,0.9)'; poseCtx.lineWidth = 2;
+  for (const [a, b] of BONES) {
+    const pa = pose[a], pb = pose[b];
+    if (!pa || !pb || (pa.v ?? 1) < 0.5 || (pb.v ?? 1) < 0.5) continue;
+    poseCtx.beginPath(); poseCtx.moveTo(pa.x * w, pa.y * h); poseCtx.lineTo(pb.x * w, pb.y * h); poseCtx.stroke();
+  }
+}
+
+$('startcam').onclick = async e => {
+  e.target.disabled = true; e.target.textContent = 'loading models…';
+  try {
+    await initCamera(null, $('vid'));
+    tracker = await initTracking($('vid'), { enableHands: false, poseEvery: 2, faceEvery: 1, faceMatrix: true });
+    // WITH pixels (tongue red-ratio) + FIELD-TUNED thresholds: SDK defaults
+    // are lab-strict; real rooms are dim/warm and mouths open less than "full"
+    puppet = new PuppetInput($('vid'), { mouth: {
+      openAbove: 0.20, closeBelow: 0.10, marFull: 0.55,     // easier mouth-open
+      redDominance: 1.06, minBrightness: 46,                // tongue passes in warm/dim light
+      tongueAbove: 0.22, tongueBelow: 0.12                  // less ROI needed to count as tongue
+    } });
+    // fallback trigger: the discrete tongueOut event fires the hunt even when
+    // the velocity detector undershoots (the "it doesn't trigger" fix)
+    puppet.on('tongueOut', () => {
+      const now = performance.now();
+      if (now - lastShotAt < DE['tongue.shoot'].cooldown_ms) return;
+      if (tongueVel > 0.7) { if (rig.tongueBusy) shootBufferedAt = now; else doShoot(1); }
+    });
+    probe = new BodyProbe();
+    gestures = new BodyGestureDetector();
+    // NOTE: no gestures→leap wiring — sitting-noise 'jump' events were a
+    // phantom-motion source. The rabbit-hop pose is the ONLY move trigger.
+    $('pip').classList.remove('hidden');
+    begin(false);
+  } catch (err) {
+    e.target.disabled = false; e.target.textContent = '▶ start with camera';
+    alert('camera/tracking failed: ' + err.message);
+  }
+};
+$('startkb').onclick = () => begin(true);
+function begin(kb) {
+  kbMode = kb;
+  audio.boot();
+  $('startovl').classList.add('hidden');
+  $('hint').classList.remove('hidden');
+  $('hint').textContent = kb
+    ? 'mouse aim · CLICK shoot · SPACE = hop (only way to move) · Q/E lean · S crouch · T show tongue'
+    : 'rabbit-hop (both arms up + forward) to MOVE · lean to steer · look near a fly + tongue out = CATCH';
+  running = true;
+}
+
+/* ════════════════════ main loop ════════════════════ */
+genTrack(liz.z + DRAW + 5); genProps(liz.z + DRAW + 5);   // start-screen scenery
+// dev: ?autokb=1 boots straight into keyboard demo (headless smoke tests)
+const urlq = new URLSearchParams(location.search);
+// &fixedstep=1: drive the loop from setInterval instead of rAF — headless
+// virtual-time runs timers but starves rAF, so tests need this
+const FIXEDSTEP = urlq.has('fixedstep');
+if (urlq.has('autokb')) begin(true);
+// dev: &autotest=1 — scripted input exercising walk/aim/shoot/leap/fall paths
+if (urlq.has('autotest')) {
+  let step = 0;
+  setInterval(() => {                          // alternating arm cycles = walk
+    sim.pulse(step++ % 2 ? 'limb.armR.raise' : 'limb.armL.raise');
+  }, 320);
+  setInterval(() => {                          // aim dead-on at best fly, fire
+    const f = flies.find(fl => fl.state === 'alive');
+    if (!f || rig.tongueBusy) return;
+    const mw = mouthWorld();
+    const yawDeg = Math.atan2(f.x - mw.x, f.z - mw.z) / D2R;
+    const pitDeg = Math.atan2(f.y - mw.y, Math.hypot(f.x - mw.x, f.z - mw.z)) / D2R;
+    sim.yaw = clamp(yawDeg / 1.15, -42, 42); sim.pitch = clamp(pitDeg / 1.25, -42, 42);
+    rig.yaw = clamp(yawDeg, -42, 42); rig.pitch = clamp(pitDeg, -42, 42);  // skip smoothing lag
+    if (dist3(mw, f) < rig.tongue.maxReach) doShoot(1);
+  }, 900);
+  setInterval(() => tryLeap(false), 2600);     // hop-only locomotion: hop to traverse
+  setInterval(() => console.log('AUTOTEST', JSON.stringify({
+    score, catches, streak, state: liz.state, z: +liz.z.toFixed(2),
+    speed: +rig.speed.toFixed(2), cadence: +rig.cadence.toFixed(2),
+    tongue: rig.tongue.mode, flies: flies.length
+  })), 1500);
+}
+let lastT = 0;
+function tick(tms) {
+  if (!FIXEDSTEP) requestAnimationFrame(tick);
+  const t = tms / 1000;
+  let dt = lastT ? Math.min(t - lastT, 0.05) : 0;
+  lastT = t;
+  if (!running) { render(t); return; }
+  // hitstop: freeze-frame juice
+  timeScale = performance.now() < hitstopUntil ? 0.1 : 1;
+  dt *= timeScale;
+
+  let v, face;
+  if (kbMode) {
+    if (sim.tHold) sim.tongue = clamp(sim.tongue + dt * 1.2, 0, 1);
+    else if (sim.tongue > 0 && sim.tongue < 1) sim.tongue = Math.max(0, sim.tongue - dt * 2);
+    v = sim.v; face = sim.face();
+    bodyFresh = true;
+  } else {
+    const frame = tracker.detect();
+    face = puppet.update(frame, tms);
+    // corroborate MAR with the jawOpen blendshape — whichever sees the open mouth wins
+    const mo = face.mouth;
+    mo.mouthOpenAmount = Math.max(mo.mouthOpenAmount, (mo.jawOpen || 0) * 1.15);
+    if (frame.pose) { gestures.update(frame.pose); lastPoseAt = tms; }
+    // full-body gate: pose landed within the last 400ms AND both arm
+    // chains currently visible — otherwise ALL move triggers are dead
+    bodyFresh = tms - lastPoseAt < 400;
+    const aspect = ($('vid').videoWidth || 4) / ($('vid').videoHeight || 3);
+    v = probe.update(frame.pose, tms, aspect);
+    drawPose(frame.pose);
+    const armsOk = bodyFresh && v['limb.armL.seen'] && v['limb.armR.seen'];
+    $('piptag').textContent = !bodyFresh
+      ? 'BODY NOT SEEN — step back so arms are in frame'
+      : !armsOk
+        ? 'arms not tracked — keep both arms in view'
+        : `body live · armsUp ${(v['limb.armL.raise'] ?? -1) > 0 && (v['limb.armR.raise'] ?? -1) > 0 ? 'YES' : 'no'} · tongue ${(face.mouth.tongueAmount).toFixed(2)}`;
+  }
+
+  genTrack(liz.z + DRAW + 5); genProps(liz.z + DRAW + 5);
+  detectDerived(v, face, dt, t);
+  rig.setBaseSpeed(autoRun && liz.state !== 'fall' && liz.state !== 'climb' ? baseRunSpeed() : 0);
+  rig.update(v, face, dt);
+  // idle interest: lizard eyes the nearest fly (contract idle_behavior)
+  const nf = flies.find(f => f.state === 'alive');
+  if (nf) {
+    const mw = mouthWorld();
+    rig.lookHint = {
+      yaw: Math.atan2(nf.x - mw.x, nf.z - mw.z) / D2R,
+      pitch: Math.atan2(nf.y - mw.y, Math.hypot(nf.x - mw.x, nf.z - mw.z)) / D2R
+    };
+  }
+  updateLizard(dt, v);
+  updateFlies(dt, t, liz);
+  updateHunt(dt, t);
+  updateParts(dt, t);
+
+  // camera: behind + above, soft follow; shake decays
+  cam.z = lerp(cam.z, liz.z - 2.55, Math.min(1, dt * 6));
+  cam.x = lerp(cam.x, liz.x * 0.7, Math.min(1, dt * 4));
+  cam.y = lerp(cam.y, (liz.state === 'fall' ? liz.y + 1.6 : liz.y + 1.02), Math.min(1, dt * (liz.state === 'fall' ? 2.5 : 5)));
+  shakeAmp = Math.max(0, shakeAmp - dt * 14);
+  shakeX = rnd(-1, 1) * shakeAmp; shakeY = rnd(-1, 1) * shakeAmp;
+
+  const paceEl = $('pace');
+  const pace = !bodyFresh && !kbMode ? 'no body seen'
+    : liz.state === 'leap' ? 'HOP!'
+    : liz.state === 'ground'
+      ? (autoRun ? 'running ' + rig.speed.toFixed(1) + ' bl/s' : 'hop to START the run')
+      : liz.state;
+  if (paceEl.textContent !== pace) paceEl.textContent = pace;
+
+  render(t);
+}
+if (FIXEDSTEP) { let ft = 0; setInterval(() => tick(ft += 16.7), 16); }
+else tick(0);
+</script>
+</body>
+</html>

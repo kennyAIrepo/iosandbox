@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>foxlab — body contract → quadruped (you drive the fox)</title>
+<style>
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --ok:#3fb950; --warn:#d29922; --arm:#82aaff; --leg:#c792ea; --body:#ffcb6b; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
+  h1 { font-size:14px; padding:9px 14px; border-bottom:1px solid var(--line); }
+  h1 small { color:var(--dim); font-weight:normal; }
+  #grid { display:grid; grid-template-columns:minmax(420px,500px) 1fr; gap:10px; padding:10px; }
+  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim); }
+  .mirror { position:relative; transform:scaleX(-1); }
+  video, #overlay { width:100%; aspect-ratio:4/3; display:block; object-fit:fill; }
+  #overlay { position:absolute; inset:0; }
+  #fox3d { width:100%; height:560px; display:block; }
+  #meters { display:grid; grid-template-columns:1fr 1fr; gap:0 10px; padding:6px 10px; }
+  .m { margin:2px 0; }
+  .m label { display:flex; justify-content:space-between; color:var(--dim); font-size:10.5px; }
+  .m .tr { height:6px; background:#0a0d12; border-radius:3px; margin-top:1px; overflow:hidden; position:relative; }
+  .m .fl { height:100%; width:0%; border-radius:3px; }
+  .m.signed .tr::after { content:''; position:absolute; left:50%; top:-1px; bottom:-1px; width:1px; background:var(--line); }
+  #stats { padding:6px 10px; color:var(--dim); font-size:11.5px; border-top:1px solid var(--line); }
+  #stats b { color:var(--warn); }
+  #log { padding:6px 10px; color:var(--dim); white-space:pre; max-height:120px; overflow:hidden;
+         border-top:1px solid var(--line); font-size:11px; }
+  button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+           padding:6px 14px; margin:8px 10px; font:inherit; cursor:pointer; }
+  #hud { padding:5px 14px 10px; color:var(--dim); font-size:11px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<h1>foxlab <small>— full-body movement contract: standing human = crawling fox. Cycle your arms to make it walk; lean to steer; jump to pounce; kick to kick.</small></h1>
+<div id="grid">
+  <div class="pane">
+    <h2>YOU — pose + face capture (contract measures)</h2>
+    <button id="go">start camera</button>
+    <div class="mirror">
+      <video id="vid" autoplay muted playsinline></video>
+      <canvas id="overlay" width="500" height="375"></canvas>
+    </div>
+    <div id="meters"></div>
+    <div id="log"></div>
+  </div>
+  <div class="pane">
+    <h2>FOX — mediated output (fox.body.contract.json)</h2>
+    <canvas id="fox3d"></canvas>
+    <div id="stats">loading contract…</div>
+  </div>
+</div>
+<div id="hud">boot…</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { initCamera, initTracking } from './sdk/core/tracking.js';
+import { PuppetInput } from './sdk/interaction/puppet.js';
+import { BodyProbe } from './sdk/interaction/body-measures.js';
+import { BodyGestureDetector, POSE_LANDMARKS as LM } from './sdk/interaction/body-gestures.js';
+import { QuadrupedDriver } from './sdk/interaction/quadruped.js';
+
+const $ = id => document.getElementById(id);
+const lines = [];
+const log = m => { lines.unshift(`${(performance.now()/1000).toFixed(1)}s  ${m}`);
+  $('log').textContent = lines.slice(0, 8).join('\n'); };
+
+// ── fox scene ──────────────────────────────────────────────────
+const ren = new THREE.WebGLRenderer({ canvas: $('fox3d'), antialias: true });
+const scn = new THREE.Scene();
+scn.background = new THREE.Color(0x0d1117);
+scn.fog = new THREE.Fog(0x0d1117, 6, 14);
+const cam = new THREE.PerspectiveCamera(45, 1, 0.05, 100);
+scn.add(new THREE.HemisphereLight(0xbfe8ff, 0x1a1408, 1.3));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2); sun.position.set(3, 6, 2); scn.add(sun);
+scn.add(new THREE.GridHelper(30, 120, 0x2e4a6e, 0x1b2536));
+
+function sizeRenderer() {
+  const w = $('fox3d').clientWidth, h = $('fox3d').clientHeight;
+  ren.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix();
+}
+window.addEventListener('resize', sizeRenderer);
+
+const contract = await (await fetch('./assets/test-faces/fox.body.contract.json')).json();
+const fox = new QuadrupedDriver(contract);
+{
+  const gltf = await new GLTFLoader().loadAsync('./assets/test-faces/fox.glb');
+  gltf.scene.scale.setScalar(0.009);           // 175-unit bbox diagonal → ~1.5 world
+  scn.add(gltf.scene);
+  fox.bind(gltf.scene, gltf.animations);
+  // alignment report: authored contract joints vs skeleton-align detection
+  const al = fox.alignment;
+  const agree = Object.values(al.verify).filter(x => x.agree).length;
+  $('stats').textContent =
+    `contract ${contract.id} · stance ${al.stance} · rig auto-align: ` +
+    `${agree}/${Object.keys(al.verify).length} roles verified` +
+    (al.conflicts.length ? ` · ${al.conflicts.length} CONFLICTS (see log)` : '');
+  for (const c of al.conflicts) log(`align conflict [${c.role}] ${c.note}`);
+  for (const [id, m] of Object.entries(al.matches)) log(`bind ${id} → ${m.bone} (${m.via})`);
+}
+sizeRenderer();
+
+// ── meters ─────────────────────────────────────────────────────
+const meters = {};
+function meter(id, v, color, signed = false) {
+  let m = meters[id];
+  if (!m) {
+    const div = document.createElement('div');
+    div.className = 'm' + (signed ? ' signed' : '');
+    div.innerHTML = `<label><span style="color:${color}">${id}</span><span></span></label>` +
+                    `<div class="tr"><div class="fl" style="background:${color}"></div></div>`;
+    $('meters').append(div);
+    m = meters[id] = { fl: div.querySelector('.fl'), num: div.querySelector('label span:last-child'), signed };
+  }
+  if (m.signed) {
+    const c = Math.max(-1, Math.min(1, v));
+    m.fl.style.marginLeft = c < 0 ? (50 + c*50) + '%' : '50%';
+    m.fl.style.width = Math.abs(c)*50 + '%';
+  } else m.fl.style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1) + '%';
+  m.num.textContent = v.toFixed(2);
+}
+
+// ── capture stack ──────────────────────────────────────────────
+const probe = new BodyProbe();
+const gestures = new BodyGestureDetector();
+let tracker = null, puppet = null, lastPose = null;
+
+gestures.on('jump', () => { fox.pounce(); log('jump → POUNCE'); });
+gestures.on('kickLeft', a => { fox.kick('L', 1); log(`kickLeft ${a?.toFixed(0) ?? ''} → hind-kick L`); });
+gestures.on('kickRight', a => { fox.kick('R', 1); log(`kickRight ${a?.toFixed(0) ?? ''} → hind-kick R`); });
+gestures.on('runInPlace', () => { fox.dash(true); log('runInPlace → GALLOP'); });
+gestures.on('squat', () => log('squat (continuous crouch channel drives it)'));
+gestures.on('duck', () => { fox.dodge(1); log('duck → dodge'); });
+
+$('go').onclick = async e => {
+  e.target.disabled = true; e.target.textContent = 'loading models…';
+  await initCamera(null, $('vid'));
+  tracker = await initTracking($('vid'), {
+    enableHands: false, poseEvery: 2, faceEvery: 2, faceMatrix: true
+  });
+  puppet = new PuppetInput(null);          // head channel only — no tongue pixels here
+  e.target.style.display = 'none';
+};
+
+const BONES = [
+  [LM.LEFT_SHOULDER, LM.RIGHT_SHOULDER], [LM.LEFT_HIP, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_HIP], [LM.RIGHT_SHOULDER, LM.RIGHT_HIP],
+  [LM.LEFT_SHOULDER, LM.LEFT_ELBOW], [LM.LEFT_ELBOW, LM.LEFT_WRIST],
+  [LM.RIGHT_SHOULDER, LM.RIGHT_ELBOW], [LM.RIGHT_ELBOW, LM.RIGHT_WRIST],
+  [LM.LEFT_HIP, LM.LEFT_KNEE], [LM.LEFT_KNEE, LM.LEFT_ANKLE],
+  [LM.RIGHT_HIP, LM.RIGHT_KNEE], [LM.RIGHT_KNEE, LM.RIGHT_ANKLE]
+];
+const oc = $('overlay').getContext('2d');
+function drawPose(pose) {
+  const w = oc.canvas.width, h = oc.canvas.height;
+  oc.clearRect(0, 0, w, h);
+  if (!pose) return;
+  // tracker coords are pre-mirrored AND the canvas is inside the CSS-flipped
+  // .mirror div — draw at (1-x) so the double flip cancels
+  const X = p => (1 - p.x) * w;
+  oc.strokeStyle = '#2e4a6e'; oc.lineWidth = 2;
+  for (const [a, b] of BONES) {
+    const pa = pose[a], pb = pose[b];
+    if (!pa || !pb || (pa.v ?? 1) < 0.5 || (pb.v ?? 1) < 0.5) continue;
+    oc.beginPath(); oc.moveTo(X(pa), pa.y*h); oc.lineTo(X(pb), pb.y*h); oc.stroke();
+  }
+}
+
+let lastT = 0;
+function tick(t) {
+  requestAnimationFrame(tick);
+  const dt = lastT ? Math.min((t - lastT) / 1000, 0.1) : 0;
+  lastT = t;
+
+  if (tracker) {
+    const frame = tracker.detect();
+    puppet.update(frame, t);
+    if (frame.pose) { lastPose = frame.pose; gestures.update(frame.pose); }
+    const aspect = ($('vid').videoWidth || 4) / ($('vid').videoHeight || 3);
+    const v = probe.update(frame.pose, t, aspect);
+
+    meter('limb.armL.raise', ((v['limb.armL.raise'] ?? -1)+1)/2, 'var(--arm)');
+    meter('limb.armR.raise', ((v['limb.armR.raise'] ?? -1)+1)/2, 'var(--arm)');
+    meter('limb.legL.raise', ((v['limb.legL.raise'] ?? -1)+1)/2, 'var(--leg)');
+    meter('limb.legR.raise', ((v['limb.legR.raise'] ?? -1)+1)/2, 'var(--leg)');
+    meter('body.crouch', v['body.crouch'] ?? 0, 'var(--body)');
+    meter('body.lean', (v['body.lean'] ?? 0)/35, 'var(--body)', true);
+    drawPose(lastPose);
+
+    fox.update(v, puppet.state.head, dt);
+    $('stats').innerHTML =
+      `mode <b>${fox.mode}</b> · cadence ${fox.cadence.toFixed(2)} steps/s · ` +
+      `speed ${fox.speed.toFixed(2)} u/s · heading ${(fox.heading*180/Math.PI).toFixed(0)}°`;
+  }
+
+  // follow-cam behind the fox
+  if (fox.root) {
+    const back = new THREE.Vector3(...contract.puppet.forward_axis_local)
+      .applyQuaternion(fox.root.quaternion).multiplyScalar(-2.4);
+    const target = fox.root.position.clone().add(back).add(new THREE.Vector3(0, 1.4, 0));
+    cam.position.lerp(target, dt * 3);
+    cam.lookAt(fox.root.position.x, fox.root.position.y + 0.4, fox.root.position.z);
+  }
+  ren.render(scn, cam);
+  $('hud').textContent = tracker
+    ? 'live — cycle arms to walk · lean to steer · jump = pounce · kick = hind-kick · run in place = gallop'
+    : 'press start camera';
+}
+tick(0);
+</script>
+</body>
+</html>

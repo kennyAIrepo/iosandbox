@@ -1,0 +1,81 @@
+{
+  "_spec": "Sign-dictation contract v1 — the recognition sibling of face/body contracts. Executed by sdk/recognition/sign-recognizer.js. Same load-bearing invariant: positions never cross the boundary. The featurizer (sign-landmarks.js) re-expresses every landmark in a signer-normalized frame (mid-shoulder origin, torso scale, aspect-corrected) before anything downstream sees it; what crosses to sinks is glosses, confidences, and dimensionless measures. The classifier itself is a MODEL ASSET named here, never committed to git — train/serve landmark distributions must match, so the model URL is version-locked to the tracker pin below.",
+  "version": 1,
+  "id": "sign-dictation-v1",
+
+  "human": {
+    "space": "mediapipe-hands-21x2+pose-33",
+    "tracker_pin": "@mediapipe/tasks-vision@0.10.18 + the exact .task model URLs in sdk/core/tracking.js — NEVER bump without re-extracting training landmarks (distribution shift silently eats accuracy)",
+    "tracker_call": "initTracking(vid, { numHands: 2, raw: true, poseEvery: 2, enableFace: false, poseModel: POSE_MODELS.full })",
+    "smoothing": "NONE before the classifier — raw:true is mandatory (the deadband stabilizer quantizes slow motion and corrupts velocity features); the model trains on raw landmark noise instead",
+    "probe": "temporal_classifier",
+    "feature_layout": "51 points x (x,y) = 102: handL[0..20] + handR[21..41] + pose[nose,shoulders,elbows,wrists,hips]. NaN for missing, zeroed at window assembly. Anatomical L/R via tracking.js handedness.",
+    "window": { "rate_hz": 15, "T": 64, "pad": "zero", "note": "fixed ONNX shape — pad+mask, never dynamic axes" },
+    "segmentation": { "start_energy": 0.6, "stop_energy": 0.22, "quiet_ms": 400, "min_sign_ms": 250, "max_sign_ms": 4000, "hold_ms": 300, "units": "torso-lengths/second over wrist+fingertips" },
+    "calibration_ritual": [
+      "rest: 2s hands-down hold -> per-user idle energy floor (tunes stop_energy)",
+      "reach: touch signing-space corners -> per-user signing-space extent (future channel cal)"
+    ]
+  },
+
+  "model": {
+    "url": null,
+    "labels_url": null,
+    "input": "x float32 [1, 64, 102]",
+    "output": "logits float32 [1, C]",
+    "status": "awaiting_weights",
+    "training_plan": "M1 fingerspelling (Kaggle corpus, prototype-only license); M2 250-sign shipped model retrained on PopSign ASL v1.0 (CC-BY 4.0) with landmarks re-extracted by the pinned tracker above"
+  },
+
+  "channels": [
+    {
+      "id": "sign.token",
+      "status": "awaiting_weights",
+      "kind": "discrete",
+      "human": { "probe": "temporal_classifier", "source": "SignRecognizer on('token')" },
+      "sink": { "target": { "kind": "caption_sink" }, "also": ["speech_synthesis", "ws_broadcast", "agent.command"] },
+      "map": { "min_conf": 0.5, "cooldown_ms": 600 },
+      "meaning": "one recognized gloss per closed segment, confidence-gated; below min_conf emits 'lowconf' instead (never a silent wrong caption)"
+    },
+    {
+      "id": "sign.confidence",
+      "status": "human_live",
+      "kind": "continuous",
+      "human": { "probe": "temporal_classifier", "range": [0, 1] },
+      "sink": { "target": { "kind": "prop" } },
+      "meaning": "probability of the last emitted token"
+    },
+    {
+      "id": "sign.segment.active",
+      "status": "human_live",
+      "kind": "continuous",
+      "human": { "probe": "measure", "formula": "motion-energy FSM", "source": "SignBuffer" },
+      "sink": { "target": { "kind": "prop" } },
+      "meaning": "a sign is currently being articulated"
+    },
+    {
+      "id": "sign.motion",
+      "status": "human_live",
+      "kind": "continuous",
+      "human": { "probe": "measure", "formula": "mean wrist+fingertip speed, torso-lengths/s", "source": "SignBuffer" },
+      "sink": { "target": { "kind": "prop" } },
+      "meaning": "articulation energy driving the segmenter"
+    },
+    {
+      "id": "sign.hand.L.seen",
+      "status": "human_live",
+      "kind": "continuous",
+      "human": { "probe": "measure", "source": "SignFeaturizer" },
+      "sink": { "target": { "kind": "prop" } },
+      "meaning": "left hand tracked this frame (anatomical)"
+    },
+    {
+      "id": "sign.hand.R.seen",
+      "status": "human_live",
+      "kind": "continuous",
+      "human": { "probe": "measure", "source": "SignFeaturizer" },
+      "sink": { "target": { "kind": "prop" } },
+      "meaning": "right hand tracked this frame (anatomical)"
+    }
+  ]
+}

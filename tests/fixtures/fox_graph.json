@@ -1,0 +1,218 @@
+﻿[
+ {
+  "name": "_rootJoint",
+  "parent": null,
+  "pos": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "name": "b_Root_00",
+  "parent": "_rootJoint",
+  "pos": [
+   0.0,
+   0.0,
+   0.0
+  ]
+ },
+ {
+  "name": "b_Hip_01",
+  "parent": "b_Root_00",
+  "pos": [
+   0.0,
+   42.9381,
+   -26.7486
+  ]
+ },
+ {
+  "name": "b_Spine01_02",
+  "parent": "b_Hip_01",
+  "pos": [
+   -0.0,
+   54.9506,
+   -22.1837
+  ]
+ },
+ {
+  "name": "b_Spine02_03",
+  "parent": "b_Spine01_02",
+  "pos": [
+   0.0,
+   53.7491,
+   -0.5613
+  ]
+ },
+ {
+  "name": "b_Neck_04",
+  "parent": "b_Spine02_03",
+  "pos": [
+   0.0,
+   53.2188,
+   25.0823
+  ]
+ },
+ {
+  "name": "b_Head_05",
+  "parent": "b_Neck_04",
+  "pos": [
+   0.0001,
+   60.7255,
+   36.1545
+  ]
+ },
+ {
+  "name": "b_RightUpperArm_06",
+  "parent": "b_Spine02_03",
+  "pos": [
+   -6.9675,
+   49.0665,
+   18.0237
+  ]
+ },
+ {
+  "name": "b_RightForeArm_07",
+  "parent": "b_RightUpperArm_06",
+  "pos": [
+   -6.9666,
+   26.0355,
+   17.2155
+  ]
+ },
+ {
+  "name": "b_RightHand_08",
+  "parent": "b_RightForeArm_07",
+  "pos": [
+   -6.9675,
+   6.6946,
+   17.8278
+  ]
+ },
+ {
+  "name": "b_LeftUpperArm_09",
+  "parent": "b_Spine02_03",
+  "pos": [
+   6.968,
+   49.0665,
+   18.0237
+  ]
+ },
+ {
+  "name": "b_LeftForeArm_010",
+  "parent": "b_LeftUpperArm_09",
+  "pos": [
+   6.9558,
+   26.0353,
+   17.2215
+  ]
+ },
+ {
+  "name": "b_LeftHand_011",
+  "parent": "b_LeftForeArm_010",
+  "pos": [
+   6.9431,
+   6.6946,
+   17.8388
+  ]
+ },
+ {
+  "name": "b_Tail01_012",
+  "parent": "b_Hip_01",
+  "pos": [
+   -0.0,
+   52.5895,
+   -40.1531
+  ]
+ },
+ {
+  "name": "b_Tail02_013",
+  "parent": "b_Tail01_012",
+  "pos": [
+   -0.0,
+   43.46,
+   -48.562
+  ]
+ },
+ {
+  "name": "b_Tail03_014",
+  "parent": "b_Tail02_013",
+  "pos": [
+   -0.0,
+   28.0841,
+   -67.3016
+  ]
+ },
+ {
+  "name": "b_LeftLeg01_015",
+  "parent": "b_Hip_01",
+  "pos": [
+   6.968,
+   49.2687,
+   -29.8565
+  ]
+ },
+ {
+  "name": "b_LeftLeg02_016",
+  "parent": "b_LeftLeg01_015",
+  "pos": [
+   6.9696,
+   30.4792,
+   -27.4411
+  ]
+ },
+ {
+  "name": "b_LeftFoot01_017",
+  "parent": "b_LeftLeg02_016",
+  "pos": [
+   6.9666,
+   15.9383,
+   -37.9534
+  ]
+ },
+ {
+  "name": "b_LeftFoot02_018",
+  "parent": "b_LeftFoot01_017",
+  "pos": [
+   6.9653,
+   0.9926,
+   -32.8905
+  ]
+ },
+ {
+  "name": "b_RightLeg01_019",
+  "parent": "b_Hip_01",
+  "pos": [
+   -6.9676,
+   49.2687,
+   -29.8565
+  ]
+ },
+ {
+  "name": "b_RightLeg02_020",
+  "parent": "b_RightLeg01_019",
+  "pos": [
+   -6.9676,
+   30.4803,
+   -27.4322
+  ]
+ },
+ {
+  "name": "b_RightFoot01_021",
+  "parent": "b_RightLeg02_020",
+  "pos": [
+   -6.9676,
+   15.9345,
+   -37.9376
+  ]
+ },
+ {
+  "name": "b_RightFoot02_022",
+  "parent": "b_RightFoot01_021",
+  "pos": [
+   -6.9653,
+   0.9846,
+   -32.8871
+  ]
+ }
+]
