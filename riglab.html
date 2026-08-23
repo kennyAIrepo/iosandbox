@@ -2,268 +2,604 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>riglab — face-puppet contract validation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>riglab — rigged points host: golfballs · presets · drag-to-track · film stack</title>
 <style>
-  /* Three panes = three contract stages:
-     GET (human capture) | MID (ghost + calibration) | TAP (puppet sync).
-     A channel is proven when it lights green in all panes it touches. */
-  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3;
-          --dim:#8b949e; --ok:#3fb950; --warn:#d29922; --off:#484f58;
-          --mouth:#ff5370; --eyeL:#82aaff; --eyeR:#c792ea; --head:#ffcb6b; --tongue:#f07178; }
+  :root { --bg:#0d1117; --panel:#161b22; --line:#30363d; --tx:#e6edf3; --dim:#8b949e;
+          --ok:#3fb950; --bad:#f85149; --warn:#d29922; --sel:#82aaff; }
   * { box-sizing:border-box; margin:0; }
-  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace; }
-  h1 { font-size:14px; padding:10px 14px; border-bottom:1px solid var(--line); }
+  html, body { height:100%; }
+  body { background:var(--bg); color:var(--tx); font:13px/1.45 ui-monospace,Consolas,monospace;
+         display:flex; flex-direction:column; overflow:hidden; }
+  h1 { font-size:14px; padding:8px 14px; border-bottom:1px solid var(--line); flex:none; }
   h1 small { color:var(--dim); font-weight:normal; }
-  #stage { display:grid; grid-template-columns: 480px 1fr 340px; gap:10px; padding:10px; }
-  .pane { background:var(--panel); border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .pane h2 { font-size:12px; padding:7px 10px; border-bottom:1px solid var(--line); color:var(--dim); }
-  .mirror { position:relative; transform:scaleX(-1); }           /* selfie view */
-  video, #overlay { width:480px; height:360px; display:block; object-fit:fill; }
-  #overlay { position:absolute; inset:0; }
-  #ghost { width:100%; height:360px; display:block; cursor:grab; }
-  .bar { margin:7px 10px; }
-  .bar label { display:flex; justify-content:space-between; color:var(--dim); font-size:11px; }
-  .bar .tr { height:8px; background:#0a0d12; border-radius:4px; margin-top:2px; overflow:hidden; }
-  .bar .fl { height:100%; width:0%; border-radius:4px; transition:width .05s linear; }
-  #channels { padding:6px 10px; }
-  .ch { display:flex; align-items:center; gap:7px; padding:3px 0; font-size:12px; }
-  .dot { width:9px; height:9px; border-radius:50%; background:var(--off); flex:none; }
-  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); }
-  .ch small { color:var(--dim); margin-left:auto; }
-  #hud { padding:6px 14px; color:var(--dim); font-size:11px; border-top:1px solid var(--line); }
+  #wrap { flex:1; display:flex; gap:8px; padding:8px; min-height:0; }
+  #left { width:330px; flex:none; display:flex; flex-direction:column; gap:8px; min-height:0; }
+  .mini { background:var(--panel); border:1px solid var(--line); border-radius:8px; display:flex;
+          flex-direction:column; min-height:0; }
+  .mini h3 { font-size:11.5px; padding:6px 9px; border-bottom:1px solid var(--line); flex:none; }
+  .mini h3 span { color:var(--ok); }
+  .mini h3 small { color:var(--dim); }
+  .mini .bd { padding:7px 9px; display:flex; flex-direction:column; gap:6px; font-size:11.5px; min-height:0; }
+  #boneList { overflow-y:auto; display:flex; flex-direction:column; gap:1px; min-height:50px; }
+  #boneList div { padding:2px 6px; border-radius:4px; cursor:pointer; color:var(--dim); }
+  #boneList div:hover { background:#21262d; color:var(--tx); }
+  #boneList div.sel { background:#1c2a40; color:var(--sel); }
+  #boneList div.tongue { color:var(--ok); }
+  #script { flex:1; background:#0a0d12; color:var(--tx); border:1px solid var(--line); border-radius:6px;
+            font:11px/1.5 ui-monospace,Consolas,monospace; padding:7px; resize:none; min-height:120px; }
+  .row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .row label { color:var(--dim); font-size:10.5px; }
+  .row input[type=range] { flex:1; accent-color:var(--ok); }
   button { background:#21262d; color:var(--tx); border:1px solid var(--line); border-radius:6px;
-           padding:5px 10px; margin:4px; font:inherit; cursor:pointer; }
+           padding:4px 10px; font:inherit; font-size:11.5px; cursor:pointer; }
   button:hover { border-color:var(--dim); }
-  button.armed { border-color:var(--warn); color:var(--warn); }
-  #calmsg { color:var(--warn); font-size:11px; padding:0 10px 8px; min-height:15px; }
+  button.on { border-color:var(--ok); color:var(--ok); }
+  button.sm { padding:2px 7px; font-size:10.5px; }
+  button:disabled { opacity:.35; cursor:default; }
+  #sessionList { display:flex; flex-direction:column; gap:3px; max-height:110px; overflow-y:auto; }
+  .chip { display:flex; gap:6px; align-items:center; background:#0a0d12; border:1px solid var(--line);
+          border-radius:6px; padding:3px 8px; font-size:11px; cursor:pointer; }
+  .chip:hover { border-color:var(--sel); }
+  .chip .t { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chip .d { color:var(--dim); }
+  .chip .x { color:var(--dim); padding:0 2px; } .chip .x:hover { color:var(--bad); }
+  #main { flex:1; display:flex; flex-direction:column; background:var(--panel);
+          border:1px solid var(--line); border-radius:8px; overflow:hidden; min-width:0; }
+  #main h2 { font-size:12px; padding:6px 10px; border-bottom:1px solid var(--line); color:var(--dim);
+             display:flex; align-items:center; gap:8px; flex:none; flex-wrap:wrap; }
+  #sceneWrap { flex:1; position:relative; min-height:0; }
+  #scene { width:100%; height:100%; display:block; touch-action:none; }
+  #anno { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; touch-action:none; }
+  #sceneWrap.annotating #anno { pointer-events:auto; cursor:crosshair; }
+  #sceneWrap.adding #scene { cursor:copy; }
+  #sceneWrap.grouping #scene { cursor:cell; }
+  #band { position:absolute; border:1px dashed var(--sel); background:rgba(130,170,255,.12);
+          display:none; pointer-events:none; z-index:5; }
+  #status { position:absolute; left:10px; bottom:8px; color:#cfe0b8; font-size:11px;
+            background:rgba(6,10,6,.55); padding:3px 10px; border-radius:6px; pointer-events:none; }
+  #hint { position:absolute; right:10px; bottom:8px; color:var(--dim); font-size:10.5px;
+          background:rgba(6,10,6,.55); padding:3px 10px; border-radius:6px; pointer-events:none; }
 </style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
 </head>
 <body>
-<h1>riglab <small>— contract validation: GET → MID(ghost+cal) → TAP. Drag the ghost to orbit.</small></h1>
-<div id="stage">
+<h1>riglab <small>— rig host: golfball rig points · preset movements · DRAG a golfball to record a path track (remixes onto the playing script) · stack sessions into a film.</small></h1>
 
-  <div class="pane"><h2>1 · GET — human capture (478 pts, live measures)</h2>
-    <div class="mirror">
-      <video id="vid" autoplay muted playsinline></video>
-      <canvas id="overlay" width="480" height="360"></canvas>
+<div id="wrap">
+  <div id="left">
+    <div class="mini" style="flex:1">
+      <h3><span>◉</span> RIG POINTS <small id="boneCount"></small></h3>
+      <div class="bd" style="flex:1"><div id="boneList"></div></div>
     </div>
-    <div class="bar"><label><span style="color:var(--mouth)">mouth.open (MAR)</span><span id="v-mouth"></span></label><div class="tr"><div class="fl" id="b-mouth" style="background:var(--mouth)"></div></div></div>
-    <div class="bar"><label><span style="color:var(--tongue)">tongue.out (pixel)</span><span id="v-tongue"></span></label><div class="tr"><div class="fl" id="b-tongue" style="background:var(--tongue)"></div></div></div>
-    <div class="bar"><label><span style="color:var(--eyeL)">eye.L open (EAR | bs)</span><span id="v-eyeL"></span></label><div class="tr"><div class="fl" id="b-eyeL" style="background:var(--eyeL)"></div></div></div>
-    <div class="bar"><label><span style="color:var(--eyeR)">eye.R open (EAR | bs)</span><span id="v-eyeR"></span></label><div class="tr"><div class="fl" id="b-eyeR" style="background:var(--eyeR)"></div></div></div>
-    <div class="bar"><label><span style="color:var(--head)">head yaw / pitch / roll</span><span id="v-head"></span></label></div>
-  </div>
-
-  <div class="pane"><h2>2 · MID — floating landmark ghost + per-user calibration</h2>
-    <canvas id="ghost"></canvas>
-    <div>
-      <button id="btn-neutral">capture neutral (2s)</button>
-      <button id="btn-range">capture range (3s)</button>
-      <button id="btn-export">export cal json</button>
+    <div class="mini">
+      <h3><span>⚡</span> PRESET MOVEMENTS <small>— packaged, remixable</small></h3>
+      <div class="bd"><div class="row" id="presetRow"></div>
+        <div class="hint" id="rolesLine" style="color:var(--dim);font-size:10px"></div></div>
     </div>
-    <div id="calmsg"></div>
+    <div class="mini" style="flex:1.2">
+      <h3><span>▶</span> SESSION SCRIPT <small>— JSON, bone-name keyed</small></h3>
+      <div class="bd" style="flex:1">
+        <textarea id="script" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="playBtn" class="on">▶ play</button>
+          <button id="pauseBtn">⏸</button>
+          <button id="stopBtn">⏹</button>
+          <label>rate</label><input id="rate" type="range" min="0.1" max="3" step="0.1" value="1">
+        </div>
+        <div class="row">
+          <label title="master influence — extent of ALL script motion (Unity rig weight)">influence</label>
+          <input id="influence" type="range" min="0" max="1" step="0.05" value="1">
+          <label title="how strongly grouped points follow the dragged leader (proportional falloff)">follow</label>
+          <input id="follow" type="range" min="0" max="1" step="0.05" value="0.7">
+        </div>
+      </div>
+    </div>
+    <div class="mini">
+      <h3><span>⧉</span> FILM STACK <small>— sessions play back-to-back</small></h3>
+      <div class="bd">
+        <div id="sessionList"></div>
+        <div class="row">
+          <button class="sm" id="stackBtn">＋ stack current</button>
+          <button class="sm" id="filmBtn">🎬 play film</button>
+          <button class="sm" id="clearBtn">✕ clear</button>
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="pane"><h2>3 · TAP — puppet contract status</h2>
-    <div id="channels">loading contract…</div>
+  <div id="main">
+    <h2>
+      <label style="cursor:pointer"><button style="pointer-events:none">⬆ glb</button>
+        <input id="glbFile" type="file" accept=".glb,.gltf" hidden></label>
+      <button id="markersBtn" class="on">◉ rig points</button>
+      <button id="annoBtn">✏ annotate</button>
+      <button id="annoClear" class="sm">🧽 clear ink</button>
+      <button id="addBtn">＋ rig point</button>
+      <button id="groupBtn">⬚ group select</button>
+      <button id="groupClear" class="sm" title="empty the selection">✕ sel</button>
+      <span style="flex:1"></span>
+      <span id="modelName" style="color:var(--dim)"></span>
+    </h2>
+    <div id="sceneWrap">
+      <canvas id="scene"></canvas>
+      <canvas id="anno"></canvas>
+      <div id="band"></div>
+      <div id="status">loading…</div>
+      <div id="hint">drag golfball = record path (group drags together) · ⬚: click balls or drag a box to build the group · ✏ ink, dbl-click = note</div>
+    </div>
   </div>
-
 </div>
-<div id="hud">boot…</div>
 
 <script type="module">
-import { initCamera, initTracking } from './sdk/core/tracking.js';
-import { PuppetInput } from './sdk/interaction/puppet.js';
-import { HUMAN_POINTS, probeHuman, normalize } from './sdk/interaction/face-measures.js';
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RigPuppet, composeScripts, sequenceScripts } from './sdk/interaction/rig-script.js';
+import { PRESETS, buildPreset } from './sdk/interaction/rig-presets.js';
+import { classifySkeleton, graphFromScene } from './sdk/interaction/skeleton-align.js';
 
+const DEFAULT_GLB = 'assets/models/lizard_rigged.glb';
 const $ = id => document.getElementById(id);
-const CH_COLOR = { mouth:'#ff5370', eyeL:'#82aaff', eyeR:'#c792ea', head:'#ffcb6b' };
+const status = m => $('status').textContent = m;
 
-// Feature loops for the ghost/overlay (inner-lip loop = mouth.js INNER_LIP)
-const LIP_LOOP = [78,191,80,81,82,13,312,311,310,415,308,324,318,402,317,14,87,178,88,95];
-const EYE_L_LOOP = [362,385,387,263,373,380], EYE_R_LOOP = [33,160,158,133,153,144];
-const MOUTH_PTS = Object.values(HUMAN_POINTS.mouth).slice(0,4);   // the 4 contract points
+const canvas = $('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
+camera.position.set(2.6, 1.9, 3.2);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 0.7, 0);
+scene.add(new THREE.HemisphereLight(0xdfe8f5, 0x22262b, 1.1));
+const key = new THREE.DirectionalLight(0xffffff, 1.4); key.position.set(3, 5, 2); scene.add(key);
+scene.add(new THREE.GridHelper(8, 32, 0x30363d, 0x21262d));
 
-// ── per-user calibration (contract defaults until captured) ──
-let cal = JSON.parse(localStorage.getItem('riglab.cal.v1') || 'null') || {
-  'mouth.open': { neutral:0.05, max:0.7 },
-  'tongue.out': { neutral:0.0,  max:0.55 },
-  'eye.L':      { open:0.30, closed:0.08 },
-  'eye.R':      { open:0.30, closed:0.08 }
-};
+let puppet = null, model = null, rig = null, modelLen = 4;
+const sessions = [];
+const group = new Set();      // multi-selected rig points (drag as one)
 
-let contract = null;
-fetch('./assets/lizard/face.contract.json').then(r => r.json()).then(c => {
-  contract = c; renderContract();
-}).catch(e => { $('channels').textContent = 'contract load failed: ' + e; });
-
-function renderContract() {
-  const el = $('channels'); el.innerHTML = '';
-  for (const ch of contract.channels) {
-    const row = document.createElement('div'); row.className = 'ch';
-    const dot = document.createElement('span');
-    dot.className = 'dot' + (ch.status === 'calibrated' ? ' ok'
-                    : ch.status === 'awaiting_puppet_marks' ? ' warn' : '');
-    const missing = ch.puppet?.points
-      ? Object.values(ch.puppet.points).filter(v => v === null).length : null;
-    row.append(dot, Object.assign(document.createElement('span'), { textContent: ch.id }),
-      Object.assign(document.createElement('small'), {
-        textContent: missing ? `${missing} verts unmarked` : ch.status }));
-    el.append(row);
-  }
-  const note = document.createElement('div');
-  note.style.cssText = 'color:#8b949e;font-size:11px;padding-top:6px';
-  note.textContent = 'amber = human side live, puppet marks pending. Tap-sync pane goes live once marks + response curves exist.';
-  el.append(note);
-}
-
-// ── ghost: orbitable 3D point cloud of the live landmarks ──
-const g = $('ghost'), gc = g.getContext('2d');
-let orbit = { yaw: 0.35, pitch: 0.1, drag: null };
-g.addEventListener('pointerdown', e => { orbit.drag = [e.clientX, e.clientY]; g.setPointerCapture(e.pointerId); });
-g.addEventListener('pointermove', e => {
-  if (!orbit.drag) return;
-  orbit.yaw += (e.clientX - orbit.drag[0]) * 0.008;
-  orbit.pitch = Math.max(-1.2, Math.min(1.2, orbit.pitch + (e.clientY - orbit.drag[1]) * 0.008));
-  orbit.drag = [e.clientX, e.clientY];
+// ── activity journal: everything you do here streams to /journal (JSONL on
+// disk) so a Claude session can read, replay, and see this live session ──
+const SID = new Date().toISOString().replace(/[:.]/g, '-') + '_' + Math.random().toString(36).slice(2, 6);
+const _jq = [];
+function jlog(type, data = {}) { _jq.push({ sid: SID, t: Date.now(), type, ...data }); }
+setInterval(() => {
+  if (!_jq.length) return;
+  const batch = _jq.splice(0, _jq.length);
+  fetch('/journal', { method: 'POST', body: JSON.stringify(batch), keepalive: true }).catch(() => {});
+}, 1200);
+addEventListener('beforeunload', () => {
+  if (_jq.length) navigator.sendBeacon?.('/journal', JSON.stringify(_jq.splice(0, _jq.length)));
 });
-g.addEventListener('pointerup', () => orbit.drag = null);
 
-function drawGhost(lm) {
-  const w = g.width = g.clientWidth, h = g.height = 360;
-  gc.clearRect(0, 0, w, h);
-  if (!lm) { gc.fillStyle = '#484f58'; gc.fillText('no face', w/2-20, h/2); return; }
-  // center on landmark centroid, mirror x for selfie parity, orbit-rotate
-  let cx=0, cy=0, cz=0;
-  for (const p of lm) { cx+=p.x; cy+=p.y; cz+=p.z; }
-  cx/=lm.length; cy/=lm.length; cz/=lm.length;
-  const cyw = Math.cos(orbit.yaw), syw = Math.sin(orbit.yaw);
-  const cpt = Math.cos(orbit.pitch), spt = Math.sin(orbit.pitch);
-  const S = h * 1.35;
-  const proj = p => {
-    let x = -(p.x-cx), y = p.y-cy, z = p.z-cz;          // mirror x
-    let X =  x*cyw + z*syw, Z = -x*syw + z*cyw;         // yaw
-    let Y =  y*cpt - Z*spt;  Z = y*spt + Z*cpt;         // pitch
-    return [w/2 + X*S, h/2 + Y*S, Z];
-  };
-  gc.fillStyle = 'rgba(139,148,158,0.55)';
-  for (let i = 0; i < lm.length; i++) {
-    const [x, y] = proj(lm[i]);
-    gc.fillRect(x, y, 1.5, 1.5);
+// ── load + role resolution ──
+async function loadGLB(url, label) {
+  status('loading ' + label + '…');
+  // authored roles contract beside the GLB (authored wins, classifier fills)
+  let authored = null;
+  if (!url.startsWith('blob:')) {
+    try {
+      const r = await fetch(url.replace(/\.glb$/i, '.roles.json'));
+      if (r.ok) authored = (await r.json()).roles;
+    } catch { /* no contract — classifier only */ }
   }
-  const loop = (ids, color, close=true) => {
-    gc.strokeStyle = color; gc.lineWidth = 1.5; gc.beginPath();
-    ids.forEach((id, k) => { const [x,y] = proj(lm[id]); k ? gc.lineTo(x,y) : gc.moveTo(x,y); });
-    if (close) gc.closePath();
-    gc.stroke();
-  };
-  loop(LIP_LOOP, CH_COLOR.mouth); loop(EYE_L_LOOP, CH_COLOR.eyeL); loop(EYE_R_LOOP, CH_COLOR.eyeR);
-  // the 4 contract points, emphasized — these are what the puppet marks answer
-  gc.fillStyle = CH_COLOR.mouth;
-  for (const id of MOUTH_PTS) { const [x,y] = proj(lm[id]); gc.beginPath(); gc.arc(x,y,3.5,0,7); gc.fill(); }
+  new GLTFLoader().load(url, gltf => {
+    if (model) scene.remove(model);
+    model = gltf.scene;
+    scene.add(model);
+    puppet = new RigPuppet().bind(model);
+    puppet.showMarkers($('markersBtn').classList.contains('on'));
+    rig = { ...classifySkeleton(graphFromScene(model)).roles };
+    rig.tongue = puppet.points().filter(n => /tongue/i.test(n));
+    if (authored) for (const [k, v] of Object.entries(authored)) rig[k] = v;
+    modelLen = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3()).length();
+    group.clear();
+    fillBoneList(); fillPresets();
+    $('modelName').textContent = label;
+    jlog('load', { model: label, points: puppet.points().length });
+    if (!$('script').value.trim()) {
+      const first = buildPreset('tongue-flick', rig) || buildPreset('breathe', rig) ||
+                    { name: 'session', duration: 2, loop: true, tracks: [], oscillators: [] };
+      $('script').value = JSON.stringify(first, null, 2);
+    }
+    tryPlay();
+    status(`${label} — ${puppet.points().length} rig points`);
+  }, undefined, e => status('load failed: ' + e.message));
 }
 
-// ── overlay on the raw video (coords are unmirrored; CSS mirrors the pane) ──
-const oc = $('overlay').getContext('2d');
-function drawOverlay(lm, mouthPoly) {
-  oc.clearRect(0, 0, 480, 360);
-  if (!lm) return;
-  oc.strokeStyle = CH_COLOR.mouth; oc.lineWidth = 1.5; oc.beginPath();
-  LIP_LOOP.forEach((id, k) => {
-    const x = lm[id].x*480, y = lm[id].y*360; k ? oc.lineTo(x,y) : oc.moveTo(x,y);
-  });
-  oc.closePath(); oc.stroke();
-  oc.fillStyle = CH_COLOR.mouth;
-  for (const id of MOUTH_PTS) oc.fillRect(lm[id].x*480-2.5, lm[id].y*360-2.5, 5, 5);
-  for (const [ids, col] of [[EYE_L_LOOP, CH_COLOR.eyeL], [EYE_R_LOOP, CH_COLOR.eyeR]]) {
-    oc.strokeStyle = col; oc.beginPath();
-    ids.forEach((id, k) => { const x=lm[id].x*480, y=lm[id].y*360; k?oc.lineTo(x,y):oc.moveTo(x,y); });
-    oc.closePath(); oc.stroke();
+function fillBoneList() {
+  const el = $('boneList');
+  el.innerHTML = '';
+  const names = puppet.points();
+  $('boneCount').textContent = `(${names.length})`;
+  for (const n of names) {
+    const d = document.createElement('div');
+    d.textContent = n; d.dataset.bone = n;
+    if (/tongue/i.test(n)) d.classList.add('tongue');
+    d.onclick = e => selectPoint(n, { toggle: e.ctrlKey });   // ctrl+click = multi
+    d.ondblclick = () => { group.add(n); renderGroup(); };    // dbl-click = add to group
+    el.appendChild(d);
   }
 }
+function renderGroup() {
+  document.querySelectorAll('#boneList div').forEach(d =>
+    d.classList.toggle('sel', group.has(d.dataset.bone)));
+  puppet.highlight([...group]);
+  jlog('group', { bones: [...group] });
+}
+function selectPoint(n, { toggle = false } = {}) {
+  if (toggle) group.has(n) ? group.delete(n) : group.add(n);
+  else { group.clear(); group.add(n); }
+  renderGroup();
+  document.querySelector(`#boneList [data-bone="${n}"]`)?.scrollIntoView({ block: 'nearest' });
+}
 
-// ── calibration ritual ──
-let capture = null;   // {kind, until, acc}
-$('btn-neutral').onclick = () => { capture = { kind:'neutral', until: performance.now()+2000, acc: [] };
-  $('btn-neutral').classList.add('armed'); $('calmsg').textContent = 'hold still, face relaxed, mouth closed…'; };
-$('btn-range').onclick = () => { capture = { kind:'range', until: performance.now()+3000, acc: [] };
-  $('btn-range').classList.add('armed'); $('calmsg').textContent = 'open WIDE, blink hard, tongue OUT…'; };
-$('btn-export').onclick = () => {
-  const blob = new Blob([JSON.stringify({ contract_id: contract?.id, captured: new Date().toISOString(), cal }, null, 1)],
-                        { type: 'application/json' });
-  const a = Object.assign(document.createElement('a'),
-    { href: URL.createObjectURL(blob), download: 'face-cal.json' });
-  a.click();
+function fillPresets() {
+  const row = $('presetRow');
+  row.innerHTML = '';
+  for (const [id, p] of Object.entries(PRESETS)) {
+    const b = document.createElement('button');
+    b.className = 'sm'; b.textContent = p.label;
+    const script = buildPreset(id, rig);
+    b.disabled = !script;
+    b.onclick = () => { jlog('preset', { id }); $('script').value = JSON.stringify(buildPreset(id, rig), null, 2); tryPlay(); };
+    row.appendChild(b);
+  }
+  const have = r => { const v = rig[r]; return Array.isArray(v) ? v.length : !!v; };
+  $('rolesLine').textContent = 'skeleton roles: ' +
+    ['frontL','frontR','hindL','hindR','spine','tail','neck','head','jawLower','tongue']
+      .map(r => `${r}:${Array.isArray(rig[r]) ? rig[r].length : (rig[r] ? '✓' : '—')}`).join(' ');
+}
+
+// ── script transport ──
+function currentScript() {
+  try { return JSON.parse($('script').value); } catch { return null; }
+}
+function tryPlay() {
+  if (!puppet) return;
+  const s = currentScript();
+  if (!s) return status('script error: invalid JSON');
+  try {
+    puppet.play(s);
+    puppet.rate = +$('rate').value;
+    status('playing: ' + (s.name || 'script'));
+    jlog('play', { name: s.name, duration: s.duration, tracks: (s.tracks || []).length,
+                   oscillators: (s.oscillators || []).length, script: s });
+  } catch (e) { status('script error: ' + e.message); }
+}
+$('playBtn').onclick = tryPlay;
+$('pauseBtn').onclick = () => { puppet?.pause(); jlog('pause'); };
+$('stopBtn').onclick = () => { puppet?.stop(); jlog('stop'); };
+$('rate').oninput = e => { if (puppet) puppet.rate = +e.target.value; jlog('rate', { v: +e.target.value }); };
+// script edits: journal a debounced full snapshot so Claude sees the JSON
+let _editT = null;
+$('script').addEventListener('input', () => {
+  clearTimeout(_editT);
+  _editT = setTimeout(() => jlog('scriptEdit', { script: currentScript() || $('script').value.slice(0, 4000) }), 1500);
+});
+$('markersBtn').onclick = e => {
+  e.target.classList.toggle('on');
+  puppet?.showMarkers(e.target.classList.contains('on'));
+};
+$('glbFile').onchange = e => {
+  const f = e.target.files[0];
+  if (f) loadGLB(URL.createObjectURL(f), f.name);
 };
 
-function feedCapture(m, ears, tongue) {
-  if (!capture) return;
-  capture.acc.push({ mar: m, eL: ears.L, eR: ears.R, t: tongue });
-  if (performance.now() < capture.until) return;
-  const a = capture.acc, n = a.length || 1;
-  if (capture.kind === 'neutral') {
-    cal['mouth.open'].neutral = a.reduce((s,x)=>s+x.mar,0)/n;
-    cal['eye.L'].open = a.reduce((s,x)=>s+x.eL,0)/n;
-    cal['eye.R'].open = a.reduce((s,x)=>s+x.eR,0)/n;
-    $('calmsg').textContent = `neutral set: MAR ${cal['mouth.open'].neutral.toFixed(3)}, EAR L/R ${cal['eye.L'].open.toFixed(2)}/${cal['eye.R'].open.toFixed(2)}`;
-  } else {
-    cal['mouth.open'].max = Math.max(...a.map(x=>x.mar));
-    cal['tongue.out'].max = Math.max(cal['tongue.out'].max, ...a.map(x=>x.t));
-    cal['eye.L'].closed = Math.min(...a.map(x=>x.eL));
-    cal['eye.R'].closed = Math.min(...a.map(x=>x.eR));
-    $('calmsg').textContent = `range set: MAR max ${cal['mouth.open'].max.toFixed(2)}, tongue max ${cal['tongue.out'].max.toFixed(2)}, EAR closed ${cal['eye.L'].closed.toFixed(2)}/${cal['eye.R'].closed.toFixed(2)}`;
+// ── drag golfball(s) → record path track(s); groups drag with falloff ──
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let drag = null, box = null, addMode = false, groupMode = false;
+const setNDC = e => {
+  const r = canvas.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+};
+const screenPos = name => {
+  const p = puppet.getWorldPos(name).project(camera);
+  const r = canvas.getBoundingClientRect();
+  return { x: r.left + (p.x + 1) / 2 * r.width, y: r.top + (1 - p.y) / 2 * r.height };
+};
+const smooth01 = x => { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); };
+
+canvas.addEventListener('pointerdown', e => {
+  if (!puppet || addMode) return;
+  if (groupMode) {
+    // group-select mode: click a golfball = toggle it into the group;
+    // press on the model/space = start a box that collects everything inside
+    setNDC(e); ray.setFromCamera(ndc, camera);
+    const hit = puppet.markers ? ray.intersectObjects(puppet.markers, false)[0] : null;
+    if (hit) selectPoint(hit.object.userData.rigPoint, { toggle: true });
+    else box = { x0: e.clientX, y0: e.clientY, x1: e.clientX, y1: e.clientY };
+    e.preventDefault();
+    return;
   }
-  localStorage.setItem('riglab.cal.v1', JSON.stringify(cal));
-  capture = null;
-  $('btn-neutral').classList.remove('armed'); $('btn-range').classList.remove('armed');
-}
-
-// ── main loop ──
-const vid = $('vid');
-let faceMs = 0, lastFace = 0;
-(async () => {
-  await initCamera(null, vid);      // (bgVideoEl, detectionVideoEl) — see mouthlab
-  const tracker = await initTracking(vid, {
-    enableHands: false, enablePose: false, faceEvery: 1, faceMatrix: true });
-  const puppet = new PuppetInput(vid);      // production path: smoothed channels
-
-  const bar = (id, v) => { $('b-'+id).style.width = (Math.min(1, Math.max(0, v))*100).toFixed(1)+'%'; };
-  function tick() {
-    const t = performance.now();
-    const frame = tracker.detect();
-    const s = puppet.update(frame, t);
-    const lm = frame?.face?.landmarks || null;
-
-    if (lm) {
-      if (lastFace) faceMs = faceMs*0.9 + (t-lastFace)*0.1;
-      lastFace = t;
-      const aspect = (vid.videoWidth||4)/(vid.videoHeight||3);
-      const raw = probeHuman(lm, aspect);
-
-      const mOpen = normalize(raw['mouth.open'], cal['mouth.open']);
-      const earL = raw['eye.blink.L'], earR = raw['eye.blink.R'];
-      const openL = normalize(earL, { neutral: cal['eye.L'].closed, max: cal['eye.L'].open });
-      const openR = normalize(earR, { neutral: cal['eye.R'].closed, max: cal['eye.R'].open });
-      const tongue = normalize(s.mouth.tongueAmount, cal['tongue.out']);
-
-      bar('mouth', mOpen);  $('v-mouth').textContent = `${raw['mouth.open'].toFixed(3)} → ${mOpen.toFixed(2)}`;
-      bar('tongue', tongue); $('v-tongue').textContent = `${s.mouth.tongueAmount.toFixed(2)} → ${tongue.toFixed(2)}`;
-      bar('eyeL', openL); $('v-eyeL').textContent = `${earL.toFixed(2)} | bs ${s.eyes.left.openAmount.toFixed(2)}`;
-      bar('eyeR', openR); $('v-eyeR').textContent = `${earR.toFixed(2)} | bs ${s.eyes.right.openAmount.toFixed(2)}`;
-      $('v-head').textContent = `${s.head.yaw.toFixed(0)}° / ${s.head.pitch.toFixed(0)}° / ${s.head.roll.toFixed(0)}°`;
-
-      drawOverlay(lm);
-      feedCapture(raw['mouth.open'], { L: earL, R: earR }, s.mouth.tongueAmount);
+  if (!puppet.markers) return;
+  setNDC(e); ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(puppet.markers, false);
+  if (!hits.length) return;
+  const leader = hits[0].object.userData.rigPoint;
+  controls.enabled = false;
+  const leaderStart = puppet.getWorldPos(leader);
+  const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+    camera.getWorldDirection(new THREE.Vector3()).negate(), leaderStart);
+  // grabbing a point inside the multi-selection drags the whole group;
+  // followers move by follow · smooth falloff of distance from the leader
+  // (Blender proportional editing) — each member's movement-extent index
+  const names = (group.has(leader) && group.size > 1) ? [...group] : [leader];
+  const follow = +$('follow').value, R = modelLen * 0.5;
+  const members = names.map(n => {
+    const start = puppet.getWorldPos(n);
+    const w = n === leader ? 1 : follow * smooth01(1 - start.distanceTo(leaderStart) / R);
+    return { n, start, w, samples: [[0, 0, 0, 0]] };
+  }).filter(m => m.w > 0.02);
+  drag = { leader, leaderStart, plane, t0: performance.now(), last: -1, members };
+  if (!group.has(leader)) selectPoint(leader);
+  puppet.highlight(members.map(m => m.n), 0x3fb950);
+  status(`recording path: ${members.map(m => m.n).join(', ')}`);
+  jlog('dragStart', { bones: members.map(m => ({ n: m.n, w: +m.w.toFixed(2) })) });
+  e.preventDefault();
+});
+canvas.addEventListener('pointermove', e => {
+  if (box) {                                                 // box select rubber band
+    box.x1 = e.clientX; box.y1 = e.clientY;
+    const w = $('sceneWrap').getBoundingClientRect();
+    const el = $('band');
+    el.style.display = 'block';
+    el.style.left = (Math.min(box.x0, box.x1) - w.left) + 'px';
+    el.style.top = (Math.min(box.y0, box.y1) - w.top) + 'px';
+    el.style.width = Math.abs(box.x1 - box.x0) + 'px';
+    el.style.height = Math.abs(box.y1 - box.y0) + 'px';
+    return;
+  }
+  if (!drag) return;
+  setNDC(e); ray.setFromCamera(ndc, camera);
+  const p = new THREE.Vector3();
+  if (!ray.ray.intersectPlane(drag.plane, p)) return;
+  const delta = p.sub(drag.leaderStart);
+  const pose = {}, target = new THREE.Vector3();
+  const t = (performance.now() - drag.t0) / 1000;
+  const rec = t - drag.last >= 0.033;                        // ~30Hz samples
+  for (const m of drag.members) {
+    target.copy(m.start).addScaledVector(delta, m.w);
+    const o = puppet.worldToLocalOffset(m.n, m.start, target);
+    pose[m.n] = o;
+    if (rec) m.samples.push([+t.toFixed(3), +o.px.toFixed(4), +o.py.toFixed(4), +o.pz.toFixed(4)]);
+  }
+  if (rec) drag.last = t;
+  puppet.setPose(pose);                                      // live follow
+});
+window.addEventListener('pointerup', () => {
+  if (box) {                                                 // box select commit
+    const [xa, xb] = [Math.min(box.x0, box.x1), Math.max(box.x0, box.x1)];
+    const [ya, yb] = [Math.min(box.y0, box.y1), Math.max(box.y0, box.y1)];
+    if (xb - xa > 6 || yb - ya > 6) {                        // ignore stray clicks
+      for (const n of puppet?.points() || []) {
+        const p = screenPos(n);
+        if (p.x >= xa && p.x <= xb && p.y >= ya && p.y <= yb) group.add(n);
+      }
+      renderGroup();
+      status(`group: ${group.size} rig point(s) — drag any member to move them together`);
     }
-    drawGhost(lm);
-    $('hud').textContent =
-      `face cadence ${faceMs ? faceMs.toFixed(0) : '–'} ms (${faceMs ? (1000/faceMs).toFixed(0) : '–'} Hz) · ` +
-      `matrix ${frame?.face?.matrix ? 'ON' : 'off'} · blendshapes ${frame?.face?.blendshapes ? 'ON' : 'off'} · ` +
-      `mouthOpen=${s.mouth.mouthOpen} tongueOut=${s.mouth.tongueOut} · cal ${localStorage.getItem('riglab.cal.v1') ? 'stored' : 'defaults'}`;
-    requestAnimationFrame(tick);
+    $('band').style.display = 'none';
+    box = null;
+    return;
   }
-  tick();
-})().catch(e => { $('hud').textContent = 'BOOT FAILED: ' + e; console.error(e); });
+  if (!drag) return;
+  controls.enabled = true;
+  puppet.setPose({});
+  const lead = drag.members[0];
+  if (lead.samples.length > 3) {
+    const end = lead.samples[lead.samples.length - 1][0];
+    const s = currentScript() || { name: 'session', duration: end, loop: true, tracks: [], oscillators: [] };
+    for (const m of drag.members) (s.tracks ??= []).push({ bone: m.n, path: m.samples });
+    s.duration = Math.max(s.duration || 1, end);
+    s.name = (s.name || 'session').replace(/( \+ path)*$/, '') + ' + path';
+    $('script').value = JSON.stringify(s, null, 2);
+    tryPlay();
+    status(`${drag.members.length} path track(s) recorded (${end.toFixed(1)}s) — remixed in`);
+    jlog('dragEnd', { bones: drag.members.map(m => m.n), seconds: end,
+                      tracks: drag.members.map(m => ({ bone: m.n, path: m.samples })) });
+  } else jlog('dragEnd', { bones: drag.members.map(m => m.n), discarded: true });
+  drag = null;
+});
+// dbl-click a golfball = toggle it in/out of the multi-selection
+canvas.addEventListener('dblclick', e => {
+  if (!puppet?.markers || addMode || groupMode) return;
+  setNDC(e); ray.setFromCamera(ndc, camera);
+  const hits = ray.intersectObjects(puppet.markers, false);
+  if (hits.length) selectPoint(hits[0].object.userData.rigPoint, { toggle: true });
+});
+
+// ── ⬚ group select mode: no keyboard — clicks and boxes build the group ──
+$('groupBtn').onclick = e => {
+  groupMode = !groupMode;
+  e.target.classList.toggle('on', groupMode);
+  $('sceneWrap').classList.toggle('grouping', groupMode);
+  controls.enabled = !groupMode;                             // drags draw boxes, not orbit
+  status(groupMode
+    ? `group select ON: click golfballs or drag a box (${group.size} selected)`
+    : `group select off — ${group.size} in group; drag any member to move them together`);
+  jlog('groupMode', { on: groupMode });
+};
+$('groupClear').onclick = () => { group.clear(); renderGroup(); status('selection emptied'); };
+
+// ── ＋ rig point: click the body → live bone + radius-falloff weight map ──
+$('addBtn').onclick = e => {
+  addMode = !addMode;
+  e.target.classList.toggle('on', addMode);
+  $('sceneWrap').classList.toggle('adding', addMode);
+  status(addMode ? 'add rig point: click on the body (⏹ stop first for exact placement)' : 'add mode off');
+  jlog('addMode', { on: addMode });
+};
+canvas.addEventListener('click', e => {
+  if (!addMode || !model) return;
+  setNDC(e); ray.setFromCamera(ndc, camera);
+  const meshes = [];
+  model.traverse(o => o.isMesh && meshes.push(o));
+  const hits = ray.intersectObjects(meshes, false);
+  if (!hits.length) return;
+  const name = prompt('rig point name:', `Point_${puppet.points().length}`);
+  if (!name) return;
+  try {
+    const res = puppet.addRigPoint(name.trim().replace(/\s+/g, '_'), hits[0].point,
+                                   { radius: modelLen * 0.06 });
+    fillBoneList();
+    selectPoint(res.name);
+    status(`＋ ${res.name} → parent ${res.parent}, ${res.weightedVerts} verts weighted`);
+    jlog('addPoint', { ...res, pos: hits[0].point.toArray().map(v => +v.toFixed(3)) });
+  } catch (err) { status('add failed: ' + err.message); }
+});
+
+$('influence').oninput = e => { if (puppet) puppet.weight = +e.target.value; jlog('influence', { v: +e.target.value }); };
+$('follow').onchange = e => jlog('follow', { v: +e.target.value });
+
+// ── film stack: sessions play back-to-back ──
+function renderSessions() {
+  const el = $('sessionList');
+  el.innerHTML = '';
+  sessions.forEach((s, i) => {
+    const c = document.createElement('div');
+    c.className = 'chip';
+    c.innerHTML = `<span class="t">${i + 1}. ${s.name || 'session'}</span>` +
+      `<span class="d">${(s.duration || 1).toFixed(1)}s</span><span class="x">✕</span>`;
+    c.querySelector('.t').onclick = () => { $('script').value = JSON.stringify(s, null, 2); tryPlay(); };
+    c.querySelector('.x').onclick = () => { sessions.splice(i, 1); renderSessions(); };
+    el.appendChild(c);
+  });
+}
+$('stackBtn').onclick = () => {
+  const s = currentScript();
+  if (!s) return status('script error: invalid JSON');
+  sessions.push(s);
+  renderSessions();
+  status(`stacked "${s.name || 'session'}" — film is ${sessions.length} session(s)`);
+  jlog('stack', { name: s.name, duration: s.duration, count: sessions.length });
+};
+$('filmBtn').onclick = () => {
+  if (!sessions.length) return status('film stack is empty — stack a session first');
+  const film = sequenceScripts('film', sessions);
+  $('script').value = JSON.stringify(film, null, 2);
+  tryPlay();
+  jlog('film', { sessions: sessions.map(s => s.name), duration: film.duration });
+};
+$('clearBtn').onclick = () => { sessions.length = 0; renderSessions(); jlog('clearStack'); };
+
+// ── annotation layer: ink strokes + text notes over the viewport ──
+const annoCv = $('anno');
+const actx = annoCv.getContext('2d');
+const annos = [];            // {kind:'stroke', pts:[[nx,ny]..]} | {kind:'note', x,y,text}
+let stroke = null;
+function redrawAnno() {
+  const w = annoCv.width = annoCv.clientWidth * devicePixelRatio;
+  const h = annoCv.height = annoCv.clientHeight * devicePixelRatio;
+  actx.clearRect(0, 0, w, h);
+  actx.lineWidth = 2.5 * devicePixelRatio; actx.lineCap = 'round'; actx.lineJoin = 'round';
+  for (const a of annos) {
+    if (a.kind === 'stroke') {
+      actx.strokeStyle = '#d29922';
+      actx.beginPath();
+      a.pts.forEach(([x, y], i) => actx[i ? 'lineTo' : 'moveTo'](x * w, y * h));
+      actx.stroke();
+    } else {
+      actx.fillStyle = '#d29922';
+      actx.beginPath(); actx.arc(a.x * w, a.y * h, 4 * devicePixelRatio, 0, 7); actx.fill();
+      actx.font = `${12 * devicePixelRatio}px ui-monospace,Consolas,monospace`;
+      actx.fillStyle = '#ffdf5d';
+      actx.fillText(a.text, a.x * w + 8 * devicePixelRatio, a.y * h - 6 * devicePixelRatio);
+    }
+  }
+}
+const annoNorm = e => {
+  const r = annoCv.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height];
+};
+annoCv.addEventListener('pointerdown', e => {
+  stroke = { kind: 'stroke', pts: [annoNorm(e)] };
+  annos.push(stroke);
+  annoCv.setPointerCapture(e.pointerId);
+});
+annoCv.addEventListener('pointermove', e => {
+  if (!stroke) return;
+  stroke.pts.push(annoNorm(e).map(v => +v.toFixed(4)));
+  redrawAnno();
+});
+annoCv.addEventListener('pointerup', () => {
+  if (stroke && stroke.pts.length > 2) jlog('annoStroke', { pts: stroke.pts });
+  else if (stroke) annos.pop();          // a click, not a stroke
+  stroke = null; redrawAnno();
+});
+annoCv.addEventListener('dblclick', e => {
+  const text = prompt('note:');
+  if (!text) return;
+  const [x, y] = annoNorm(e);
+  annos.push({ kind: 'note', x, y, text });
+  redrawAnno();
+  jlog('annoNote', { x: +x.toFixed(4), y: +y.toFixed(4), text });
+});
+$('annoBtn').onclick = e => {
+  e.target.classList.toggle('on');
+  $('sceneWrap').classList.toggle('annotating', e.target.classList.contains('on'));
+  jlog('annoMode', { on: e.target.classList.contains('on') });
+};
+$('annoClear').onclick = () => { annos.length = 0; redrawAnno(); jlog('annoClear'); };
+
+// camera view journaled (debounced) so a reviewer can reproduce the angle
+let _camT = null;
+controls.addEventListener('change', () => {
+  clearTimeout(_camT);
+  _camT = setTimeout(() => jlog('camera', {
+    pos: camera.position.toArray().map(v => +v.toFixed(3)),
+    target: controls.target.toArray().map(v => +v.toFixed(3)),
+  }), 600);
+});
+
+// ── frame loop ──
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w || canvas.height !== h) {
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    redrawAnno();
+  }
+}
+const clock = new THREE.Clock();
+(function loop() {
+  requestAnimationFrame(loop);
+  resize();
+  puppet?.update(Math.min(clock.getDelta(), 0.05));
+  controls.update();
+  renderer.render(scene, camera);
+})();
+
+loadGLB(DEFAULT_GLB, 'lizard_rigged.glb');
+window.__riglab = { get puppet() { return puppet; }, get rig() { return rig; }, sessions,
+                    composeScripts, sequenceScripts, buildPreset, PRESETS,
+  // headless probe helpers
+  screenPosOf(name) { return screenPos(name); },
+  setGroup(names) { group.clear(); names.forEach(n => group.add(n)); renderGroup(); },
+  get group() { return [...group]; },
+  addPointAt(name, xyz, opts) {
+    const res = puppet.addRigPoint(name, new THREE.Vector3(...xyz), { radius: modelLen * 0.06, ...opts });
+    fillBoneList(); renderGroup();
+    return res;
+  },
+  // replay helpers: reproduce a journaled live session (watcher script)
+  setCamera(pos, target) {
+    camera.position.fromArray(pos);
+    controls.target.fromArray(target);
+    controls.update();
+  },
+  setScript(s) { $('script').value = JSON.stringify(s, null, 2); tryPlay(); },
+  replayAnno(list) { annos.length = 0; annos.push(...list); redrawAnno(); },
+  sid: SID };
 </script>
 </body>
 </html>

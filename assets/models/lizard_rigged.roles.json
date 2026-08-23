@@ -1,0 +1,20 @@
+{
+  "model": "lizard_rigged.glb",
+  "note": "Authored skeleton roles for the UniRig gecko (bones are unnamed, structure-only — auto-classification finds too little). Chains are proximal→distal; spine is head-end→hip-end. Lizard faces -y, up +z in Blender; +x is the animal's LEFT. Verified against Blender bone head positions 2026-08-22. Jaw verified visually 2026-08-23: Bone_043 local rx −34° ≈ mouth closed (rest pose is sculpted OPEN), rx + opens wider; Bone_049/048 lift the snout+tongue root; Bone_011 rx tips the whole skull (+ = down).",
+  "roles": {
+    "root": "Bone_000",
+    "hip": "Bone_005",
+    "spine": ["Bone_002", "Bone_003", "Bone_004", "Bone_001", "Bone_006"],
+    "neck": ["Bone_014", "Bone_013", "Bone_012"],
+    "head": "Bone_011",
+    "jaw": ["Bone_043", "Bone_042"],
+    "jawLower": ["Bone_043", "Bone_042"],
+    "jawUpper": ["Bone_049", "Bone_048"],
+    "tongue": ["Tongue_Mid", "Tongue_Tip"],
+    "frontL": ["Bone_018", "Bone_017", "Bone_016", "Bone_015"],
+    "frontR": ["Bone_010", "Bone_009", "Bone_008", "Bone_007"],
+    "hindL": ["Bone_022", "Bone_021", "Bone_020", "Bone_019"],
+    "hindR": ["Bone_026", "Bone_025", "Bone_024", "Bone_023"],
+    "tail": ["Bone_035", "Bone_034", "Bone_033", "Bone_032", "Bone_031", "Bone_030", "Bone_029", "Bone_028", "Bone_027"]
+  }
+}
