@@ -62,6 +62,9 @@ export class HandBody {
     this.scale = 1;                    // live span / rest span
     this.palm = new THREE.Vector3();   // palm centre (world)
     this.palmQ = new THREE.Quaternion();
+    this.palmOut = new THREE.Vector3(0, 0, 1);  // world INNER-PALM normal (measured, see update)
+    this.palmSign = 0;                 // ±1: palm-local z → palm side (0 until first measurement)
+    this._palmEvi = 0;                 // decay-latched volar evidence
     this.palmVel = new THREE.Vector3();
     this.angVel = new THREE.Vector3(); // rad/s, world axis × magnitude
     this.speed = 0;                    // palm speed (m/s)
@@ -109,6 +112,26 @@ export class HandBody {
     _x.crossVectors(_y, _z);                                              // right-handed, det > 0
     _m.makeBasis(_x, _y, _z);
     _q.setFromRotationMatrix(_m);
+
+    // PALM SIDE — MEASURED, never assumed. The cross-product normal flips
+    // with anatomical chirality, and handedness labels lie (mirror mode,
+    // crossed hands) — the pose-invariant cue is the thumb column, which
+    // sits VOLAR of the wrist/knuckle plane on any real hand (the same
+    // palm-block cue body-drive's chirality latch uses). Fingertip curl
+    // adds evidence whenever the hand isn't held perfectly flat. Decay-
+    // latched so one glitchy frame can't flip tray/grab gating mid-hold.
+    let volar = 0;
+    volar += _v.subVectors(this.joints[1], this.joints[0]).dot(_z);
+    volar += _v.subVectors(this.joints[2], this.joints[0]).dot(_z);
+    for (let k = 1; k < TIPS.length; k++) {   // skip thumb tip (radial, not volar)
+      volar += _v.subVectors(this.joints[TIPS[k]], this.palm).dot(_z) * 0.5;
+    }
+    volar /= Math.max(span, 1e-4);
+    this._palmEvi = this._hasPrev ? this._palmEvi * 0.85 + volar * 0.15 : volar;
+    if (this.palmSign === 0 || Math.abs(this._palmEvi) > 0.04) {
+      this.palmSign = this._palmEvi >= 0 ? 1 : -1;
+    }
+    this.palmOut.copy(_z).multiplyScalar(this.palmSign);
 
     if (this._hasPrev) {
       // palm linear velocity
@@ -180,6 +203,9 @@ export class HandBody {
     out.angVel.x = this.angVel.x; out.angVel.y = this.angVel.y; out.angVel.z = this.angVel.z;
     out.speed = this.speed; out.punchSpeed = this.punchSpeed;
     out.openness = this.openness; out.pinch = this.pinch;
+    out.palmSign = this.palmSign;
+    out.palmOut = out.palmOut || {};
+    out.palmOut.x = this.palmOut.x; out.palmOut.y = this.palmOut.y; out.palmOut.z = this.palmOut.z;
     out.tips = out.tips || [];
     for (let t = 0; t < 5; t++) {
       const tip = this.joints[TIPS[t]];
@@ -550,6 +576,15 @@ export class GrabbableBox extends GrabbableSphere {
           gripped = (g.thumb && g.finger) || g.n >= 5;
         }
         gripped = gripped || this._clampSlot !== null;   // a live clamp keeps it held
+        // FALLBACK ROUTING: a held cube must live on the INNER hand. If it
+        // ends up riding the BACK of the hand (chirality mis-latch, glitchy
+        // capture), that's glue, not a grip — force the release, gravity wins.
+        if (gripped && hand.palmOut && this._clampSlot === null && !this.suppressOtherHand) {
+          _u.copy(this.pos).sub(hand.palm);
+          const side = _u.lengthSq() < 4e-4 ? 1 : _u.normalize().dot(hand.palmOut);
+          this._backHand = side < -0.25 ? Math.min((this._backHand || 0) + 1, 60) : 0;
+          if (this._backHand > 10) gripped = false;   // saturates → outlasts the grace frames
+        }
       }
       this._lost = gripped ? 0 : this._lost + 1;
       // pinch release is intentional → instant; grip gets a few grace
@@ -563,18 +598,25 @@ export class GrabbableBox extends GrabbableSphere {
         if (this._velHist.length) v.divideScalar(this._velHist.length);
         this.vel.copy(v);
         if (hand) this.angVel.copy(hand.angVel).multiplyScalar(0.85);
-        this.held = null; this._velHist.length = 0;
+        this.held = null; this._velHist.length = 0; this._backHand = 0;
       } else {
-        // SEAT the grab: decay the capture offset until the palm skin
-        // MEETS the face (max half-extent + palm-skin radius) — the hand
-        // must visually touch the cube, and the conform then wraps the
-        // fingers onto it. No hover gap, ever. NOT while two hands CLAMP
-        // it: then it's pinned between the palms and stays put.
+        // SEAT the grab. Pinch: decay the capture offset until the palm
+        // skin MEETS the face — no hover gap, ever. Grip: don't just
+        // shorten the offset, STEER it onto the palm-out axis, so a cube
+        // caught against the fingertips migrates down INTO the palm and
+        // rests on the palm skin (the push-out below keeps it solid
+        // against the fingers on the way, and the conform wraps them).
+        // NOT while two hands CLAMP it: then it's pinned and stays put.
         if (!this._clampSlot) {
           const L = this.held.posOff.length();
           const maxL = Math.max(this.half.x, Math.max(this.half.y, this.half.z))
                      + 0.025 * hand.scale;
-          if (L > maxL) this.held.posOff.multiplyScalar(Math.max(maxL / L, 1 - dt * 5));
+          if (this.held.byPinch) {
+            if (L > maxL) this.held.posOff.multiplyScalar(Math.max(maxL / L, 1 - dt * 5));
+          } else {
+            _v.set(0, 0, hand.palmSign * maxL);        // palm-local palm-out seat
+            this.held.posOff.lerp(_v, Math.min(1, dt * 5));
+          }
         }
         // STICK to the palm frame (position + orientation offsets are
         // palm-local → the cube rotates 1:1 with the wrist)
@@ -612,13 +654,24 @@ export class GrabbableBox extends GrabbableSphere {
       if (hand.pinch > 0.75 && this.surfaceDistance(hand.pinchPoint) < 0.04 * hand.scale) {
         take = true; byPinch = true;               // pinched ON the surface
       } else if (hand.openness < 0.85) {
-        const g = this._gripState(hand, 0.035 * hand.scale, _grip);
-        // GRAVITY-AWARE LATCH: a grip only takes the cube if it reaches
-        // BELOW the midline — a real carrying grip wraps under the widest
-        // point, because that's what bears the weight. A hand draped over
-        // the TOP whose fingers straddle the upper edges must NOT latch:
-        // the cube stays governed by gravity and falls away.
-        take = (g.opposing || (g.n >= 6 && hand.openness < 0.55)) && g.below;
+        // INNER-HAND ONLY: any latch needs the PALM facing the cube (or
+        // enveloping it). Contact from the BACK of the hand never sticks —
+        // it just collides and gravity keeps the cube.
+        _u.copy(this.pos).sub(hand.palm);
+        const facing = !hand.palmOut || _u.lengthSq() < 4e-4 ||
+          _u.normalize().dot(hand.palmOut) > -0.2;
+        if (facing) {
+          const g = this._gripState(hand, 0.05 * hand.scale, _grip);
+          // GRAVITY-AWARE LATCH: a carrying grip wraps BELOW the widest
+          // point — that's what bears the weight — while a hand merely
+          // draped flat over the top must NOT latch.
+          take = (g.opposing || (g.n >= 6 && hand.openness < 0.55)) && g.below;
+          // CLAW GRIP: fingers + thumb CURLED onto opposing faces from
+          // above (the pick-it-off-the-table pose) — friction bears the
+          // weight, no under-contact needed. The curl gate is what keeps
+          // a FLAT hand resting on top from ever latching.
+          take = take || (g.opposing && hand.openness < 0.6);
+        }
       }
       if (take) {
         this.held = {
@@ -685,6 +738,11 @@ export class GrabbableBox extends GrabbableSphere {
     // gravity silently accumulates in vel, then fire one huge bounce with
     // the saved-up speed and fling itself off the palm.
     const SHELL = 0.006;
+    // INNER-HAND BIAS: only a hand whose PALM faces up may act as a tray.
+    // The back of the hand is a convex ridge, never a shelf — its contacts
+    // still collide (the hand stays solid) but never bear load, and they
+    // SHED the cube sideways so gravity wins instead of gluing it on top.
+    const tray = !hand.palmOut || hand.palmOut.y > 0.15;
     for (let pass = 0; pass < 3; pass++) {
       _bq.copy(this.quat).invert();
       let touched = false;
@@ -704,7 +762,7 @@ export class GrabbableBox extends GrabbableSphere {
         if (d > 1e-6) {
           _rel.divideScalar(d);                        // normal: surface → joint (box space)
           _n.copy(_rel).applyQuaternion(this.quat);    // world normal: box → joint
-          support = _n.y < -0.35;                      // joint UNDERNEATH the box
+          support = tray && _n.y < -0.35;              // joint UNDERNEATH the box + palm-side up
           if (d < jr) {                                // real penetration → resolve position
             // corrections are CAPPED per frame: converging fingers closing
             // on the cube must squeeze it, not rocket it out of the hand
@@ -728,7 +786,7 @@ export class GrabbableBox extends GrabbableSphere {
           else if (py <= pz)        { _rel.set(0, _bl.y >= 0 ? 1 : -1, 0); pen = py; }
           else                      { _rel.set(0, 0, _bl.z >= 0 ? 1 : -1); pen = pz; }
           _n.copy(_rel).applyQuaternion(this.quat);
-          if (_n.y < -0.35 && pen <= jr + 0.02) {
+          if (tray && _n.y < -0.35 && pen <= jr + 0.02) {
             // SHALLOW SUPPORT — a curled fingertip poked through the BOTTOM
             // face (big cube resting on the palm). This is a real face
             // contact: resolve it WITH the velocity impulse below — a
@@ -789,6 +847,14 @@ export class GrabbableBox extends GrabbableSphere {
           this.angVel.addScaledVector(_axis.crossVectors(_br, _t), this.invI * 0.5);
           this.angVel.multiplyScalar(support ? 0.94 : 0.975);   // contact spin drag
           if (this.angVel.length() > 14) this.angVel.setLength(14);
+          // under-contact from a NON-tray hand (back of the hand up): the
+          // ridge of knuckles is convex — actively shed the cube sideways
+          // so it rolls off and falls instead of balancing there
+          if (!tray && _n.y < -0.35) {
+            _t.set(this.pos.x - hand.palm.x, 0, this.pos.z - hand.palm.z);
+            if (_t.lengthSq() < 1e-6) _t.set(_n.x, 0, _n.z);
+            if (_t.lengthSq() > 1e-6) vel.addScaledVector(_t.normalize(), 1.2 * dt);
+          }
         }
       }
       if (!touched) break;                             // no contacts → done
@@ -849,6 +915,25 @@ export class GrabbableBox extends GrabbableSphere {
     }
     this._resting = (minY <= floorY + 2e-3 && this.vel.lengthSq() < 0.01) ? this._resting + dt : 0;
   }
+
+  /** FRAME KEEPER: soft walls at [xMin,xMax] and a ceiling at yMax (the
+   *  camera-frame edges at the cube's depth; the table is the bottom
+   *  edge) — a throw reflects back inside with a damped bounce instead
+   *  of rolling the cube out of the visible frame. Call while free. */
+  contain(xMin, xMax, yMax, dt) {
+    const k = Math.min(1, dt * 12);
+    if (this.pos.x < xMin) {
+      this.pos.x += (xMin - this.pos.x) * k;
+      if (this.vel.x < 0) this.vel.x *= -0.42;
+    } else if (this.pos.x > xMax) {
+      this.pos.x += (xMax - this.pos.x) * k;
+      if (this.vel.x > 0) this.vel.x *= -0.42;
+    }
+    if (this.pos.y > yMax) {
+      this.pos.y += (yMax - this.pos.y) * k;
+      if (this.vel.y > 0) this.vel.y *= -0.25;
+    }
+  }
 }
 
 // ── Body collider ───────────────────────────────────────────────
@@ -890,6 +975,8 @@ export class BodyBody {
     this.pinch = 0;
     this.pinchPoint = new THREE.Vector3();
     this.palm = new THREE.Vector3();      // interface alias → chest
+    this.palmOut = new THREE.Vector3(0, 1, 0);  // interface: the torso stays a tray
+    this.palmSign = 1;
     this.palmVel = new THREE.Vector3();
     this.palmQ = new THREE.Quaternion();
     this.angVel = new THREE.Vector3();

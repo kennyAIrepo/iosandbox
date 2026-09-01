@@ -3,6 +3,7 @@
   "rewrites": [
     { "source": "/play", "destination": "/play.html" },
     { "source": "/riglab", "destination": "/riglab.html" },
+    { "source": "/mpbrowser", "destination": "/mpbrowser.html" },
     { "source": "/worlds", "destination": "/graph.html" },
     { "source": "/you", "destination": "/graph.html" },
     { "source": "/build", "destination": "/world.html" },

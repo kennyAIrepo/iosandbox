@@ -86,6 +86,51 @@
     cursor: pointer; display: none; backdrop-filter: blur(6px);
     box-shadow: 0 4px 18px rgba(0,0,0,.45); transition: transform .12s, border-color .12s; }
   #vidFab:hover { transform: translateX(-50%) scale(1.08); border-color: #5db8ff; }
+  /* ── 🧩 ENGINE VIEW — clean hostable editor space (own canvas · own loop · own menus).
+     The environment quotes BEAT RUSH's corridor (endless grid floor + sky dome) but with
+     the neon stripped out: neutral editor grid, realistic blue-sky dome, natural light. */
+  #engBtn { position: fixed; top: 14px; right: 14px; z-index: 41; padding: 8px 18px;
+    background: rgba(28,64,86,.7); color: #fff; border: 1px solid var(--cy-dim); border-radius: 9px;
+    font-size: 12px; letter-spacing: .14em; cursor: pointer; transition: all .15s; }
+  #engBtn:hover { border-color: var(--cy); box-shadow: 0 0 14px rgba(102,224,255,.25); }
+  #engc { display: none; z-index: 5; }
+  .engPanel { display: none !important; }
+  body.engine-view #engc { display: block; }
+  body.engine-view .engPanel { display: block !important; }
+  body.engine-view #engTop { display: flex !important; }
+  body.engine-view :is(h1, #hudL, #hudR, #bgVid, #dvid, #rigc, #ov, #c, #lockCard, #entry, #engBtn, #hint) { display: none !important; }
+  /* IMPORT SDK on → the lab's transparent 3D canvas (holo hands / body, POV) composites
+     ABOVE the engine render; the video feed itself stays hidden. #ov carries the group
+     skeleton overlay (Body mode). Same stacking relation as the lab: #ov over #c. */
+  /* the tracking canvases COMPOSITE over the engine but must never eat input —
+     all lab interaction is tracked-hands, not pointer. Engine orbit / click-select /
+     gizmo / panels keep working exactly as with the SDK off. */
+  body.engine-view.eng-sdk #c  { display: block !important; z-index: 6; pointer-events: none; }
+  body.engine-view.eng-sdk #ov { display: block !important; z-index: 7; pointer-events: none; }
+  /* Mirror view: the lab's camera-overlay experience (rubik's-cube style) hosted in the
+     engine — video feed under the transparent tracking canvas; the engine world hides. */
+  body.engine-view.eng-sdk.eng-mirror #bgVid { display: block !important; z-index: 5; pointer-events: none; }
+  /* the corner ✕ (sdk/ui/panel-toggle.js) hides panels via .hopeos-panel-hidden — give it
+     enough specificity to beat the engine's forced display rules */
+  body.engine-view .engPanel.hopeos-panel-hidden,
+  body.engine-view #engTop.hopeos-panel-hidden { display: none !important; }
+  body.engine-view.eng-sdk.eng-mirror #engc  { display: none; }
+  #engTop { left: 50%; transform: translateX(-50%); top: 12px; width: auto; align-items: center; gap: 12px; padding: 8px 12px; }
+  #engTop .t { font-size: 12px; letter-spacing: .18em; color: var(--cy); white-space: nowrap; }
+  #engL { left: 14px; top: 60px; width: 218px; }
+  #engR { right: 14px; top: 60px; width: 212px; }
+  #engL input[type=text] { flex: 1; min-width: 0; background: rgba(30,42,56,.55); color: var(--txt);
+    border: 1px solid rgba(102,224,255,.14); border-radius: 7px; padding: 6px 8px; font-size: 11px; }
+  #engObjRows { max-height: 320px; overflow-y: auto; scrollbar-width: thin; }
+  .engRow { display: flex; align-items: center; gap: 6px; padding: 5px 8px; margin: 3px 0;
+    border: 1px solid rgba(102,224,255,.10); border-radius: 7px; font-size: 11px; cursor: pointer; }
+  .engRow:hover { border-color: var(--cy-dim); }
+  .engRow.sel { background: rgba(38,84,110,.6); border-color: var(--cy); }
+  .engRow .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .engRow .del { margin-left: auto; flex: 0 0 auto; background: none; border: 0; color: var(--mut);
+    cursor: pointer; font-size: 11px; padding: 0 2px; }
+  .engRow .del:hover { color: #ff9d9d; }
+  #engEmpty { font-size: 10.5px; color: var(--mut); padding: 4px 2px; }
   #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 30;
     background: var(--panel); border: 1px solid var(--edge); color: var(--cy); border-radius: 8px;
     padding: 7px 16px; font-size: 11.5px; opacity: 0; transition: opacity .25s; pointer-events: none; }
@@ -106,6 +151,124 @@
 <canvas id="ov"></canvas>
 <canvas id="c"></canvas>
 <div id="lockCard"></div>
+
+<!-- ── 🧩 ENGINE VIEW — hostable editor space. Own canvas + render loop + menu system;
+     the lab underneath is merely hidden, never touched. Reachable any time (even from
+     the entry screen — it needs no camera). ── -->
+<canvas id="engc"></canvas>
+<button id="engBtn" title="engine view — clean editor space: endless grid floor, blue-sky dome, spawn & host objects">🧩 ENGINE</button>
+
+<div id="engTop" class="panel engPanel">
+  <span class="t">🧩 ENGINE</span>
+  <button class="opt" id="engBack" style="flex:0 0 auto" title="back to the hand lab">↩ LAB</button>
+</div>
+
+<div id="engL" class="panel engPanel">
+  <div class="sec">
+    <div class="lbl">SCENE</div>
+    <label class="chk"><input id="engSkyChk" type="checkbox" checked> ☀ sky dome</label>
+    <label class="chk"><input id="engGridChk" type="checkbox" checked> ▦ floor grid</label>
+  </div>
+  <div class="sec">
+    <div class="lbl">IMPORT SDK · live tracking</div>
+    <label class="chk"><input id="engSdkChk" type="checkbox"> 🧠 tracking SDK</label>
+    <div class="row" id="engSdkParts" style="display:none">
+      <button class="opt sel" data-part="hand">🖐 Hand</button>
+      <button class="opt" data-part="body">🧍 Body</button>
+      <button class="opt" data-part="both">🖐+🧍</button>
+    </div>
+    <div class="row" id="engSdkSkin" style="display:none">
+      <button class="opt sel" data-skin="ghost">👻 Ghost</button>
+      <button class="opt" data-skin="flesh">🖐 Flesh</button>
+    </div>
+    <div class="row" id="engSdkView" style="display:none">
+      <button class="opt sel" data-view="pov" title="first-person POV — tracked hands/body reach INTO the engine scene (beat-game framing)">🎮 POV</button>
+      <button class="opt" data-view="mirror" title="mirror — camera feed with tracking overlaid, exactly like the lab's rubik's-cube view">🪞 Mirror</button>
+    </div>
+    <div class="lbl" id="engBodyLbl" style="display:none;margin-top:8px">BODY SUITE · full-body tracking</div>
+    <div class="row" id="engBodySuite" style="display:none">
+      <button class="opt" data-bs="body3d" title="full 3D body tracking — highest fidelity, single player">🧍 3D Body</button>
+      <button class="opt" data-bs="fast2d" title="fastest body model — 2D body, hands stay 3D, lowest latency">⚡ Fast 2D</button>
+      <button class="opt" data-bs="multiId" title="multi-person group tracking — strict clean per-player IDs, up to 6 people, body only">👥 Multi-ID</button>
+      <button class="opt" data-bs="handsBody" title="full body + both holo hands, auto model switching">🖐+🧍 Full</button>
+    </div>
+    <div class="lbl" id="engFaceLbl" style="display:none;margin-top:8px">FACE · tracking</div>
+    <div class="row" id="engFaceRow" style="display:none">
+      <button class="opt sel" data-face="off">off</button>
+      <button class="opt" data-face="simple" title="eyes + mouth landmarks only — neon outline">👁 Eyes+Mouth</button>
+      <button class="opt" data-face="full" title="full face landmark tracking — neon face outline">🙂 Full</button>
+    </div>
+    <div class="sname" id="engSdkHint">camera tracking from the lab, live in the engine — the tracked figure is a game object: click it (or its 📡 row in OBJECTS) and move / rotate / scale it with the gizmo, like the avatar</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">SPAWN OBJECT</div>
+    <div class="row" id="engSpawnRow">
+      <button class="opt" data-sp="box">▦ Box</button>
+      <button class="opt" data-sp="sphere">● Sphere</button>
+      <button class="opt" data-sp="cylinder">▮ Cyl</button>
+      <button class="opt" data-sp="cone">▲ Cone</button>
+      <button class="opt" data-sp="avatar" title="rigged avatar (riggedmale) with reusable animation packages — walk · run">🧍 Avatar</button>
+    </div>
+    <div class="sname">drops in front of the camera, seated on the floor</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">HOST · IMPORT MODEL</div>
+    <div class="row">
+      <input id="engUrl" type="text" placeholder="paste a .glb URL (Meshy, self-hosted…)">
+      <button class="opt" id="engUrlGo" style="flex:0 0 auto">Load</button>
+    </div>
+    <div class="sname">auto-scaled to a placeable size &amp; grounded — same treatment every hosted asset gets</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">GIZMO · selected object</div>
+    <div class="row" id="engGizRow">
+      <button class="opt sel" data-g="translate">✛ Move</button>
+      <button class="opt" data-g="rotate">⟳ Rot</button>
+      <button class="opt" data-g="scale">⤢ Scale</button>
+    </div>
+    <div class="sname">keys: 1 / 2 / 3 switch mode · Del removes · click empty space deselects</div>
+    <div class="lbl">EXACT · type the amount</div>
+    <div class="row" id="engExactRow">
+      <button class="opt sel" data-ax="x" title="gizmo X axis (red)">X</button>
+      <button class="opt" data-ax="y" title="gizmo Y axis (green)">Y</button>
+      <button class="opt" data-ax="z" title="gizmo Z axis (blue)">Z</button>
+      <input id="engExactVal" type="number" step="any" value="1" style="width:70px;flex:0 0 auto">
+      <button class="opt" id="engExactMove" title="shift the selection this many units along the picked axis (negative = the other way)">→ move</button>
+      <button class="opt" id="engExactScale" title="scale the WHOLE object uniformly by this factor (2 = twice as big, 0.5 = half)">⤢ ×whole</button>
+    </div>
+    <div class="sname">Unity-style numeric transform: move N units along the picked gizmo axis, or grow the whole model N× — no per-side dragging</div>
+  </div>
+  <div class="sec">
+    <div class="lbl">SESSION</div>
+    <div class="row">
+      <button class="opt" id="engSave">💾 Save</button>
+      <button class="opt" id="engLoad">📂 Load</button>
+      <button class="opt" id="engClear">✕ Clear</button>
+    </div>
+    <div class="sname">saves this browser's engine scene (objects + transforms) — restored with 📂 anytime</div>
+  </div>
+</div>
+
+<div id="engR" class="panel engPanel">
+  <div class="sec">
+    <div class="lbl">OBJECTS</div>
+    <div id="engObjRows"><div id="engEmpty">nothing hosted yet — spawn or import</div></div>
+    <div class="lbl" id="engAvCtlLbl" style="display:none;margin-top:6px">AVATAR · animation</div>
+    <div class="row" id="engAvCtl" style="display:none"></div>
+    <div class="lbl" id="engMindLbl" style="display:none;margin-top:6px">MIND · role → reaction loops</div>
+    <div class="row" id="engMindRow" style="display:none"></div>
+    <div class="sname" id="engMindInfo" style="display:none"></div>
+    <div class="sname">click = select · ⧉ duplicates the selection</div>
+    <div class="row" style="margin-top:6px">
+      <button class="opt" id="engDup">⧉ Duplicate</button>
+      <button class="opt" id="engDesel">✕ Deselect</button>
+    </div>
+  </div>
+  <div class="sec">
+    <div class="lbl">CAMERA</div>
+    <div class="sname">drag = orbit · wheel = zoom · shift-drag = pan</div>
+  </div>
+</div>
 
 <h1>MP GAMES <small>hopeOS · multiplayer hand lab</small></h1>
 
@@ -226,6 +389,7 @@
       <button class="opt" data-s="slim">Slim</button>
       <button class="opt" data-s="lowpoly">Lowpoly</button>
       <button class="opt" data-s="glb">GLB</button>
+      <button class="opt" data-s="flesh" title="realistic flesh-colored avatar hands — Blender-built GLB pair rigged to the same 21-landmark skeleton">🖐 Flesh</button>
     </div>
     <div class="sld"><input id="alphaSld" type="range" min="0.1" max="0.8" step="0.02" value="0.46"><span id="alphaVal">0.46</span></div>
     <div class="sname">ghost opacity</div>
@@ -728,6 +892,61 @@ setTimeout(() => {
 // GLB A/B: holohand.glb (the old DEI-route asset) driven through the SAME
 // HoloHandRig + One-Euro stack — isolates mesh look from drive machinery.
 // The split halves are pre-aligned to REST_R42/L42, so geometryFit:false.
+// ── 🖐 FLESH HANDS — realistic avatar-grade hand pair on the SAME rig ─────────
+// sdk/assets/hands_flesh.glb: Blender-built meshes (HandR/HandL) authored
+// DIRECTLY on the REST_R42/REST_L42 landmark skeleton, so { geometryFit:false }
+// rigging is exact by construction. Ghost (pale-blue holo) and flesh are two
+// LOOKS of one rig — same 21-landmark deformer, filters, colliders, physics.
+// Used by the lab style row AND the engine view's IMPORT SDK wedge.
+// FLESH = the retargeted realistic sculpt (sdk/assets/hands_flesh.glb), moved by
+// the SAME 21-landmark deformer as the ghost. Its skinning is AUTHORED, not
+// auto-computed: the GLB carries per-vertex _BIDX/_BWT weights baked in Blender
+// (per-finger masks — no cross-finger bleed, palm pinned to metacarpals — then
+// smoothed along the surface so neighbouring verts never pop). The rig prefers
+// those attributes automatically (see rigExternalGeometry in hand-forge.js).
+let fleshPair = null;
+async function loadFleshPair() {
+  if (fleshPair) return fleshPair;
+  const { loadHandPair } = await import('./sdk/assets/loader.js');
+  fleshPair = await loadHandPair('./sdk/assets/hands_flesh.glb');
+  // shader detail masks are for forged meshes — keep the sculpt clean
+  for (const g of [fleshPair.right, fleshPair.left])
+    g.setAttribute('aDetail', new THREE.BufferAttribute(new Float32Array(g.getAttribute('position').count * 3), 3));
+  return fleshPair;
+}
+async function setHandSkin(kind) {              // 'ghost' | 'flesh'
+  if (!rigR) throw new Error('hands not forged yet — start tracking first');
+  if (kind === 'flesh') {
+    const { right, left } = await loadFleshPair();
+    for (const [rig, geo] of [[rigR, right], [rigL, left]]) {
+      rig.opts.geometry = geo; rig.opts.geometryFit = false;
+      rig.look = 'flesh'; rig.build();
+    }
+    for (const s of mpSlots) {
+      s.R.opts.geometry = right; s.R.opts.geometryFit = false; s.R.look = 'flesh'; s.R.build();
+      s.L.opts.geometry = left;  s.L.opts.geometryFit = false; s.L.look = 'flesh'; s.L.build();
+    }
+    S.style = 'flesh';
+  } else {
+    const style = (S.style === 'flesh' || S.style === 'glb') ? 'smooth' : S.style;
+    for (const rig of [rigR, rigL]) {
+      delete rig.opts.geometry; delete rig.opts.geometryFit;
+      rig.look = 'ghost'; rig.build(style);
+    }
+    for (const s of mpSlots) {
+      delete s.R.opts.geometry; delete s.L.opts.geometry;
+      s.R.look = 'ghost'; s.L.look = 'ghost';
+      s.R.build(style); s.L.build(style);
+    }
+    S.style = style;
+  }
+  const isMirror = S.mode === 'mirror';         // rebuild dropped the occluder twin — restore per mode
+  rigR.setOccluder(isMirror); rigL.setOccluder(isMirror);
+  document.querySelectorAll('#styleOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.s === S.style));
+  document.querySelectorAll('#engSdkSkin .opt').forEach(x => x.classList.toggle('sel', x.dataset.skin === kind));
+  if (S.mode === 'inspect') poseInspect();
+}
+
 let glbHalves = null;
 async function loadGlbHalves() {
   if (glbHalves) return glbHalves;
@@ -1292,6 +1511,209 @@ const seen = { left: 0, right: 0 };
 const handsBySlot = { left: null, right: null };
 let lastT = performance.now();
 
+// ═══ ENGINE SDK EXTRAS: POV body skeleton · wrist-weld · face outline ═══════
+// (gated on window.__eng — the engine wedge's state — so the plain lab is untouched)
+let engBodyPts = null;          // this frame's retargeted 33-pt POV body (world space)
+// Raw tracking feed for the engine's avatar live-drive (BipedDriver wants the
+// RAW MediaPipe world data — it does its own filtering, z-sign calibration and
+// human-ROM clamping). Written every lab frame, consumed in engLoop.
+const AVSYNC = { poseWorld: null, handsWorld: null, handedness: null, t: 0 };
+let faceReady = false;          // face landmarker loaded (runtime re-init)
+const _engSdk = () => (window.__eng && window.__eng.sdk) || null;
+
+// Placement offsets for the TRACKED content, driven by the engine's anchor game
+// objects (🧍/🖐 proxies in the OBJECTS list — drag their gizmo to move the
+// tracked figure higher / lower / further away, scale it, per hand or body).
+// POV only: in mirror view the tracking stays glued to the video.
+const TRACK_OFF = {
+  handR: { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 },
+  handL: { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 },
+  body:  { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 },
+};
+const _tq = new THREE.Quaternion();
+const _offRot = (o) => { _tq.set(o.qx, o.qy, o.qz, o.qw); return Math.abs(o.qw) < 0.99999; };
+const _toHip = new THREE.Vector3();
+function applyBodyOffset(pts) {
+  const es = _engSdk(), o = TRACK_OFF.body;
+  if (!pts || !es || !es.on || es.view !== 'pov') return pts;
+  const rot = _offRot(o);
+  if ((o.s !== 1 || rot) && pts[23] && pts[24]) {
+    _toHip.copy(pts[23]).add(pts[24]).multiplyScalar(0.5);
+    for (const p of pts) {
+      p.sub(_toHip);
+      if (o.s !== 1) p.multiplyScalar(o.s);
+      if (rot) p.applyQuaternion(_tq);
+      p.add(_toHip);
+    }
+  }
+  if (o.x || o.y || o.z) for (const p of pts) { p.x += o.x; p.y += o.y; p.z += o.z; }
+  return pts;
+}
+function applyHandOffsets(packs) {
+  for (const [key, pack] of [['handR', packs.R], ['handL', packs.L]]) {
+    if (!pack) continue;
+    const o = TRACK_OFF[key];
+    const rot = _offRot(o);
+    if (o.s !== 1 || rot) {
+      const w = pack[0];
+      for (let i = 1; i < pack.length; i++) {
+        pack[i].sub(w);
+        if (o.s !== 1) pack[i].multiplyScalar(o.s);
+        if (rot) pack[i].applyQuaternion(_tq);
+        pack[i].add(w);
+      }
+    }
+    if (o.x || o.y || o.z) for (const p of pack) { p.x += o.x; p.y += o.y; p.z += o.z; }
+  }
+}
+
+// POV body skeleton: neon bone-lines in 3D, driven by the SAME retargeted points
+// the avatar silhouette uses — so it stands where the body stands, at fpBodySpawn.
+// Full MediaPipe 33-landmark connection set — torso, arms, legs PLUS feet,
+// hand stubs and face points, so the single-person pose shows its real detail
+// and 3D depth (world landmarks), visibly richer than the group engine's pose.
+const ENG_SKEL_PAIRS = [
+  [11,12],[11,13],[13,15],[12,14],[14,16],[11,23],[12,24],[23,24],   // torso + arms
+  [23,25],[25,27],[24,26],[26,28],                                    // legs
+  [27,29],[29,31],[27,31],[28,30],[30,32],[28,32],                    // feet
+  [15,17],[15,19],[15,21],[17,19],[16,18],[16,20],[16,22],[18,20],    // hand stubs
+  [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],             // face: eyes · ears · mouth
+];
+let engSkel = null, engGroundDy = null;
+// POV facing fix: the retargeted pose reads as a MIRROR figure (facing the camera).
+// The POV avatar must face AWAY — z-reflect about the hips, which keeps your real
+// left arm/leg on screen-left, driving the avatar's screen-left limb (the ask),
+// while depth moves the right way round (step forward → avatar steps deeper).
+const _povHip = new THREE.Vector3();
+function povFaceAway(pts) {
+  if (!pts || !pts[23] || !pts[24]) return pts;
+  const hz = (pts[23].z + pts[24].z) / 2;
+  for (const p of pts) p.z = 2 * hz - p.z;
+  return pts;
+}
+const ENG_SKEL_FLOOR = -1.45;                 // lab-space floor line for the POV figure
+function groundEngBody(pts) {
+  if (!pts || !pts[27] || !pts[28]) return pts;
+  const target = ENG_SKEL_FLOOR - Math.min(pts[27].y, pts[28].y);
+  engGroundDy = engGroundDy === null ? target : engGroundDy + (target - engGroundDy) * 0.06;
+  for (const p of pts) p.y += engGroundDy;
+  return pts;
+}
+function updateEngSkel(pts) {
+  const show = !!(pts && S.bodyRender === 'skeleton' && bodyOn() && S.display !== 'skeletons'
+                  && (S.mode === 'firstPerson' || S.mode === 'thirdPerson'));
+  if (!show) { if (engSkel) engSkel.visible = false; return; }
+  if (!engSkel) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(ENG_SKEL_PAIRS.length * 6), 3));
+    engSkel = new THREE.LineSegments(g,
+      new THREE.LineBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.95, depthTest: true }));
+    engSkel.frustumCulled = false; engSkel.renderOrder = 25;
+    scene.add(engSkel);
+  }
+  const a = engSkel.geometry.getAttribute('position').array;
+  for (let i = 0; i < ENG_SKEL_PAIRS.length; i++) {
+    const p = pts[ENG_SKEL_PAIRS[i][0]], q = pts[ENG_SKEL_PAIRS[i][1]];
+    a[i * 6] = p.x; a[i * 6 + 1] = p.y; a[i * 6 + 2] = p.z;
+    a[i * 6 + 3] = q.x; a[i * 6 + 4] = q.y; a[i * 6 + 5] = q.z;
+  }
+  engSkel.geometry.getAttribute('position').needsUpdate = true;
+  engSkel.visible = true;
+}
+
+// Wrist weld: in POV full-body mode, seat each hand at the END of its body wrist so
+// hands read as attached to the figure (nearest-wrist pairing survives L/R swaps).
+// Hands are also RESIZED to the figure: MediaPipe hand packs arrive at real-metric
+// size, which reads oversized on the stylized skeleton and stays huge when the 🧍
+// anchor shrinks the body or it stands far from the dolly. Anatomical authority:
+// palm (wrist→middle MCP) ≈ 0.40 × forearm (hand ≈ 72% of forearm, palm ≈ 55% of
+// hand) — sized off the SAME body points, so it rides anchor scale automatically.
+const HAND_BODY_PROP = 0.40;
+const _wA = new THREE.Vector3();
+function weldHandsToBody(packs, pts) {
+  const wl = pts[15], wr = pts[16], el = pts[13], er = pts[14];
+  const seat = (pack, wrist, elbow) => {
+    if (!pack || !wrist) return;
+    _wA.copy(wrist).sub(pack[0]);
+    for (let i = 0; i < pack.length; i++) pack[i].add(_wA);
+    if (!elbow) return;
+    const fore = elbow.distanceTo(wrist), palm = pack[0].distanceTo(pack[9]);
+    if (fore < 1e-6 || palm < 1e-6) return;
+    const k = Math.min(5, Math.max(0.05, HAND_BODY_PROP * fore / palm));
+    for (let i = 1; i < pack.length; i++) pack[i].sub(pack[0]).multiplyScalar(k).add(pack[0]);
+  };
+  if (packs.R && packs.L) {
+    const straight = packs.R[0].distanceTo(wr) + packs.L[0].distanceTo(wl);
+    const crossed = packs.R[0].distanceTo(wl) + packs.L[0].distanceTo(wr);
+    if (straight <= crossed) { seat(packs.R, wr, er); seat(packs.L, wl, el); }
+    else { seat(packs.R, wl, el); seat(packs.L, wr, er); }
+  } else { seat(packs.R || packs.L, packs.R ? wr : wl, packs.R ? er : el); }
+}
+
+// Face outline: MediaPipe face landmarks drawn as neon contours. Mirror view →
+// projected onto the video (raw coords x-flipped, same mapping as the body
+// overlay); POV → a floating head-plane in front of the camera.
+const FACE_LOOPS = {
+  lips: [61,146,91,181,84,17,314,405,321,375,291,409,270,269,267,0,37,39,40,185],
+  eyeL: [33,7,163,144,145,153,154,155,133,173,157,158,159,160,161,246],
+  eyeR: [263,249,390,373,374,380,381,382,362,398,384,385,386,387,388,466],
+  oval: [10,338,297,332,284,251,389,356,454,323,361,288,397,365,379,378,400,377,152,148,176,149,150,136,172,58,132,93,234,127,162,21,54,103,67,109],
+  browL: [70,63,105,66,107],
+  browR: [336,296,334,293,300],
+};
+let faceGrp = null;
+const _fv = new THREE.Vector3(), _fin = { x: 0, y: 0, z: 0 };
+function updateFaceOutline(face) {
+  const es = _engSdk();
+  const mode = es && es.on ? es.face : 'off';
+  if (!face || mode === 'off') { if (faceGrp) faceGrp.visible = false; return; }
+  if (!faceGrp) {
+    faceGrp = new THREE.Group(); faceGrp.renderOrder = 30;
+    for (const [name, idx] of Object.entries(FACE_LOOPS)) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(idx.length * 3), 3));
+      const closed = !name.startsWith('brow');
+      const line = closed
+        ? new THREE.LineLoop(g, new THREE.LineBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.95, depthTest: false }))
+        : new THREE.Line(g, new THREE.LineBasicMaterial({ color: 0x39ff5a, transparent: true, opacity: 0.85, depthTest: false }));
+      line.frustumCulled = false; line.renderOrder = 30; line.name = name;
+      faceGrp.add(line);
+    }
+    scene.add(faceGrp);
+  }
+  const active = mode === 'simple' ? ['lips', 'eyeL', 'eyeR'] : Object.keys(FACE_LOOPS);
+  const mirror = S.mode === 'mirror';
+  for (const line of faceGrp.children) {
+    const on = active.includes(line.name);
+    line.visible = on;
+    if (!on) continue;
+    const idx = FACE_LOOPS[line.name];
+    const a = line.geometry.getAttribute('position').array;
+    for (let i = 0; i < idx.length; i++) {
+      const p = face[idx[i]];
+      if (mirror) {
+        _fin.x = 1 - p.x; _fin.y = p.y; _fin.z = p.z;      // face is RAW video coords → flip
+        views.mirrorPoint(_fin, camera, _fv);
+      } else {
+        _fv.set((0.5 - p.x) * 0.42, (0.5 - p.y) * 0.42 + 0.1, -0.62);   // head-plane, mirrored feel
+        _fv.applyMatrix4(camera.matrixWorld);
+      }
+      a[i * 3] = _fv.x; a[i * 3 + 1] = _fv.y; a[i * 3 + 2] = _fv.z;
+    }
+    line.geometry.getAttribute('position').needsUpdate = true;
+  }
+  faceGrp.visible = true;
+}
+
+// Re-init the tracker with the face landmarker on (boot skips it for latency).
+async function ensureFaceTracking() {
+  if (!S.running || !tracker) throw new Error('start tracking first');
+  if (faceReady) return;
+  toast('loading face landmarker…', 5000);
+  tracker = await initTracking(els.vid, { numHands: 2, raw: true, enableFace: true, poseEvery: 2 });
+  faceReady = true;
+}
+
 function loop() {
   requestAnimationFrame(loop);
   const now = performance.now();
@@ -1349,7 +1771,26 @@ function loop() {
               pose: mpPrimary?.bodyImg || null, poseWorld: mpPrimary?.bodyWorld || null, face: null };
   } else {
     frame = tracker ? tracker.detect() : { hands: null, handedness: [], handCount: 0 };
+    if (faceReady) updateFaceOutline(frame && frame.face);
   }
+  // AVSYNC — the avatar live-drive consumes the SAME pose reference as the
+  // tracked skeleton, in EVERY mode (single lane or multi primary, via the
+  // frame shim above). Freshness is bounded, never latched forever: a dead
+  // pose lane goes null after 900ms (the tracker's own credibility window)
+  // and hands after 400ms, so the driver fades the avatar to rest instead of
+  // freezing it — the old single-lane-only latch left the avatar T-posed
+  // forever after a pathway switch while the skeleton kept moving.
+  if (AVSYNC.ovPose !== undefined) {           // probe seam: synthetic feeds win
+    AVSYNC.poseWorld = AVSYNC.ovPose;
+    AVSYNC.handsWorld = AVSYNC.ovHands ?? null;
+    AVSYNC.handedness = AVSYNC.ovHanded ?? null;
+  } else {
+    if (frame.poseWorld) { AVSYNC.poseWorld = frame.poseWorld; AVSYNC.pT = now; }
+    else if (AVSYNC.poseWorld && now - (AVSYNC.pT || 0) > 900) AVSYNC.poseWorld = null;
+    if (frame.handsWorld) { AVSYNC.handsWorld = frame.handsWorld; AVSYNC.handedness = frame.handedness; AVSYNC.hT = now; }
+    else if (AVSYNC.handsWorld && now - (AVSYNC.hT || 0) > 400) { AVSYNC.handsWorld = null; AVSYNC.handedness = null; }
+  }
+  AVSYNC.t = now;
   M.detect += (performance.now() - t0 - M.detect) * 0.1;
 
   // 2. gather hands (LABEL-FREE), key filters by SCREEN SLOT (left/right half —
@@ -1390,7 +1831,14 @@ function loop() {
   //    are preset anchors clamped to their half — hands can never cross.
   const packs = views.resolve([handsBySlot.left, handsBySlot.right], camera);
 
-  // 4. pose rigs
+  // 4. pose rigs — POV full-body: seat the hands on the body's wrists first
+  {
+    const es = _engSdk();
+    if (es && es.on && es.view === 'pov') {
+      if (S.display === 'handsBody' && engBodyPts) weldHandsToBody(packs, engBodyPts);
+      applyHandOffsets(packs);
+    }
+  }
   const cols = S.conform ? [ballCollider, cubeCollider] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
@@ -1468,7 +1916,9 @@ function loop() {
       const img = S.mp ? (mpPrimary?.bodyImg || null) : poseFilters.predicted('p', 0);
       const spawn = S.mode === 'firstPerson' ? fpBodySpawn() : tpBodySpawn();
       const pts = world ? bodyPose.retarget(world, img, spawn, 0, poseVis, now * 0.001) : null;
-      if (pts) bodyPosed = bodyRigB.pose(pts);
+      // face AWAY like a game avatar (see povFaceAway) — the reflected points against
+      // the back bind's reflected rest compose to a PROPER motion, so LBS stays clean
+      if (pts) { povFaceAway(pts); applyBodyOffset(pts); bodyPosed = bodyRigB.pose(pts); engBodyPts = pts; }
       else bodyRigB.pose(bodyRestPose(spawn));   // no pose yet → stand at spawn (rest)
     } else {
       bodyRig.pose(null); bodyRigB?.pose(null);   // inspect: no body
@@ -1482,6 +1932,15 @@ function loop() {
   } else {
     bodyRig?.pose(null); bodyRigB?.pose(null);   // SKELETON mode (or body off): no silhouette mesh
   }
+  if (S.bodyRender === 'skeleton' && bodyOn() && seenPose && S.display !== 'skeletons'
+      && (S.mode === 'firstPerson' || S.mode === 'thirdPerson')) {
+    // POV skeleton: same retarget plumbing as the avatar silhouette
+    const world = S.mp ? (mpPrimary?.bodyWorld || null) : poseFiltersW.predicted('p', S.predMs);
+    const img = S.mp ? (mpPrimary?.bodyImg || null) : poseFilters.predicted('p', 0);
+    const spawn = S.mode === 'firstPerson' ? fpBodySpawn() : tpBodySpawn();
+    engBodyPts = world ? applyBodyOffset(groundEngBody(povFaceAway(bodyPose.retarget(world, img, spawn, 0, poseVis, now * 0.001)))) : null;
+  } else if (S.bodyRender === 'skeleton') { engBodyPts = null; }
+  updateEngSkel(engBodyPts);
   if (bodyPosed) bodyBody.update(bodyPosed, dt); else bodyBody.drop();
 
   // 4c. BODY-SKELETON OVERLAY (default render) — mirror view. Multi: every
@@ -2839,9 +3298,17 @@ document.getElementById('mpCloneOpts').addEventListener('click', async (e) => {
 });
 document.getElementById('styleOpts').addEventListener('click', (e) => {
   const b = e.target.closest('.opt'); if (!b || !rigR) return;
+  if (b.dataset.s === 'flesh') {                       // realistic avatar hands — same rig, flesh look
+    // instant — forge rebuild, no asset fetch
+    setHandSkin('flesh')
+      .then(() => toast(`🖐 flesh hands: ${rigR.stats.verts} verts — same rig, same filters`))
+      .catch(err => { console.error(err); toast('flesh hands failed: ' + (err.message || err), 5000); });
+    return;
+  }
   document.querySelectorAll('#styleOpts .opt').forEach(x => x.classList.remove('sel'));
   b.classList.add('sel');
   S.style = b.dataset.s;
+  rigR.look = 'ghost'; rigL.look = 'ghost';            // leaving flesh → holo look returns
   if (S.style === 'glb') {
     toast('loading holohand.glb…', 4000);
     loadGlbHalves().then(({ right, left }) => {
@@ -2975,6 +3442,1118 @@ document.getElementById('bodyLookOpts').addEventListener('click', (e) => {
 bindSlider('bodyAlphaSld', 'bodyAlphaVal', v => v.toFixed(2), v => eachBodyRig(r => r.setGhost({ alpha: v })));
 bindSlider('bodyYSld', 'bodyYVal', v => (v > 0 ? '+' : '') + Math.round(v * 100) + 'cm', v => S.bodyY = v);
 bindSlider('bodySizeSld', 'bodySizeVal', v => v.toFixed(2) + '×', v => S.bodySize = v);
+
+// ═══════════════ 🧩 ENGINE VIEW ═══════════════════════════════════════════
+// A hostable editor space behind the ENGINE button. The environment quotes the
+// BEAT RUSH corridor — endless grid floor + enclosing sky dome — with the neon
+// stripped out: neutral world-space editor grid (1m minor / 10m major lines,
+// distance-faded into the horizon haze), an sRGB-authored blue-sky gradient
+// dome with a sun disc (raw ShaderMaterial — exact colours, no tone-mapping
+// fight), and natural hemi+sun light. Everything is its OWN canvas, camera and
+// rAF loop: the lab underneath is hidden by CSS, never touched, and keeps
+// running when you return. Addons (orbit, gizmo, GLTF) lazy-load on first open.
+// Scenes persist as JSON (localStorage) — spawn/import → arrange → 💾 Save.
+const ENG = { on: false, ready: false, raf: 0, objects: [], sel: null, seq: 0,
+              sdk: { on: false, part: 'hand', saved: null, view: 'pov', face: 'off' } };
+const engEls = Object.fromEntries(['engBtn', 'engBack', 'engc', 'engSkyChk', 'engGridChk', 'engUrl', 'engUrlGo',
+  'engSave', 'engLoad', 'engClear', 'engObjRows', 'engEmpty', 'engDup', 'engDesel', 'engSdkChk', 'engSdkParts', 'engSdkSkin', 'engBodySuite', 'engBodyLbl', 'engSdkView', 'engFaceRow', 'engFaceLbl']
+  .map(id => [id, document.getElementById(id)]));
+const ENG_STORE = 'mpbrowser-engine-scene';
+window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs, tests/_fleshprobe.mjs)
+  get S() { return S; }, get scene() { return scene; },
+  get rigR() { return rigR; }, get rigL() { return rigL; },
+  get faceReady() { return faceReady; },
+  get TRACK_OFF() { return TRACK_OFF; },
+  get AVSYNC() { return AVSYNC; },
+  get engBodyPts() { return engBodyPts; },
+  REST_R42, setHandSkin, THREE, bodyPose, povFaceAway, weldHandsToBody,
+};
+const ENG_COLORS = [0x5b7fa6, 0xb0714f, 0x7d9471, 0xc9b27c, 0x8b93a3, 0x9a7fa6];   // deliberately non-neon
+
+async function engInit() {
+  if (ENG.ready) return;
+  const [{ OrbitControls }, { TransformControls }, { GLTFLoader }] = await Promise.all([
+    import('three/addons/controls/OrbitControls.js'),
+    import('three/addons/controls/TransformControls.js'),
+    import('three/addons/loaders/GLTFLoader.js'),
+  ]);
+  ENG.renderer = new THREE.WebGLRenderer({ canvas: engEls.engc, antialias: true });
+  ENG.renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  ENG.renderer.setSize(innerWidth, innerHeight);
+  ENG.renderer.outputColorSpace = THREE.SRGBColorSpace;
+  ENG.renderer.toneMapping = THREE.ACESFilmicToneMapping;      // PBR objects; the sky dome is raw and unaffected
+  ENG.scene = new THREE.Scene();
+  ENG.camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 4000);
+  ENG.camera.position.set(6, 4.2, 8);
+
+  // ── sky dome: gradient + sun disc, authored in sRGB (same recipe as world.html's starter) ──
+  const sunDir = new THREE.Vector3(20, 35, 15).normalize();
+  ENG.sky = new THREE.Mesh(
+    new THREE.SphereGeometry(1600, 32, 24),
+    new THREE.ShaderMaterial({
+      side: THREE.BackSide, depthWrite: false, fog: false,
+      uniforms: { sunDir: { value: sunDir } },
+      vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `varying vec3 vP; uniform vec3 sunDir;
+        void main() {
+          vec3 d = normalize(vP);
+          vec3 zen = vec3(0.180, 0.420, 0.745);
+          vec3 mid = vec3(0.475, 0.665, 0.875);
+          vec3 hor = vec3(0.865, 0.915, 0.960);
+          vec3 c = mix(hor, mix(mid, zen, smoothstep(0.04, 0.65, d.y)), smoothstep(-0.06, 0.12, d.y));
+          float s = max(dot(d, sunDir), 0.0);
+          c += vec3(1.0, 0.96, 0.88) * (pow(s, 1400.0) * 0.9 + pow(s, 40.0) * 0.10);
+          gl_FragColor = vec4(c, 1.0);
+        }`,
+    }));
+  ENG.scene.add(ENG.sky);
+
+  // ── endless floor grid: world-space lines (1m minor / 10m major), AA'd with
+  //    fwidth, colour fading into the horizon haze so floor and sky meet seamlessly ──
+  ENG.grid = new THREE.Mesh(
+    new THREE.PlaneGeometry(3000, 3000, 1, 1).rotateX(-Math.PI / 2),
+    new THREE.ShaderMaterial({
+      vertexShader: 'varying vec3 vW; void main(){ vW = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `varying vec3 vW;
+        float gridLine(vec2 p, float sc) {
+          vec2 g = abs(fract(p / sc - 0.5) - 0.5) / (fwidth(p / sc) + 1e-4);
+          return 1.0 - min(min(g.x, g.y), 1.0);
+        }
+        void main() {
+          vec3 base = vec3(0.075, 0.085, 0.105);                         // dark slate floor
+          vec3 line = vec3(0.36, 0.42, 0.50);                            // steel grid — no neon
+          float l = gridLine(vW.xz, 1.0) * 0.38 + gridLine(vW.xz, 10.0) * 0.62;
+          vec3 c = mix(base, line, l);
+          float dist = length(vW.xz);
+          c = mix(c, vec3(0.865, 0.915, 0.960), smoothstep(70.0, 320.0, dist));   // dissolve into the haze
+          gl_FragColor = vec4(c, 1.0);
+        }`,
+    }));
+  ENG.grid.frustumCulled = false;
+  ENG.scene.add(ENG.grid);
+
+  // ── natural light: sky-blue hemi + warm sun, no bloom, no additive anything ──
+  ENG.scene.add(new THREE.HemisphereLight(0xbfd9ff, 0x3a4148, 0.85));
+  const sun = new THREE.DirectionalLight(0xfff2e0, 1.6);
+  sun.position.copy(sunDir).multiplyScalar(50);
+  ENG.scene.add(sun);
+  ENG.objRoot = new THREE.Group(); ENG.scene.add(ENG.objRoot);
+
+  // ── editor camera + gizmo ──
+  ENG.orbit = new OrbitControls(ENG.camera, engEls.engc);
+  ENG.orbit.target.set(0, 0.8, 0);
+  ENG.orbit.enableDamping = true; ENG.orbit.dampingFactor = 0.08; ENG.orbit.maxPolarAngle = Math.PI / 2 - 0.02;
+  ENG.tc = new TransformControls(ENG.camera, engEls.engc);
+  ENG.tc.addEventListener('dragging-changed', e => ENG.orbit.enabled = !e.value);
+  ENG.scene.add(ENG.tc);
+  ENG.box = new THREE.Box3Helper(new THREE.Box3(), 0x66e0ff);
+  ENG.box.visible = false; ENG.scene.add(ENG.box);
+  ENG.gltf = new GLTFLoader();
+
+  // click (not drag) = pick; empty space = deselect
+  let down = null;
+  engEls.engc.addEventListener('pointerdown', e => down = [e.clientX, e.clientY]);
+  engEls.engc.addEventListener('pointerup', e => {
+    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 5) { down = null; return; }
+    down = null;
+    if (ENG.tc.dragging) return;
+    const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    const ray = new THREE.Raycaster(); ray.setFromCamera(ndc, ENG.camera);
+    const hits = ray.intersectObjects(ENG.objRoot.children, true);
+    if (!hits.length) { engSelect(null); return; }
+    let o = hits[0].object; while (o.parent && o.parent !== ENG.objRoot) o = o.parent;
+    engSelect(o);
+  });
+  addEventListener('resize', () => { if (!ENG.ready) return;
+    ENG.renderer.setSize(innerWidth, innerHeight);
+    ENG.camera.aspect = innerWidth / innerHeight; ENG.camera.updateProjectionMatrix(); });
+  ENG.ready = true;
+}
+
+const _cbA = new THREE.Box3(), _cbB = new THREE.Box3(), _cv = new THREE.Vector3();
+function engCollideTick() {
+  const objs = ENG.objects.filter(o => o.userData.eng.type !== 'tracker');
+  if (objs.length < 2 && !AVREG.size) return;
+  const boxes = objs.map(o => new THREE.Box3().setFromObject(o.userData.pickProxy || o));
+  const isAv = objs.map(o => o.userData.eng.type === 'avatar');
+  const vol = (b) => { b.getSize(_cv); return _cv.x * _cv.y * _cv.z; };
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < objs.length; i++) for (let j = i + 1; j < objs.length; j++) {
+      const A = boxes[i], B = boxes[j];
+      if (!A.intersectsBox(B)) continue;
+      if (isAv[i] && isAv[j]) continue;                   // avatars may stand close
+      // pick who yields: never an avatar; else the currently-dragged one; else the smaller
+      let t;
+      if (isAv[i]) t = j; else if (isAv[j]) t = i;
+      else if (objs[i] === ENG.sel) t = i; else if (objs[j] === ENG.sel) t = j;
+      else t = vol(A) <= vol(B) ? i : j;
+      const o = objs[t], T = boxes[t], O = boxes[t === i ? j : i];
+      const dx = Math.min(T.max.x - O.min.x, O.max.x - T.min.x);
+      const dy = Math.min(T.max.y - O.min.y, O.max.y - T.min.y);
+      const dz = Math.min(T.max.z - O.min.z, O.max.z - T.min.z);
+      const sx = (T.min.x + T.max.x) < (O.min.x + O.max.x) ? -1 : 1;
+      const sy = (T.min.y + T.max.y) < (O.min.y + O.max.y) ? -1 : 1;
+      const sz = (T.min.z + T.max.z) < (O.min.z + O.max.z) ? -1 : 1;
+      if (dx <= dy && dx <= dz)      { o.position.x += sx * dx; T.min.x += sx * dx; T.max.x += sx * dx; }
+      else if (dz <= dx && dz <= dy) { o.position.z += sz * dz; T.min.z += sz * dz; T.max.z += sz * dz; }
+      else                           { o.position.y += sy * dy; T.min.y += sy * dy; T.max.y += sy * dy; }
+    }
+  }
+  // USER-avatar hand touch: hand bones shove props (contact interaction v1;
+  // grab/pinch joins with the interaction-hierarchy work)
+  for (const [id, rec] of AVREG) {
+    if (rec.role !== 'user' || !rec.driveOn) continue;
+    const av = ENG.objects.find(o => o.userData.eng.id === id);
+    if (!av) continue;
+    const hands = [];
+    av.traverse(o => { if (o.isBone && (o.name === 'LeftHand' || o.name === 'RightHand')) hands.push(o); });
+    for (const hb of hands) {
+      _cv.setFromMatrixPosition(hb.matrixWorld);
+      for (let k = 0; k < objs.length; k++) {
+        if (objs[k] === av) continue;
+        if (!boxes[k].containsPoint(_cv) && boxes[k].distanceToPoint(_cv) > 0.1) continue;
+        if (isAv[k]) {                          // NPC avatar: TOUCH sensor, never a shove
+          const nr = AVREG.get(objs[k].userData.eng.id);
+          if (nr && nr.mind) nr.mind._touchT = performance.now();
+          continue;
+        }
+        const c = boxes[k].getCenter(new THREE.Vector3());
+        const push = c.sub(_cv); push.y = 0;
+        if (push.lengthSq() < 1e-6) push.set(0, 0, 0.05); else push.setLength(0.05);
+        objs[k].position.add(push);
+      }
+    }
+  }
+}
+function engLoop() {
+  if (!ENG.on) return;
+  ENG.raf = requestAnimationFrame(engLoop);
+  ENG.orbit.update();
+  if (ENG.sel) ENG.box.box.setFromObject(ENG.sel.userData.pickProxy || ENG.sel);
+  if (ENG.sdk.on) engTrackersSync();           // anchor gizmos → live tracking placement
+  const nowT = performance.now();
+  const avDt = Math.min(0.1, (nowT - (ENG._avT || nowT)) / 1000);
+  ENG._avT = nowT;
+  engCollideTick();
+  for (const rec of AVREG.values()) {
+    rec.mixer.update(avDt);
+    const T = window.__lab && window.__lab.AVSYNC;
+    if (rec.driveOn && rec.driver && T) {
+      // head lane (pose-derived euler, driver-clamped) + body + hand graft.
+      // Runs even with a null pose: the driver's hold→fade→rest handles a
+      // dead lane gracefully (no freeze), and live hands keep working.
+      rec.driver.update(T.poseWorld, {}, headFromPose(T.poseWorld), null, avDt, nowT, T.handsWorld, T.handedness);
+      engDriveHands(rec, T, nowT);
+    } else if (rec._handsLive) {
+      engRestoreHands(rec);                    // demoted → stumps return, rigs hide
+    }
+  }
+  engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
+  ENG.renderer.render(ENG.scene, ENG.camera);
+}
+
+function engSelect(o) {
+  ENG.sel = o || null;
+  if (ENG.sel) { ENG.tc.attach(ENG.sel); ENG.box.visible = true; ENG.box.box.setFromObject(ENG.sel.userData.pickProxy || ENG.sel); }
+  else { ENG.tc.detach(); ENG.box.visible = false; }
+  engRefreshList();
+  engAvCtlRefresh();
+}
+
+function engAdopt(obj, meta) {                       // every hosted object goes through here
+  obj.userData.eng = { id: 'e' + (++ENG.seq), ...meta };
+  ENG.objRoot.add(obj); ENG.objects.push(obj);
+  engRefreshList(); engSelect(obj);
+  return obj;
+}
+
+// ═══ AVATAR CLASS — rigged avatars on the game-object base (Unity/spatial-style) ═══
+// An avatar IS a game object (OBJECTS list, click-select, full gizmo, snapshots)
+// PLUS an animation compartment: the clean rig master GLB + reusable .anim.json
+// packages (extracted per-motion via tools/extract-anim.mjs; clips rebind by bone
+// name). Selecting an avatar reveals its animation strip — an Animator-lite.
+const ENG_AVATAR_DEFAULT = {
+  url: 'sdk/assets/avatars/riggedmale.glb',
+  anims: ['sdk/assets/anims/walk.anim.json', 'sdk/assets/anims/run.anim.json'],
+};
+const AVREG = new Map();                     // eng.id → { mixer, clips, action, clipIdx }
+function engRebuildClip(j) {
+  const tracks = j.tracks.map(t => {
+    const prop = t.path === 'translation' ? 'position' : t.path === 'rotation' ? 'quaternion' : 'scale';
+    const Ctor = t.path === 'rotation' ? THREE.QuaternionKeyframeTrack : THREE.VectorKeyframeTrack;
+    return new Ctor(t.bone + '.' + prop, t.times, t.values);
+  });
+  return new THREE.AnimationClip(j.name, j.duration, tracks);
+}
+// ═══ HEAD LANE — Kalidokit doctrine (neck driven from face euler, damped 0.7)
+// adapted to pose-only landmarks: the face-plane normal (eyes 2/5 + nose 0)
+// gives yaw/pitch, the eye line gives roll — available whenever the body is
+// tracked, no face model needed. The driver clamps everything to ±26° with its
+// own per-axis gains, so the head can never do anything unnatural. Signs are
+// contract-tested against the rig's headfront bone (never assumed).
+const ENG_HEAD = { seen: false, yaw: 0, pitch: 0, roll: 0 };
+const ENG_HEAD_PITCH_REST = 8;   // deg — the nose sits a touch below the ear line at rest
+function headFromPose(w) {
+  ENG_HEAD.seen = false;
+  if (!w || !w[0] || !w[7] || !w[8]) return ENG_HEAD;
+  const vis = i => w[i].visibility ?? 1;
+  if (Math.min(vis(0), vis(7), vis(8)) < 0.55) return ENG_HEAD;
+  // facing = earMid→nose (the protrusion IS the signal — a face-plane cross
+  // product reads the same protrusion as fake pitch, so it is NOT used here);
+  // roll = ear-line tilt. Raw coords: x image-right, y down, z toward camera −.
+  const ex = w[7].x - w[8].x, ey = w[7].y - w[8].y, ez = w[7].z - w[8].z;   // earR→earL
+  const fx = w[0].x - (w[7].x + w[8].x) / 2,
+        fy = w[0].y - (w[7].y + w[8].y) / 2,
+        fz = w[0].z - (w[7].z + w[8].z) / 2;
+  const fl = Math.hypot(fx, fy, fz), el = Math.hypot(ex, ey, ez);
+  if (fl < 1e-9 || el < 1e-9) return ENG_HEAD;
+  const R2D = 180 / Math.PI;
+  ENG_HEAD.yaw = -Math.atan2(fx, -fz) * R2D;                       // user turns their left → avatar turns ITS left
+  ENG_HEAD.pitch = Math.atan2(-fy, Math.hypot(fx, fz)) * R2D + ENG_HEAD_PITCH_REST;
+  ENG_HEAD.roll = Math.atan2(-ey, Math.hypot(ex, ez)) * R2D;       // ear-to-shoulder tilt
+  ENG_HEAD.seen = true;
+  return ENG_HEAD;
+}
+
+// ═══ GHOST-HAND ADAPTATION — the avatar rig has NO finger bones (24 joints,
+// arms end in a static stump), so the validated 21-landmark HoloHandRig IS its
+// hand rig: the flesh pair (authored _BIDX/_BWT weights, same deformer as the
+// lab) is seated on the wrist bones and sized to the forearms (HAND_BODY_PROP
+// doctrine). Chirality is MEASURED against each rig's rest cloud and latched
+// (hand-views _zSign law — never hard-coded, never trusted from labels alone).
+// The stump collapses (wrist-bone scale) only while live hands own the look.
+const _hV = new THREE.Vector3(), _hW = new THREE.Vector3(), _hE = new THREE.Vector3(), _hC = new THREE.Vector3();
+const _hQ = new THREE.Quaternion();
+function _chirVol(P) {                        // palm-block signed volume (body-drive doctrine)
+  const sv = (p0, a, b, c) => {
+    const x1 = a.x - p0.x, y1 = a.y - p0.y, z1 = a.z - p0.z;
+    const x2 = b.x - p0.x, y2 = b.y - p0.y, z2 = b.z - p0.z;
+    const x3 = c.x - p0.x, y3 = c.y - p0.y, z3 = c.z - p0.z;
+    return (y1 * z2 - z1 * y2) * x3 + (z1 * x2 - x1 * z2) * y3 + (x1 * y2 - y1 * x2) * z3;
+  };
+  return sv(P(0), P(5), P(17), P(1)) + sv(P(0), P(5), P(17), P(2));
+}
+// GROUND TRUTH (measured via manual skinning): Meshy meshes RENDER in the BONE
+// frame — boneWorld·IBM carries a uniform ~3.9× scale, so geometry bounds
+// under-report the on-screen body while bone origins sit exactly on rendered
+// joints. _skinnedBox runs the real skinning chain on sampled verts to get the
+// bounds the viewer actually sees — the spawn normalizer uses it, after which
+// bone positions, hand sizing and colliders all agree with the screen.
+const _hM = new THREE.Matrix4();
+function _skinnedBox(sm, root) {
+  root.updateMatrixWorld(true);
+  sm.skeleton.update();
+  const pos = sm.geometry.getAttribute('position');
+  const J = sm.geometry.getAttribute('skinIndex'), W = sm.geometry.getAttribute('skinWeight');
+  const box = new THREE.Box3();
+  const step = Math.max(1, Math.floor(pos.count / 600));
+  for (let v = 0; v < pos.count; v += step) {
+    _hV.fromBufferAttribute(pos, v).applyMatrix4(sm.bindMatrix);
+    _hC.set(0, 0, 0);
+    for (let k = 0; k < 4; k++) {
+      const w = W.getComponent(v, k);
+      if (!w) continue;
+      _hM.fromArray(sm.skeleton.boneMatrices, J.getComponent(v, k) * 16);
+      _hC.addScaledVector(_hE.copy(_hV).applyMatrix4(_hM), w);
+    }
+    _hC.applyMatrix4(sm.bindMatrixInverse);
+    box.expandByPoint(sm.localToWorld(_hC));
+  }
+  return box;
+}
+async function engAvatarHands(grp, rec) {
+  try {
+    const { right, left } = await loadFleshPair();
+    const mk = (rest, geo) => {
+      const rig = new HoloHandRig(rest, grp, { style: 'smooth' });
+      rig.opts.geometry = geo; rig.opts.geometryFit = false; rig.look = 'flesh';
+      rig.build();
+      return rig;
+    };
+    const restChir = rest => Math.sign(_chirVol(i => ({ x: rest[i][0], y: rest[i][1], z: rest[i][2] }))) || 1;
+    rec.avHands = {
+      R: mk(REST_R42, right), L: mk(REST_L42, left),
+      ref: { R: restChir(REST_R42), L: restChir(REST_L42) },
+      zs: { R: 1, L: 1 }, zAcc: { R: 0, L: 0 }, pack: { R: null, L: null },
+      seat: { R: new THREE.Vector3(), L: new THREE.Vector3() },
+    };
+  } catch (e) { console.warn('[avatar] hand rigs unavailable:', e); }
+}
+function engDriveHands(rec, T, nowT) {
+  const H = rec.avHands;
+  if (!H || !rec.driver) return;
+  const seen = { R: false, L: false };
+  const hw = T.handsWorld, hd = T.handedness;
+  if (hw && hd) for (let i = 0; i < hw.length; i++) {
+    const lm = hw[i];
+    if (!lm) continue;
+    const side = hd[i] === 'Right' ? 'R' : 'L';
+    if (seen[side] || !H[side]) continue;
+    const wrist = rec.driver.bones[rec.wrists[side]], fore = rec.driver.bones[rec.fores[side]];
+    if (!wrist || !fore) continue;
+    const pk = H.pack[side] || (H.pack[side] = Array.from({ length: 21 }, () => new THREE.Vector3()));
+    for (let k = 0; k < 21; k++) rec.driver.mapPoint(lm[k], pk[k]);
+    // measured z-convention latch (decay-accumulated; single frames lie in a fist)
+    H.zAcc[side] = H.zAcc[side] * 0.98 + _chirVol(k => pk[k]);
+    if (Math.abs(H.zAcc[side]) > 1e-12) H.zs[side] = Math.sign(H.zAcc[side]) === H.ref[side] ? 1 : -1;
+    if (H.zs[side] < 0) for (const p of pk) p.z = -p.z;
+    // POV hand orientation: the skeleton reference is a POV figure — you see
+    // the BACKS of your own hands, so each cloud flips 180° about its own
+    // wrist→knuckle axis. Rigid rotation: position, chirality and curls are
+    // untouched; palm/back and thumb side swap, like the same hand seen from
+    // behind. (The forearm solve is direction-only, so nothing fights this.)
+    _hC.subVectors(pk[9], pk[0]);
+    if (_hC.lengthSq() > 1e-10) {
+      _hQ.setFromAxisAngle(_hC.normalize(), Math.PI);
+      for (let j = 1; j < 21; j++) pk[j].sub(pk[0]).applyQuaternion(_hQ).add(pk[0]);
+    }
+    // seat at the wrist BONE (bone origins sit on the rendered joints — the
+    // spawn normalizer put everything in one frame), size to the bone forearm
+    wrist.updateWorldMatrix(true, false); fore.updateWorldMatrix(true, false);
+    _hW.setFromMatrixPosition(wrist.matrixWorld);
+    _hE.setFromMatrixPosition(fore.matrixWorld);
+    const foreLen = _hE.distanceTo(_hW), palm = pk[0].distanceTo(pk[9]);
+    if (foreLen > 1e-6 && palm > 1e-6) {
+      const s = Math.min(5, Math.max(0.05, HAND_BODY_PROP * foreLen / palm));
+      for (let j = 1; j < 21; j++) pk[j].sub(pk[0]).multiplyScalar(s).add(pk[0]);
+    }
+    H.seat[side].copy(_hW);
+    _hV.copy(_hW).sub(pk[0]);
+    for (const p of pk) { p.add(_hV); rec.grp.worldToLocal(p); }
+    H[side].tick(nowT * 0.001);
+    H[side].pose(pk);
+    seen[side] = true;
+  }
+  for (const side of ['R', 'L']) {
+    if (!seen[side] && H[side]) H[side].pose(null);           // absent → hide
+    const wb = rec.driver.bones[rec.wrists[side]];
+    if (wb) {
+      const want = seen[side] ? 1e-4 : 1;                     // collapse the stump under a live hand
+      // (1e-4, not merely small: verts converge on the BONE origin, which this
+      // rig keeps off the visual wrist — a visible speck at any larger scale)
+      if (wb.scale.x !== want) wb.scale.setScalar(want);
+    }
+  }
+  rec._handsLive = seen.R || seen.L;
+}
+function engRestoreHands(rec) {
+  const H = rec.avHands;
+  if (H) { if (H.R) H.R.pose(null); if (H.L) H.L.pose(null); }
+  if (rec.driver) for (const side of ['R', 'L']) {
+    const wb = rec.driver.bones[rec.wrists[side]];
+    if (wb && wb.scale.x !== 1) wb.scale.setScalar(1);
+  }
+  rec._handsLive = false;
+}
+async function engSpawnAvatar(url = ENG_AVATAR_DEFAULT.url, anims = ENG_AVATAR_DEFAULT.anims, meta = {}) {
+  const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+  const gltf = await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej));
+  const grp = new THREE.Group();
+  grp.add(gltf.scene);
+  gltf.scene.traverse(o => { if (o.isSkinnedMesh) o.frustumCulled = false; });
+  // normalize from the SKINNED bounds (what the viewer sees) — this rig
+  // RENDERS ~3.9× its geometry bounds, so a geometry-based normalize left the
+  // avatar towering at ~6.7 units with off-screen-frame bones (see _skinnedBox)
+  let sm0 = null;
+  gltf.scene.traverse(o => { if (o.isSkinnedMesh && !sm0) sm0 = o; });
+  const box = sm0 ? _skinnedBox(sm0, gltf.scene) : new THREE.Box3().setFromObject(gltf.scene);
+  const h = Math.max(box.max.y - box.min.y, 1e-6);
+  const f = 1.7 / h;                                        // human height, feet on the floor
+  gltf.scene.scale.setScalar(f);
+  gltf.scene.position.y = -box.min.y * f;
+  // pick/bounds proxy: raycasting an ANIMATED SkinnedMesh is unreliable (three
+  // tests bind-pose geometry; Meshy bones also carry scale), which made avatar
+  // click-select and the selection box inconsistent with other game objects.
+  // An invisible full-body box gives the gizmo pipeline one honest target.
+  const sz = box.getSize(new THREE.Vector3()).multiplyScalar(f);
+  const proxy = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(sz.x, 0.45), 1.7, Math.max(sz.z, 0.45)),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+  proxy.position.y = 0.85;
+  grp.add(proxy);
+  grp.userData.pickProxy = proxy;
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.2);
+  grp.position.set(p.x, 0, p.z);
+  engAdopt(grp, { type: 'avatar', url, anims: [...anims], label: meta.label || 'avatar ' + (ENG.seq + 1) });
+  // live-drive: the lab's validated BipedDriver (FK retarget + palm-basis hands +
+  // human-ROM clamps). Bound HERE, while the skeleton is still in bind pose —
+  // binding after a mixer tick would capture a walking frame as "rest".
+  // mirror:false = POV convention (avatar faces away; your left drives its left) —
+  // probe-verified with a synthetic raised-left-wrist pose.
+  let driver = null;
+  try {
+    const { BipedDriver } = await import('./sdk/interaction/body-drive.js');
+    // Meshy-biped body contract (validated bone names). The auto-classifier was
+    // built for quadrupeds and misreads humanoids (legs became "front limbs",
+    // arms dropped entirely) — the authored contract is the frozen handshake.
+    const MESHY_BIPED = { puppet: { joints: {
+      root: 'Hips',
+      spine: ['Spine', 'Spine01', 'Spine02'],
+      neck: ['neck'], head: 'Head',
+      frontL: ['LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand'],
+      frontR: ['RightShoulder', 'RightArm', 'RightForeArm', 'RightHand'],
+      hindL: ['LeftUpLeg', 'LeftLeg', 'LeftFoot', 'LeftToeBase'],
+      hindR: ['RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase'],
+    } } };
+    // mirror:false = POV (your left drives its left). mapSigns must then have a
+    // POSITIVE determinant: the driver default [-1,-1,-1] is a reflection that
+    // pairs with mirror:true — reused unmirrored it flips every lateral target
+    // to the wrong side of the chest (spread arms rendered as a knot). [1,-1,-1]
+    // is the proper rotation: left→+x, up→+y, forward→+z (the facing the
+    // driver's back-plane clamp assumes).
+    driver = new BipedDriver({ mirror: false, mapSigns: [1, -1, -1] }).bind(gltf.scene, MESHY_BIPED);
+  } catch (e) { console.warn('[avatar] live-drive unavailable:', e); }
+  const rec = { mixer: new THREE.AnimationMixer(gltf.scene), clips: [], action: null, clipIdx: -1,
+                driver, driveOn: false, role: meta.role || 'npc', grp,
+                wrists: { R: 'RightHand', L: 'LeftHand' },
+                fores: { R: 'RightForeArm', L: 'LeftForeArm' } };
+  AVREG.set(grp.userData.eng.id, rec);
+  engAvatarHands(grp, rec);                    // async graft — hands attach when loaded
+  for (const au of anims) {
+    try { rec.clips.push(engRebuildClip(await (await fetch(au)).json())); }
+    catch (e) { console.warn('[avatar] anim failed:', au, e); }
+  }
+  // spawn IDLE: clips are opt-in via the ▶ chips. Auto-playing walk made every
+  // fresh avatar "move by itself" — and fight the live-drive once promoted.
+  engAvatarSetClip(grp, meta.clip !== undefined ? meta.clip : -1);
+  return grp;
+}
+function engAvatarSetClip(obj, i) {
+  const rec = AVREG.get(obj.userData.eng.id);
+  if (!rec) return;
+  if (rec.driveOn && i >= 0) {                 // one driver per skeleton: a mixer
+    rec.driveOn = false; rec.role = 'npc';     // running under the live-drive reads
+    engRefreshList();                          // as constant self-swinging (hips bob,
+    toast('clip takes over — live sync off');  // shoulders swing under tracked arms)
+  }
+  if (rec.action) rec.action.fadeOut(0.15);
+  rec.clipIdx = (i >= 0 && rec.clips[i]) ? i : -1;
+  rec.action = rec.clipIdx < 0 ? null : rec.mixer.clipAction(rec.clips[rec.clipIdx]).reset().fadeIn(0.15).play();
+  engAvCtlRefresh();
+}
+function engAvCtlRefresh() {
+  const lbl = document.getElementById('engAvCtlLbl'), host = document.getElementById('engAvCtl');
+  const d = ENG.sel && ENG.sel.userData.eng;
+  const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
+  const show = !!rec;
+  lbl.style.display = show ? 'block' : 'none';
+  host.style.display = show ? 'flex' : 'none';
+  engMindRows(rec);                            // MIND section rides the selection too
+  if (!show) return;
+  host.innerHTML = '';
+  const mk = (txt, sel, fn) => {
+    const b = document.createElement('button');
+    b.className = 'opt' + (sel ? ' sel' : ''); b.textContent = txt;
+    b.addEventListener('click', fn); host.appendChild(b);
+  };
+  mk('⏹', rec.clipIdx < 0, () => engAvatarSetClip(ENG.sel, -1));
+  rec.clips.forEach((c, i) => mk('▶ ' + c.name, i === rec.clipIdx, () => engAvatarSetClip(ENG.sel, i)));
+  if (rec.driver) mk(rec.role === 'user' ? '🎮 user' : '🎮 make user', rec.driveOn, () => {
+    if (rec.driveOn) {                                   // demote back to NPC
+      rec.driveOn = false; rec.role = 'npc';
+      engAvatarSetClip(ENG.sel, rec.npcClip ?? -1);      // resume the clip it had
+      toast('back to NPC — clips drive it again');
+    } else {
+      // EXCLUSIVE user slot: exactly one avatar syncs to the camera; every other
+      // avatar is an NPC running its own clips — both classes live in parallel.
+      for (const [id, r] of AVREG) {
+        const wasUser = r.role === 'user';
+        r.driveOn = false;
+        if (wasUser) {
+          r.role = 'npc';
+          const o = ENG.objects.find(x => x.userData.eng.id === id);
+          if (o) engAvatarSetClip(o, r.npcClip ?? -1);
+        }
+      }
+      // a playing mixer fights the drive: the driver owns arms/legs/spine root,
+      // but hips, Spine01/02, shoulders and feet keep walking underneath —
+      // constant self-swing even with the user static. Stop it; demote restores.
+      rec.npcClip = rec.clipIdx;
+      engAvatarSetClip(ENG.sel, -1);
+      rec.driveOn = true; rec.role = 'user';
+      toast('🎮 USER avatar — synced to your tracked body (others stay NPC)');
+    }
+    engRefreshList();
+    engAvCtlRefresh();
+  });
+}
+ENG.spawnAvatar = engSpawnAvatar; ENG.avatarSetClip = engAvatarSetClip; ENG.avatars = AVREG;
+ENG.mindSet = engMindSet;                       // hoisted fn — safe here
+Object.defineProperty(ENG, 'minds', { get: () => ENG_MINDS });   // consts live later
+Object.defineProperty(ENG, 'world', { get: () => ENG_WORLD });   // in the file (TDZ)   // probe/debug handles
+// ═══ NPC MIND — interaction loops for avatar game objects ═══════════════════
+// Same trigger→script pattern as any game object, plus an ANIMATION STACK and
+// a STAT LINEAGE:
+//   sensors  → approach / leave (hip distance + hysteresis) · touch (user
+//              hand bone in the NPC volume — reuses the collision tick)
+//   mind     → the "prompt": a role line + reaction RULES (data, so a compiler
+//              — LLM role-text → rules — can slot in later without touching
+//              the runtime)
+//   reaction → clip chain STACKED over the idle clip (pre-reaction clip index
+//              remembered, restored on settle — clips resolve BY NAME from the
+//              already-loaded registry, so triggering is instant), optional
+//              locomotion (flee/face; the collision resolver keeps it real),
+//              clamped procedural nod/lean, stat deltas
+//   lineage  → reaction record (grandchild) → avatar stats (child: hp/mood/
+//              energy) → ENG_WORLD.stats (parent aggregate) — every layer
+//              writes the ONE ring-buffer log the UI and probes read.
+const ENG_MINDS = {
+  greeter: { role: 'friendly greeter — turns, nods and warms to whoever comes close',
+    reactions: [
+      { on: 'approach', within: 1.6, turn: 'face', nod: 1, stats: { mood: +3 }, cooldown: 4 },
+      { on: 'touch', turn: 'face', nod: 1, stats: { mood: +1 }, cooldown: 1.5 },
+      { on: 'leave', beyond: 2.4, stats: { mood: -1 }, cooldown: 4 },
+    ] },
+  skittish: { role: 'skittish — flees when approached or touched',
+    reactions: [
+      { on: 'approach', within: 1.4, play: ['run'], move: { dir: 'away', speed: 1.1, dur: 1.2 }, turn: 'away', stats: { energy: -5, mood: -2 }, cooldown: 2 },
+      { on: 'touch', play: ['run'], move: { dir: 'away', speed: 1.6, dur: 1.5 }, turn: 'away', stats: { hp: -2, energy: -8, mood: -4 }, cooldown: 1 },
+    ] },
+  sparring: { role: 'sparring partner — squares up when approached, takes hits on hp',
+    reactions: [
+      { on: 'approach', within: 1.3, turn: 'face', play: ['walk'], stats: { mood: +1 }, cooldown: 3 },
+      { on: 'touch', lean: 1, stats: { hp: -6, energy: -3 }, cooldown: 0.6 },
+    ] },
+};
+const ENG_WORLD = { stats: { interactions: 0, touches: 0, byRole: {} }, log: [] };
+function engLog(rec, kind, msg) {
+  ENG_WORLD.log.push({ t: +(performance.now() / 1000).toFixed(1), npc: rec.grp.userData.eng.label, kind, msg });
+  if (ENG_WORLD.log.length > 60) ENG_WORLD.log.shift();
+  rec.mind.lastEvt = kind + (msg ? ' · ' + msg : '');
+  if (ENG.sel === rec.grp) engMindUiRefresh();
+}
+function engMindSet(obj, key) {
+  const rec = AVREG.get(obj.userData.eng.id);
+  if (!rec) return;
+  if (!key || key === 'none') { rec.mind = null; engAvCtlRefresh(); return; }
+  const p = ENG_MINDS[key];
+  if (!p) return;
+  rec.mind = { key, role: p.role, reactions: p.reactions,
+               stats: (rec.mind && rec.mind.stats) || { hp: 100, mood: 50, energy: 100 },
+               cool: {}, active: null, _near: false, _touchT: 0, lastEvt: '' };
+  engAvCtlRefresh();
+}
+function engReactStart(rec, r, evt, nowT) {
+  const M = rec.mind;
+  const dur = ((r.move && r.move.dur) || r.dur || 1.2) * 1000;
+  const deltas = r.stats || {};
+  for (const [k, v] of Object.entries(deltas))
+    M.stats[k] = Math.max(0, Math.min(100, (M.stats[k] ?? 0) + v));
+  ENG_WORLD.stats.interactions++;
+  if (evt === 'touch') ENG_WORLD.stats.touches++;
+  ENG_WORLD.stats.byRole[M.key] = (ENG_WORLD.stats.byRole[M.key] || 0) + 1;
+  let resume;
+  if (r.play && r.play.length) {
+    const i = rec.clips.findIndex(c => c.name === r.play[0]);
+    if (i >= 0) { resume = rec.clipIdx; engAvatarSetClip(rec.grp, i); }
+  }
+  M.active = { r, until: nowT + dur, dur, resume };
+  engLog(rec, evt, Object.entries(deltas).map(([k, v]) => k + (v > 0 ? '+' : '') + v).join(' ')
+    + (r.play && r.play.length ? ' ▶' + r.play[0] : '') + (r.move ? ' ⇢' + r.move.dir : ''));
+}
+const _mU = new THREE.Vector3(), _mD = new THREE.Vector3(), _mQ2 = new THREE.Quaternion();
+const _mY = new THREE.Vector3(0, 1, 0), _mX = new THREE.Vector3(1, 0, 0);
+function engUserPos(out) {
+  for (const r of AVREG.values()) if (r.role === 'user' && r.driveOn) return out.copy(r.grp.position);
+  const b = ENG.objects.find(o => o.userData.eng && o.userData.eng.sub === 'body');
+  return b ? out.copy(b.position) : null;
+}
+function engMindTick(dt, nowT) {
+  if (!AVREG.size) return;
+  const up = engUserPos(_mU);
+  for (const rec of AVREG.values()) {
+    const M = rec.mind;
+    if (!M || rec.role === 'user') continue;
+    let evt = null;
+    if (M._touchT && nowT - M._touchT < 120) { evt = 'touch'; M._touchT = 0; }
+    if (!evt && up) {
+      const d = Math.hypot(up.x - rec.grp.position.x, up.z - rec.grp.position.z);
+      const rin = (M.reactions.find(x => x.on === 'approach') || {}).within || 1.5;
+      const rout = (M.reactions.find(x => x.on === 'leave') || {}).beyond || rin + 0.8;
+      if (!M._near && d <= rin) { M._near = true; evt = 'approach'; }
+      else if (M._near && d > rout) { M._near = false; evt = 'leave'; }
+    }
+    if (evt) {
+      const r = M.reactions.find(x => x.on === evt);
+      if (r && nowT >= (M.cool[evt] || 0)) {
+        M.cool[evt] = nowT + (r.cooldown || 1) * 1000;
+        engReactStart(rec, r, evt, nowT);
+      }
+    }
+    const A = M.active;
+    if (!A) continue;
+    if (A.r.move && up) {                       // flee / pursue (post-collide, pre-render)
+      _mD.set(rec.grp.position.x - up.x, 0, rec.grp.position.z - up.z);
+      if (A.r.move.dir === 'toward') _mD.negate();
+      if (_mD.lengthSq() > 1e-6) rec.grp.position.addScaledVector(_mD.normalize(), A.r.move.speed * dt);
+    }
+    if (A.r.turn && up) {                       // face / turn away (yaw slerp)
+      _mD.set(up.x - rec.grp.position.x, 0, up.z - rec.grp.position.z);
+      if (A.r.turn === 'away') _mD.negate();
+      if (_mD.lengthSq() > 1e-6) {
+        _mQ2.setFromAxisAngle(_mY, Math.atan2(_mD.x, _mD.z));
+        rec.grp.quaternion.slerp(_mQ2, 1 - Math.exp(-8 * dt));
+      }
+    }
+    if ((A.r.nod || A.r.lean) && rec.driver) {  // clamped micro-anim, absolute from rest
+      const p = 1 - Math.max(0, A.until - nowT) / A.dur;
+      const env = Math.sin(Math.PI * Math.min(1, p));
+      const bn = A.r.nod ? 'neck' : 'Spine01';
+      const b = rec.driver.bones[bn], rest = rec.driver.rest[bn];
+      if (b && rest) b.quaternion.copy(rest)
+        .multiply(_mQ2.setFromAxisAngle(_mX, (A.r.nod ? 0.45 : -0.5) * env));
+    }
+    if (nowT >= A.until) {                      // settle: pop the stack
+      if (A.resume !== undefined && rec.clipIdx !== A.resume) engAvatarSetClip(rec.grp, A.resume);
+      M.active = null;
+      engLog(rec, 'settle', A.resume !== undefined ? 'clip restored' : '');
+    }
+  }
+}
+function engMindRows(rec) {
+  const lbl = document.getElementById('engMindLbl'), row = document.getElementById('engMindRow');
+  const showMind = !!(rec && rec.role !== 'user');
+  lbl.style.display = showMind ? 'block' : 'none';
+  row.style.display = showMind ? 'flex' : 'none';
+  if (showMind) {
+    row.innerHTML = '';
+    const cur = rec.mind ? rec.mind.key : 'none';
+    const mk = (key, txt) => {
+      const b = document.createElement('button');
+      b.className = 'opt' + (cur === key ? ' sel' : '');
+      b.textContent = txt;
+      b.title = key === 'none' ? 'no mind — pure clip player' : ENG_MINDS[key].role;
+      b.addEventListener('click', () => {
+        engMindSet(ENG.sel, key);
+        toast(key === 'none' ? 'mind off — pure clip player' : '🧠 ' + ENG_MINDS[key].role);
+      });
+      row.appendChild(b);
+    };
+    mk('none', '⚪ none'); mk('greeter', '👋 greeter'); mk('skittish', '😨 skittish'); mk('sparring', '🥊 sparring');
+  }
+  engMindUiRefresh();
+}
+function engMindUiRefresh() {
+  const info = document.getElementById('engMindInfo');
+  const d = ENG.sel && ENG.sel.userData.eng;
+  const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
+  if (!rec || !rec.mind || rec.role === 'user') { info.style.display = 'none'; return; }
+  const s = rec.mind.stats;
+  info.style.display = 'block';
+  info.textContent = 'hp ' + s.hp + ' · mood ' + s.mood + ' · energy ' + s.energy
+    + ' — ' + (rec.mind.lastEvt || 'waiting')
+    + ' | world: ' + ENG_WORLD.stats.interactions + ' interactions';
+}
+function engSpawn(type) {
+  const color = ENG_COLORS[ENG.seq % ENG_COLORS.length];
+  const geo = type === 'sphere' ? new THREE.SphereGeometry(0.5, 24, 18)
+    : type === 'cylinder' ? new THREE.CylinderGeometry(0.4, 0.4, 1, 20)
+    : type === 'cone' ? new THREE.ConeGeometry(0.5, 1, 20)
+    : new THREE.BoxGeometry(1, 1, 1);
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.75, metalness: 0.05 }));
+  // seat on the floor, a step in front of where the camera is looking
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.5);
+  m.position.set(p.x + (Math.random() - 0.5), 0.5, p.z + (Math.random() - 0.5));   // every primitive is 1u tall → half-height seats it
+  engAdopt(m, { type, color, label: type + ' ' + (ENG.seq + 1) });
+  toast('spawned ' + type);
+}
+
+async function engImportGLB(url, meta = {}) {
+  toast('loading model…', 6000);
+  const gltf = await ENG.gltf.loadAsync(url);
+  const g = gltf.scene;
+  const box = new THREE.Box3().setFromObject(g);
+  const span = Math.max(...box.getSize(new THREE.Vector3()).toArray()) || 1;
+  if (span > 3) g.scale.multiplyScalar(3 / span);                 // auto-scale to a placeable size
+  box.setFromObject(g); g.position.y -= box.min.y;                // auto-ground
+  engAdopt(g, { type: 'glb', url, label: meta.label || decodeURIComponent(url.split('/').pop() || 'model').replace(/\.glb$/i, '').slice(0, 26) });
+  if (meta.p) { g.position.fromArray(meta.p); g.rotation.fromArray(meta.r); g.scale.fromArray(meta.s); }
+  toast('model hosted ✓');
+  return g;
+}
+
+function engRefreshList() {
+  const host = engEls.engObjRows;
+  host.innerHTML = '';
+  if (!ENG.objects.length) { host.appendChild(engEls.engEmpty); return; }
+  for (const o of ENG.objects) {
+    const d = o.userData.eng;
+    const row = document.createElement('div');
+    row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
+    row.querySelector('.del').addEventListener('click', () => engDelete(o));
+    host.appendChild(row);
+  }
+}
+
+function engDelete(o) {
+  if (ENG.sel === o) engSelect(null);
+  const d = o.userData.eng;
+  if (d && d.type === 'tracker') {             // deleting an anchor = reset its offset
+    const T = window.__lab && window.__lab.TRACK_OFF;
+    if (T) Object.assign(T[d.sub], { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 });
+  }
+  AVREG.delete(o.userData.eng.id);
+  ENG.objRoot.remove(o); ENG.objects = ENG.objects.filter(x => x !== o);
+  o.traverse(c => c.geometry && c.geometry.dispose());
+  engRefreshList();
+  engAvCtlRefresh();
+}
+
+function engSnapshot() {
+  return { v: 1, objects: ENG.objects.filter(o => o.userData.eng.type !== 'tracker')
+    .map(o => {
+      const rec = AVREG.get(o.userData.eng.id);
+      return { ...o.userData.eng, clip: rec ? rec.clipIdx : undefined, role: rec ? rec.role : undefined,
+               mind: rec && rec.mind ? { key: rec.mind.key, stats: { ...rec.mind.stats } } : undefined,
+               p: o.position.toArray(), r: o.rotation.toArray().slice(0, 3), s: o.scale.toArray() };
+    }) };
+}
+async function engRestore(snap) {
+  for (const o of [...ENG.objects]) if (o.userData.eng.type !== 'tracker') engDelete(o);
+  for (const rec of (snap && snap.objects) || []) {
+    if (rec.type === 'avatar') {
+      try {
+        const g = await engSpawnAvatar(rec.url, rec.anims || [], { label: rec.label, clip: rec.clip, role: rec.role });
+        g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
+        if (rec.mind) {                        // mind + its child stats survive save/load
+          engMindSet(g, rec.mind.key);
+          const rr = AVREG.get(g.userData.eng.id);
+          if (rr && rr.mind) rr.mind.stats = { ...rec.mind.stats };
+        }
+      } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'glb') { try { await engImportGLB(rec.url, rec); } catch { toast('⚠ could not reload ' + rec.label); } }
+    else {
+      engSpawn(rec.type);
+      const o = ENG.objects[ENG.objects.length - 1];
+      o.material.color.set(rec.color); o.userData.eng.color = rec.color; o.userData.eng.label = rec.label;
+      o.position.fromArray(rec.p); o.rotation.fromArray(rec.r); o.scale.fromArray(rec.s);
+    }
+  }
+  engSelect(null);
+}
+
+async function engEnter() {
+  await engInit();
+  ENG.on = true;
+  document.body.classList.add('engine-view');
+  engLoop();
+}
+function engExit() {
+  if (ENG.sdk.on) engSdkOff();               // never hand the lab back in a hijacked state
+  ENG.on = false;
+  cancelAnimationFrame(ENG.raf);
+  document.body.classList.remove('engine-view');
+}
+
+// ── IMPORT SDK: bring the lab's live tracking stack into the engine view ──
+// Reuses the lab's own machinery rather than duplicating it: boot() (camera +
+// trackers + rigs), applyMode('firstPerson') for the beat-game POV framing,
+// and applyDisplay() mesh isolation for the hand / body / both choice. The lab
+// canvas is alpha-transparent, so with its background+fog nulled only the holo
+// hands / body composite over the engine world. Toggling off restores the
+// exact lab state that was saved — the lab never knows it was borrowed.
+const ENG_SDK_DISP = { hand: 'hands', body: 'skeletons', both: 'handsBody' };
+function engSdkOverlayStyle() {              // transparent compositing — engine world shows through
+  scene.background = null;
+  scene.fog = null;
+}
+// Sub-rows collapse to what's relevant: hands-look only when hands are tracked,
+// BODY SUITE only when the body is; everything folds away when the SDK is off.
+function engSdkRowsRefresh() {
+  const on = ENG.sdk.on, part = ENG.sdk.part;
+  const show = (el, v, disp) => { el.style.display = (on && v) ? (disp || 'flex') : 'none'; };
+  show(engEls.engSdkParts, true);
+  show(engEls.engSdkView, true);
+  show(engEls.engSdkSkin, part !== 'body');
+  show(engEls.engBodySuite, part !== 'hand');
+  show(engEls.engBodyLbl, part !== 'hand', 'block');
+  show(engEls.engFaceRow, true);
+  show(engEls.engFaceLbl, true, 'block');
+  const hint = document.getElementById('engSdkHint');
+  if (hint) hint.style.display = on ? 'block' : 'none';
+}
+
+// View for the imported SDK: POV (hands/body reach into the engine world) or MIRROR
+// (the lab's camera-overlay experience — video + tracking, rubik's-cube style).
+function engSdkApplyView() {
+  if (ENG.sdk.view === 'mirror') {
+    document.body.classList.add('eng-mirror');
+    applyMode('mirror');                     // occluders, video-through background, 2D overlays
+  } else {
+    document.body.classList.remove('eng-mirror');
+    applyMode('firstPerson');
+    engSdkOverlayStyle();
+  }
+  const labV = ENG.sdk.view === 'mirror' ? 'mirror' : 'firstPerson';
+  document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === labV));
+}
+// Anchors: real engine game objects standing in for the TRACKED content. They
+// appear in the OBJECTS list, click-select like anything else, take the gizmo —
+// and every frame their delta-from-home + scale is streamed into TRACK_OFF,
+// repositioning the live tracked hands / body. Never saved into session
+// snapshots; deleting one resets its offset.
+const ENG_TRACKERS = [
+  { sub: 'body',  label: '🧍 tracked body',   size: [0.5, 1.8, 0.35], home: [0, 0.9, -0.4], color: 0x39ff5a },
+  { sub: 'handR', label: '🖐 tracked hand R', size: [0.22, 0.22, 0.22], home: [0.55, 1.15, 0], color: 0x66e0ff },
+  { sub: 'handL', label: '🖐 tracked hand L', size: [0.22, 0.22, 0.22], home: [-0.55, 1.15, 0], color: 0x66e0ff },
+];
+function engTrackersAdd() {
+  for (const t of ENG_TRACKERS) {
+    if (ENG.objects.some(o => o.userData.eng && o.userData.eng.sub === t.sub)) continue;
+    const isBody = t.sub === 'body';
+    // the 🧍 anchor IS the tracked figure as a game object: a small origin
+    // marker (the gizmo pivot) plus an invisible avatar-style pick-box that
+    // hugs the LIVE skeleton every frame — so you click the figure itself,
+    // the selection box wraps it, and move/rotate/scale gizmos (and the EXACT
+    // row) manipulate it exactly like the avatar. Its transform still streams
+    // into TRACK_OFF; the hugger is display/pick only (no feedback loop).
+    const m = new THREE.Mesh(
+      new THREE.BoxGeometry(...(isBody ? [0.15, 0.15, 0.15] : t.size)),
+      new THREE.MeshBasicMaterial({ color: t.color, wireframe: true, transparent: true, opacity: 0.55 }));
+    m.position.fromArray(t.home);
+    m.userData.eng = { id: 'trk_' + t.sub, type: 'tracker', sub: t.sub, label: t.label, home: t.home };
+    if (isBody) {
+      const hug = new THREE.Mesh(
+        new THREE.BoxGeometry(1, 1, 1),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+      m.add(hug);
+      m.userData.pickProxy = hug;
+    }
+    ENG.objRoot.add(m); ENG.objects.push(m);
+  }
+  engRefreshList();
+}
+function engTrackersRemove() {
+  for (const o of [...ENG.objects]) {
+    if (o.userData.eng && o.userData.eng.type === 'tracker') {
+      if (ENG.sel === o) engSelect(null);
+      ENG.objRoot.remove(o); ENG.objects = ENG.objects.filter(x => x !== o);
+    }
+  }
+  engRefreshList();
+}
+const _trkB = new THREE.Box3(), _trkC = new THREE.Vector3(), _trkS = new THREE.Vector3();
+function engTrackersSync() {
+  const T = window.__lab && window.__lab.TRACK_OFF;
+  if (!T) return;
+  for (const o of ENG.objects) {
+    const d = o.userData.eng;
+    if (!d || d.type !== 'tracker') continue;
+    const off = T[d.sub];
+    off.x = o.position.x - d.home[0];
+    off.y = o.position.y - d.home[1];
+    off.z = o.position.z - d.home[2];
+    off.s = o.scale.x;
+    off.qx = o.quaternion.x; off.qy = o.quaternion.y;
+    off.qz = o.quaternion.z; off.qw = o.quaternion.w;
+    // refit the body hugger to the LIVE figure (engBodyPts already carries the
+    // offsets, so the box wraps exactly what is on screen; world-axis-aligned
+    // via the parent-rotation inverse). No pose → collapse to the marker.
+    if (d.sub === 'body' && o.userData.pickProxy) {
+      const pts = ENG.ovBodyPts || (window.__lab && window.__lab.engBodyPts);
+      const h = o.userData.pickProxy;
+      o.updateWorldMatrix(true, false);
+      if (pts && pts.length) {
+        _trkB.makeEmpty();
+        for (const p of pts) if (p) _trkB.expandByPoint(p);
+        _trkB.expandByScalar(0.08);
+        _trkB.getCenter(_trkC); _trkB.getSize(_trkS);
+        h.position.copy(o.worldToLocal(_trkC));
+        h.quaternion.copy(o.quaternion).invert();
+        h.scale.set(
+          Math.max(_trkS.x, 0.1) / Math.max(o.scale.x, 1e-3),
+          Math.max(_trkS.y, 0.1) / Math.max(o.scale.y, 1e-3),
+          Math.max(_trkS.z, 0.1) / Math.max(o.scale.z, 1e-3));
+      } else {
+        h.position.set(0, 0, 0);
+        h.quaternion.identity();
+        h.scale.setScalar(0.16 / Math.max(o.scale.x, 1e-3));
+      }
+    }
+  }
+}
+
+async function engSdkOn() {
+  if (!S.running) {                          // engine was entered straight from the entry screen
+    toast('▸ starting camera + trackers…', 6000);
+    await boot();                            // same boot the ▶ START button runs
+    if (!S.running) throw new Error(els.bootMsg.textContent || 'camera failed');
+  }
+  if (!ENG.sdk.saved) ENG.sdk.saved = { mode: S.mode, display: S.display };
+  engSdkApplyView();                          // POV (beat-game framing) or Mirror (camera overlay)
+  applyDisplay(ENG_SDK_DISP[ENG.sdk.part]);
+  if (ENG.sdk.view === 'pov') engSdkOverlayStyle();
+  ENG.sdk.on = true;
+  document.body.classList.add('eng-sdk');
+  engSdkRowsRefresh();
+  engTrackersAdd();                            // 🧍/🖐 anchors join the OBJECTS list
+  document.querySelectorAll('#engSdkSkin .opt').forEach(x =>   // reflect the live look
+    x.classList.toggle('sel', x.dataset.skin === (rigR && rigR.look === 'flesh' ? 'flesh' : 'ghost')));
+  toast(ENG.sdk.part === 'hand' ? '🖐 tracking live — punch into the engine (POV)'
+      : ENG.sdk.part === 'body' ? '🧍 body tracking live — your figure stands in the engine'
+      : '🖐+🧍 hand + body tracking live (POV)');
+}
+function engSdkOff() {
+  ENG.sdk.on = false;
+  document.body.classList.remove('eng-sdk');
+  engSdkRowsRefresh();
+  document.body.classList.remove('eng-mirror');
+  engTrackersRemove();
+  engEls.engSdkChk.checked = false;
+  const s = ENG.sdk.saved; ENG.sdk.saved = null;
+  if (s) {                                   // hand the lab back exactly as we found it
+    applyDisplay(s.display);
+    applyMode(s.mode === 'inspect' ? 'mirror' : s.mode);
+    document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === s.mode));
+  }
+}
+
+engEls.engBtn.addEventListener('click', () => engEnter().catch(e => toast('engine failed: ' + e.message)));
+engEls.engBack.addEventListener('click', engExit);
+engEls.engSdkChk.addEventListener('change', () => {
+  if (engEls.engSdkChk.checked) engSdkOn().catch(e => { engSdkOff(); toast('⚠ tracking failed: ' + e.message, 5000); });
+  else engSdkOff();
+});
+engEls.engSdkParts.addEventListener('click', e => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  document.querySelectorAll('#engSdkParts .opt').forEach(x => x.classList.toggle('sel', x === b));
+  document.querySelectorAll('#engBodySuite .opt').forEach(x => x.classList.remove('sel'));
+  ENG.sdk.part = b.dataset.part;
+  engSdkRowsRefresh();
+  if (ENG.sdk.on) { applyDisplay(ENG_SDK_DISP[ENG.sdk.part]); engSdkOverlayStyle(); }   // instant switch
+});
+
+// ── BODY SUITE presets: the lab's full-body pathways, callable from the engine.
+// Each preset clicks the LAB's own controls (players · latency model · mesh
+// isolation), so the engine runs the identical code path as the lab panel:
+//   body3d    → single player, force the 3D body model, body + hands view
+//   fast2d    → single player, force the fast 2D body model (hands stay 3D)
+//   multiId   → group mode: body-only multi-person tracking with strict clean
+//               per-player ids (skeletons view auto-joins the multiplayer engine)
+//   handsBody → body + hands with automatic model switching by player count
+const engLabClick = (sel) => { const el = document.querySelector(sel); if (el) el.click(); };
+const ENG_BODY_PRESETS = {
+  body3d:    { part: 'both', msg: '🧍 full 3D body — highest fidelity (single player)',
+               run: () => { if (S.mp) engLabClick('#mpOpts [data-p="single"]'); engLabClick('#mpModeOpts [data-m="B"]'); applyDisplay('handsBody'); } },
+  fast2d:    { part: 'both', msg: '⚡ fast 2D body — lowest latency, hands stay 3D',
+               run: () => { if (S.mp) engLabClick('#mpOpts [data-p="single"]'); engLabClick('#mpModeOpts [data-m="A"]'); applyDisplay('handsBody'); } },
+  multiId:   { part: 'body', msg: '👥 multi-person group tracking — clean per-player IDs, up to 6',
+               run: () => { engLabClick('#mpModeOpts [data-m="auto"]'); applyDisplay('skeletons'); } },
+  handsBody: { part: 'both', msg: '🖐+🧍 full body + hands — single person, full-fidelity pose',
+               run: () => { if (S.mp) engLabClick('#mpOpts [data-p="single"]'); engLabClick('#mpModeOpts [data-m="auto"]'); applyDisplay('handsBody'); } },
+};
+engEls.engBodySuite.addEventListener('click', e => {
+  const b = e.target.closest('.opt'); if (!b || !ENG.sdk.on) return;
+  const p = ENG_BODY_PRESETS[b.dataset.bs]; if (!p) return;
+  p.run();
+  engSdkOverlayStyle();                                    // keep the engine world visible behind
+  ENG.sdk.part = p.part;
+  engSdkRowsRefresh();
+  document.querySelectorAll('#engBodySuite .opt').forEach(x => x.classList.toggle('sel', x === b));
+  document.querySelectorAll('#engSdkParts .opt').forEach(x => x.classList.toggle('sel', x.dataset.part === p.part));
+  toast(p.msg, 3500);
+});
+engEls.engSdkView.addEventListener('click', e => {
+  const b = e.target.closest('.opt'); if (!b) return;
+  document.querySelectorAll('#engSdkView .opt').forEach(x => x.classList.toggle('sel', x === b));
+  ENG.sdk.view = b.dataset.view;
+  if (ENG.sdk.on) {
+    engSdkApplyView();
+    toast(ENG.sdk.view === 'mirror' ? '🪞 mirror — camera + tracking overlay' : '🎮 POV — tracking reaches into the engine');
+  }
+});
+engEls.engFaceRow.addEventListener('click', e => {
+  const b = e.target.closest('.opt'); if (!b || !ENG.sdk.on) return;
+  document.querySelectorAll('#engFaceRow .opt').forEach(x => x.classList.toggle('sel', x === b));
+  ENG.sdk.face = b.dataset.face;
+  if (ENG.sdk.face !== 'off') {
+    ensureFaceTracking()
+      .then(() => toast(ENG.sdk.face === 'simple' ? '👁 face: eyes + mouth — neon outline' : '🙂 face: full landmark tracking — neon outline'))
+      .catch(err => toast('⚠ face tracking failed: ' + (err.message || err), 5000));
+  } else {
+    updateFaceOutline(null);
+    toast('face tracking off');
+  }
+});
+engEls.engSdkSkin.addEventListener('click', e => {
+  const b = e.target.closest('.opt'); if (!b || !ENG.sdk.on) return;
+  setHandSkin(b.dataset.skin)
+    .then(() => toast(b.dataset.skin === 'flesh' ? '🖐 flesh avatar hands — same rig, same tracking' : '👻 ghost hands'))
+    .catch(err => toast('⚠ ' + (err.message || err), 4000));
+});
+engEls.engSkyChk.addEventListener('change', () => ENG.sky.visible = engEls.engSkyChk.checked);
+engEls.engGridChk.addEventListener('change', () => ENG.grid.visible = engEls.engGridChk.checked);
+document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.sp === 'avatar') {
+    toast('loading avatar…', 5000);
+    engSpawnAvatar().then(() => toast('🧍 avatar — select it for the animation strip'))
+      .catch(err => toast('⚠ avatar failed: ' + (err.message || err), 5000));
+    return;
+  }
+  engSpawn(b.dataset.sp);
+}));
+document.querySelectorAll('#engGizRow .opt').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#engGizRow .opt').forEach(x => x.classList.toggle('sel', x === b));
+  ENG.tc.setMode(b.dataset.g);
+}));
+// EXACT transform (Unity-style numeric entry): ×whole = uniform scale in one
+// step (no per-axis handle dragging); → move = N units along the picked world
+// axis (matches the gizmo arrows). Box helper + anchor offsets re-sync in
+// engLoop, so these compose with everything the drag gizmo drives.
+document.querySelectorAll('#engExactRow [data-ax]').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#engExactRow [data-ax]').forEach(x => x.classList.toggle('sel', x === b));
+}));
+function engExactApply(kind) {
+  if (!ENG.sel) { toast('select an object first'); return; }
+  const v = parseFloat(document.getElementById('engExactVal').value);
+  if (!Number.isFinite(v)) { toast('enter a number'); return; }
+  if (kind === 'scale') {
+    if (v <= 0) { toast('scale factor must be > 0'); return; }
+    ENG.sel.scale.multiplyScalar(v);
+    toast('⤢ ×' + v + ' → whole-object scale now ' + ENG.sel.scale.x.toFixed(2));
+  } else {
+    const ax = document.querySelector('#engExactRow [data-ax].sel').dataset.ax;
+    ENG.sel.position[ax] += v;
+    toast('→ moved ' + v + ' unit(s) along ' + ax.toUpperCase());
+  }
+}
+document.getElementById('engExactMove').addEventListener('click', () => engExactApply('move'));
+document.getElementById('engExactScale').addEventListener('click', () => engExactApply('scale'));
+document.getElementById('engExactVal').addEventListener('keydown', e => {
+  if (e.key === 'Enter') engExactApply(ENG.tc.mode === 'scale' ? 'scale' : 'move');
+});
+engEls.engUrlGo.addEventListener('click', () => {
+  const url = engEls.engUrl.value.trim();
+  if (url) engImportGLB(url).catch(e => toast('⚠ ' + e.message, 4000));
+});
+engEls.engDup.addEventListener('click', () => {
+  if (!ENG.sel) { toast('select an object first'); return; }
+  const c = ENG.sel.clone();
+  c.position.x += 0.6;
+  engAdopt(c, { ...ENG.sel.userData.eng, label: ENG.sel.userData.eng.label + ' copy' });
+});
+engEls.engDesel.addEventListener('click', () => engSelect(null));
+engEls.engSave.addEventListener('click', () => { localStorage.setItem(ENG_STORE, JSON.stringify(engSnapshot())); toast('💾 engine scene saved (this browser)'); });
+engEls.engLoad.addEventListener('click', () => {
+  const s = localStorage.getItem(ENG_STORE);
+  if (!s) { toast('no saved engine scene yet'); return; }
+  engRestore(JSON.parse(s)).then(() => toast('📂 scene restored'));
+});
+engEls.engClear.addEventListener('click', () => {
+  for (const o of [...ENG.objects]) if (o.userData.eng.type !== 'tracker') engDelete(o);
+  toast('cleared (tracking anchors stay)');
+});
+addEventListener('keydown', e => {
+  if (!ENG.on || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  if (e.key === '1' || e.key === '2' || e.key === '3') document.querySelectorAll('#engGizRow .opt')[+e.key - 1].click();
+  if ((e.key === 'Delete' || e.key === 'Backspace') && ENG.sel) engDelete(ENG.sel);
+  if (e.key === 'Escape') engSelect(null);
+});
 </script>
 <script src="./sdk/ui/panel-toggle.js" defer></script>
 </body>

@@ -630,6 +630,28 @@ export function rigExternalGeometry(geometry, rest, { fit = true } = {}) {
     geo.translate((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
   }
   if (!geo.getAttribute('normal')) geo.computeVertexNormals();
-  const skin = computeBoneWeights(geo, lm);
+  // AUTHORED WEIGHTS: an external mesh may carry its skinning as custom
+  // attributes (_BIDX/_BWT vec3 per vertex, HAND_BONES order — e.g. baked in
+  // Blender with per-finger masks + surface smoothing, which the blind
+  // distance binding below cannot reproduce). Prefer them when present.
+  const abi = geo.getAttribute('_BIDX') || geo.getAttribute('_bidx');
+  const abw = geo.getAttribute('_BWT') || geo.getAttribute('_bwt');
+  let skin;
+  if (abi && abw && abi.count === geo.getAttribute('position').count) {
+    const vc = abi.count;
+    const index = new Uint8Array(vc * 3);
+    const weight = new Float32Array(vc * 3);
+    for (let v = 0; v < vc; v++) {
+      let w0 = abw.getX(v), w1 = abw.getY(v), w2 = abw.getZ(v);
+      const s = (w0 + w1 + w2) || 1;
+      index[v * 3] = Math.round(abi.getX(v));
+      index[v * 3 + 1] = Math.round(abi.getY(v));
+      index[v * 3 + 2] = Math.round(abi.getZ(v));
+      weight[v * 3] = w0 / s; weight[v * 3 + 1] = w1 / s; weight[v * 3 + 2] = w2 / s;
+    }
+    skin = { index, weight, stride: 3 };
+  } else {
+    skin = computeBoneWeights(geo, lm);
+  }
   return { geometry: geo, skin };
 }

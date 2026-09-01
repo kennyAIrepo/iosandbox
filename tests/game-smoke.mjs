@@ -294,7 +294,7 @@ console.log('\n[rubiks grip physicality]');
   const hb3 = new HandBody('right');
   const pts3 = baseHand();
   hb3.update(pts3, DT, openImg());
-  const pn = new THREE.Vector3(0, 0, 1).applyQuaternion(hb3.palmQ);   // palm normal
+  const pn = hb3.palmOut.clone();   // MEASURED inner-palm normal
   const rot = new THREE.Quaternion().setFromUnitVectors(pn, new THREE.Vector3(0, 1, 0));
   const pc = hb3.palm.clone();
   for (const p of pts3) p.sub(pc).applyQuaternion(rot).add(pc);
@@ -400,6 +400,120 @@ console.log('\n[rubiks grip physicality]');
     worstIn = Math.min(worstIn, grip.surfaceDistance(hb4.joints[i]) - hb4.radii[i]);
   }
   ok(worstIn > -0.02, `holding hand resolves out of the cube: worst overlap ${(worstIn * 1000).toFixed(1)}mm`);
+}
+
+// ── 10. INNER-HAND BIAS: the back of the hand is never a shelf ──
+console.log('\n[inner-hand bias]');
+{
+  // measured palm side on the rest skeleton: thumb column + fingertip
+  // curl must agree (volar evidence is consistent, sign is latched)
+  const hb0 = new HandBody('right');
+  hb0.update(baseHand(), DT, openImg());
+  ok(Math.abs(hb0.palmSign) === 1, `palm side measured on frame 1: sign=${hb0.palmSign}`);
+
+  // rotate the hand so palm-out points DOWN (back of hand UP), set the
+  // cube on top → no shelf: it must shed off and FALL, and never latch
+  const hb = new HandBody('right');
+  const pts = baseHand();
+  hb.update(pts, DT, openImg());
+  const rot = new THREE.Quaternion().setFromUnitVectors(hb.palmOut.clone(), new THREE.Vector3(0, -1, 0));
+  const pc = hb.palm.clone();
+  for (const p of pts) p.sub(pc).applyQuaternion(rot).add(pc);
+  for (let i = 0; i < 12; i++) hb.update(pts, DT, openImg());
+  ok(hb.palmOut.y < -0.8, `palm-out tracks the flip DOWN: y=${hb.palmOut.y.toFixed(2)}`);
+  const cube = new GrabbableBox(0.085, {});
+  cube.reset(hb.palm.clone().add(new THREE.Vector3(0, 0.085 + 0.03, 0)));
+  let minY = Infinity;
+  for (let f = 0; f < 240; f++) { cube.update(DT, [hb], -5); minY = Math.min(minY, cube.pos.y); }
+  ok(!cube.grabbed(), 'back-of-hand contact never latches');
+  ok(minY < hb.palm.y - 0.4, `no gravity-defying shelf — the cube falls away: dropped ${(hb.palm.y - minY).toFixed(2)}m`);
+}
+
+// ── 11. CLAW PICKUP: curled fingers squeezing opposing faces from above ──
+console.log('\n[claw pickup]');
+{
+  const hb = new HandBody('right');
+  const pts = baseHand();
+  hb.update(pts, DT, openImg());
+  // palm facing DOWN over the cube (the claw pose), palm 0.16m above it
+  const rot = new THREE.Quaternion().setFromUnitVectors(hb.palmOut.clone(), new THREE.Vector3(0, -1, 0));
+  const pc = hb.palm.clone();
+  for (const p of pts) p.sub(pc).applyQuaternion(rot).add(pc);
+  hb.update(pts, DT, openImg());
+  const cube = new GrabbableBox(0.085, {});
+  cube.reset(new THREE.Vector3(0, 0.085, 0));          // resting on the floor
+  const lift = new THREE.Vector3(0, 0.085 + 0.16, 0).sub(hb.palm);
+  for (const p of pts) p.add(lift);
+  hb.update(pts, DT, openImg());
+  // thumb chain squeezes the -x face, index+middle the +x face — UPPER
+  // half only (nothing under the midline: this is the claw, not a wrap)
+  for (const i of [2, 3, 4]) {
+    pts[i].set(-(0.085 + hb.radii[i] * 0.4), 0.10 + (i - 2) * 0.012, 0);
+  }
+  for (const i of [6, 7, 8, 10, 11, 12]) {
+    pts[i].set(0.085 + hb.radii[i] * 0.4, 0.09 + (i % 4) * 0.012, 0.01);
+  }
+  // ring + pinky curl in toward the palm (claw = closed hand, not flat)
+  pts[16].copy(hb.palm).add(new THREE.Vector3(0.02, -0.05, 0));
+  pts[20].copy(hb.palm).add(new THREE.Vector3(0.04, -0.05, 0));
+  for (let s = 0; s < 12; s++) hb.update(pts, DT, openImg());
+  ok(hb.openness < 0.6, `claw pose reads as curled: openness=${hb.openness.toFixed(2)}`);
+  for (let f = 0; f < 10; f++) cube.update(DT, [hb], 0);
+  ok(cube.grabbed(), 'claw latches WITHOUT an under-contact (side-face friction grip)');
+  // lift the hand 0.5m → the cube must come off the table with it
+  for (let f = 0; f < 60; f++) {
+    for (const p of pts) p.y += 0.5 / 60;
+    hb.update(pts, DT, openImg());
+    cube.update(DT, [hb], 0);
+  }
+  ok(cube.grabbed() && cube.pos.y > 0.3,
+    `picked up off the table: y=${cube.pos.y.toFixed(2)} (from 0.085)`);
+}
+
+// ── 12. HELD SEAT: a gripped cube nests INTO the palm, not on the fingertips ──
+console.log('\n[palm seat]');
+{
+  const hb = new HandBody('right');
+  const pts = baseHand();
+  hb.update(pts, DT, openImg());
+  const cube = new GrabbableBox(0.085, { gravity: 0 });
+  cube.reset(hb.palm.clone());
+  const centre = cube.pos;
+  for (const i of [2, 3, 4]) {
+    pts[i].copy(centre).add(new THREE.Vector3(-(0.085 + hb.radii[i] * 0.5), (i - 3) * 0.02, 0));
+  }
+  for (const i of [6, 7, 8, 10, 11, 12]) {
+    pts[i].copy(centre).add(new THREE.Vector3(0.085 + hb.radii[i] * 0.5, (i % 4) * 0.02 - 0.02, 0.01));
+  }
+  hb.update(pts, DT, openImg());
+  hb.update(pts, DT, openImg());
+  cube.update(DT, [hb], -5);
+  ok(cube.grabbed(), 'wrap grip latches');
+  for (let f = 0; f < 150; f++) { hb.update(pts, DT, openImg()); cube.update(DT, [hb], -5); }
+  const d = cube.pos.clone().sub(hb.palm);
+  const along = d.dot(hb.palmOut);
+  const tang = d.clone().addScaledVector(hb.palmOut, -along).length();
+  ok(cube.grabbed() && along > 0.02,
+    `held cube sits on the PALM side: ${along.toFixed(3)}m along palm-out`);
+  ok(tang < 0.1, `centred over the palm, not riding the fingertips: tangential ${tang.toFixed(3)}m`);
+}
+
+// ── 13. FRAME KEEPER: a hard throw reflects off the frame walls ──
+console.log('\n[frame keeper]');
+{
+  const box = new GrabbableBox(0.085, {});
+  box.reset(new THREE.Vector3(0, 0.5, 0));
+  box.vel.set(3.5, 1.5, 0);
+  let maxX = 0, maxY = 0;
+  for (let f = 0; f < 600; f++) {
+    box.update(DT, [], 0);
+    box.contain(-1.2, 1.2, 1.5, DT);
+    maxX = Math.max(maxX, Math.abs(box.pos.x));
+    maxY = Math.max(maxY, box.pos.y);
+  }
+  ok(maxX < 1.35, `never leaves the frame sideways: max|x|=${maxX.toFixed(2)} (wall at 1.2)`);
+  ok(maxY < 1.65, `never leaves through the top: maxY=${maxY.toFixed(2)} (ceiling at 1.5)`);
+  ok(Math.abs(box.pos.x) <= 1.25 && box.pos.y < 0.15, 'settles back inside the frame');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -108,6 +108,48 @@ export function loadModel(url, targetScene, opts = {}) {
  * Split a hand model into left/right halves by X position.
  * Returns geometry data for RiggedHand.init().
  */
+/**
+ * Load a two-mesh hand pair GLB (nodes named HandR / HandL) authored DIRECTLY
+ * in the SDK's rest-landmark space (REST_R42 / REST_L42 — see hands.js).
+ * Unlike splitHandModel there is NO recentering and NO x-sign split: the
+ * geometry is taken verbatim, so rigging it with { geometryFit: false } is
+ * exact by construction. Returns { right, left } BufferGeometries.
+ *
+ * sdk/assets/hands_flesh.glb — realistic hand pair, retargeted in Blender onto
+ * the MediaPipe rest skeleton (21 joints detected in the source, thin-plate RBF
+ * warp onto REST_R42, mirrored left). Source: "Human hand model, open with
+ * fingers spread" by tinkerlane_studio —
+ * sketchfab.com/3d-models/906e3e1acb7243c4aafaad4779d7562d (CC Attribution).
+ *
+ * ⚠ PARKED, not wired to any UI: static alignment is exact (identity drift
+ * ≈3e-8) but an external sculpt needs HAND-AUTHORED skin weights to move
+ * cleanly under the landmark deformer — every auto-weighting tried (segment
+ * distance, heat, masked-per-finger) shatters fists or crumples the palm.
+ * The shipped "flesh" style instead reuses the forge geometry (ghost-identical
+ * deformation) with the flesh material — see mpbrowser setHandSkin(). Revisit
+ * by weight-painting this pair properly in Blender, then rigging it via
+ * { geometry, geometryFit: false } like the holo GLB.
+ */
+export function loadHandPair(url) {
+  return new Promise((resolve, reject) => {
+    loader.load(url, (gltf) => {
+      const out = {};
+      gltf.scene.updateMatrixWorld(true);
+      gltf.scene.traverse(c => {
+        if (!c.isMesh) return;
+        const n = (c.name || '').toLowerCase();
+        const key = n.includes('handr') ? 'right' : n.includes('handl') ? 'left' : null;
+        if (!key) return;
+        const g = c.geometry.clone();
+        g.applyMatrix4(c.matrixWorld);       // bake any node transform (authored identity)
+        out[key] = g;
+      });
+      if (!out.right || !out.left) { reject(new Error('hand pair GLB needs meshes named HandR and HandL')); return; }
+      resolve(out);
+    }, null, reject);
+  });
+}
+
 export function splitHandModel(url) {
   return new Promise((resolve, reject) => {
     loader.load(url, (gltf) => {

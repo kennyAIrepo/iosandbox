@@ -97,6 +97,51 @@ export function makeGhostMaterial(uniforms) {
   });
 }
 
+// ── Flesh shader — opaque realistic skin for the avatar hands ───────────────
+// Same lighting rig as the ghost (half-Lambert wrap + fresnel + aDetail masks)
+// but reads as matter instead of hologram: warm albedo, red subsurface bleed
+// where light exits thin flesh (finger silhouettes), crease darkening, pale
+// glossy nail plates, broad low sheen. Opaque + depthWrite so it occludes like
+// a real hand in the engine / avatar setting. Shares the ghost's vertex shader
+// and uniforms object (uGlow contact heat works identically).
+const FLESH_FRAG = /* glsl */`
+uniform float uTime, uGlow;
+uniform vec3 uSkin;
+varying vec3 vN, vV, vW, vDet;
+void main() {
+  vec3 N = normalize(vN), V = normalize(vV);
+  vec3 L = normalize(vec3(0.35, 0.85, 0.55));
+  float ndv = abs(dot(N, V));
+  float wrap = pow(0.5 + 0.5 * dot(N, L), 1.35);           // soft skin diffuse
+  float fres = pow(1.0 - ndv, 2.2);
+  // NOTE: no painted detail here (no vDet nails/creases/knuckles) — on an
+  // external sculpt those masks land in the wrong places (white finger caps,
+  // brown streaks). Realism comes from the sculpt's own geometry + normals;
+  // the shader stays a clean, even skin.
+  vec3 base = uSkin;
+  vec3 c = base * (0.30 + 0.80 * wrap);
+  c += base * (0.5 + 0.5 * N.y) * 0.14;                     // sky fill
+  c += vec3(0.35, 0.07, 0.04) * fres * 0.30;                // subsurface red bleed at thin edges
+  vec3 H = normalize(L + V);
+  float spec = pow(max(dot(N, H), 0.0), 26.0);
+  c += vec3(1.0, 0.96, 0.90) * spec * 0.09;                 // broad low sheen
+  c += vec3(0.95, 0.55, 0.25) * uGlow;                      // contact heat (shared with ghost)
+  gl_FragColor = vec4(c, 1.0);
+}`;
+
+export function makeFleshMaterial(uniforms) {
+  return new THREE.ShaderMaterial({
+    vertexShader: GHOST_VERT,
+    fragmentShader: FLESH_FRAG,
+    uniforms,
+    transparent: false,
+    depthWrite: true,
+    // DoubleSide: an external sculpt has deep crease valleys; under strong
+    // deformation a front-culled valley wall reads as a see-through slit.
+    side: THREE.DoubleSide,
+  });
+}
+
 // ── Rig ─────────────────────────────────────────────────────────
 const _v = new THREE.Vector3(), _y = new THREE.Vector3(), _z = new THREE.Vector3(), _x = new THREE.Vector3();
 const _n = new THREE.Vector3(), _m = new THREE.Matrix4();
@@ -123,7 +168,9 @@ export class HoloHandRig {
       uAlpha: { value: opts.alpha ?? 0.46 },
       uBody: { value: new THREE.Color(opts.body ?? 0x6fb0dc) },   // pale glowing blue
       uRim: { value: new THREE.Color(opts.rim ?? 0xaeeaff) },
+      uSkin: { value: new THREE.Color(opts.skin ?? 0xe0b69e) },   // flesh look albedo
     };
+    this.look = opts.look || 'ghost';    // 'ghost' (holo blue) | 'flesh' (realistic skin)
 
     // Rest bone data
     const nb = HAND_BONES.length;
@@ -231,7 +278,8 @@ export class HoloHandRig {
     geometry.getAttribute('normal').setUsage(THREE.DynamicDrawUsage);
     geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e6);   // we own culling
 
-    this.mesh = new THREE.Mesh(geometry, makeGhostMaterial(this.uniforms));
+    this.mesh = new THREE.Mesh(geometry,
+      this.look === 'flesh' ? makeFleshMaterial(this.uniforms) : makeGhostMaterial(this.uniforms));
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 10;   // draw after the scene so blending reads it
     this.grp.add(this.mesh);
@@ -269,6 +317,17 @@ export class HoloHandRig {
     if (alpha !== undefined) this.uniforms.uAlpha.value = alpha;
     if (body !== undefined) this.uniforms.uBody.value.set(body);
     if (rim !== undefined) this.uniforms.uRim.value.set(rim);
+  }
+
+  /** Switch the surface look in place — 'ghost' | 'flesh'. Geometry, skinning
+   *  and filters are untouched; only the material swaps (uniforms are shared). */
+  setLook(look, { skin } = {}) {
+    this.look = look === 'flesh' ? 'flesh' : 'ghost';
+    if (skin !== undefined) this.uniforms.uSkin.value.set(skin);
+    if (!this.mesh) return this;
+    this.mesh.material.dispose();
+    this.mesh.material = this.look === 'flesh' ? makeFleshMaterial(this.uniforms) : makeGhostMaterial(this.uniforms);
+    return this;
   }
 
   /**

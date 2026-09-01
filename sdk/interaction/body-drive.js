@@ -126,7 +126,12 @@ const DEFAULTS = {
   // melts the hand into claw poses.
   dirCutoff: 1.2, dirBeta: 0.6,
   handCutoff: 1.5, handBeta: 0.5,   // One-Euro on the 21 hand points (metres)
-  fingerAxis: 'x', fingerSign: -1, fingerCurlDeg: 65   // scalar-curl fallback
+  fingerAxis: 'x', fingerSign: -1, fingerCurlDeg: 65,  // scalar-curl fallback
+  // v4.1 — spine bend DISTRIBUTED down the chain (Kalidokit doctrine: the same
+  // torso rotation lands on Spine at 0.45 and Chest at 0.25, never one sharp
+  // hinge at the lowest bone). Fractions are of the REMAINING delta, re-measured
+  // per bone, so the sum under-reaches slightly — soft, natural bend.
+  spineFracs: [0.5, 0.3, 0.2]
 };
 
 export class BipedDriver {
@@ -208,6 +213,10 @@ export class BipedDriver {
     scene.traverse(o => { if (o.isBone) this.rest[o.name] = o.quaternion.clone(); });
     this.drive = { neck: Array.isArray(j.neck) ? j.neck[0] : j.neck,
                    armL: arm(j.frontL, 0), legL: leg(j.hindL, 0) };
+    // v4.1: full spine chain for distributed bend (the 'spine' seg only lists
+    // spine[0]; the extra chain bones must be reset + partially rotated too)
+    this.spineChain = (Array.isArray(j.spine) ? j.spine : [j.spine])
+      .filter(n => n && this.bones[n]);
 
     // finger chains + hand solve state per side
     this.fingers = { L: {}, R: {} };
@@ -305,6 +314,31 @@ export class BipedDriver {
       this._q.copy(this._qp).invert().multiply(this._qd).multiply(this._qp));
   }
 
+  // v4.1 — distributed chain alignment (spine): each chain bone applies only a
+  // FRACTION of the delta that would aim chain→end at `dir`, re-measured after
+  // every partial rotation. Kalidokit's Spine 0.45 / Chest 0.25 pattern: bend
+  // spreads down the torso instead of hinging at the lowest bone; fractions
+  // under-reach on purpose (soft), and the target was cone-clamped upstream.
+  _alignChain(chain, endBone, dir, fracs) {
+    for (let i = 0; i < chain.length; i++) {
+      const f = fracs[i] ?? 0;
+      if (f <= 0) continue;
+      const bone = this.bones[chain[i]];
+      if (!bone) continue;
+      bone.updateWorldMatrix(true, false);
+      endBone.updateWorldMatrix(true, false);
+      this._v.a.setFromMatrixPosition(bone.matrixWorld);
+      this._v.b.setFromMatrixPosition(endBone.matrixWorld);
+      const cur = this._v.b.sub(this._v.a);
+      if (cur.lengthSq() < 1e-10) continue;
+      this._qd.setFromUnitVectors(cur.normalize(), dir);
+      this._qs.identity().slerp(this._qd, f);
+      bone.parent.getWorldQuaternion(this._qp);
+      bone.quaternion.premultiply(
+        this._q.copy(this._qp).invert().multiply(this._qs).multiply(this._qp));
+    }
+  }
+
   // palm basis (hands.js buildFrame formula) from three points relative to a wrist
   // y = wrist→middle, z = y × (index−pinky) [palm normal], x = y × z
   _palmQuat(wrist, index, middle, pinky, out) {
@@ -336,6 +370,7 @@ export class BipedDriver {
     const o = this.opts;
 
     for (const s of this.segs) this.bones[s.bone].quaternion.copy(this.rest[s.bone]);
+    if (this.spineChain) for (const n of this.spineChain) this.bones[n].quaternion.copy(this.rest[n]);
 
     const vis = i => poseWorld?.[i]?.visibility ?? (poseWorld ? 1 : 0);
     for (const s of this.segs) {
@@ -399,7 +434,11 @@ export class BipedDriver {
       }
       s.appliedOk = true;
 
-      this._alignBone(this.bones[s.bone], this.bones[s.child], c);
+      if (s.kind === 'spine' && this.spineChain && this.spineChain.length > 1) {
+        this._alignChain(this.spineChain, this.bones[s.child], c, o.spineFracs);
+      } else {
+        this._alignBone(this.bones[s.bone], this.bones[s.child], c);
+      }
     }
 
     this.root.position.y = this.baseY - (v['body.crouch'] ?? 0) * o.crouchDropFrac * this.height;
