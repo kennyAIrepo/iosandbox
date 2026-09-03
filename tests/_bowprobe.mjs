@@ -27,6 +27,28 @@ await page.waitForFunction(() => window.__eng.bows && window.__eng.bows.size ===
 await page.waitForFunction(() => !!window.__eng.arrowTpl, { timeout: 120000 });
 await new Promise(r => setTimeout(r, 300));
 
+// ── ARROW ORIENTATION LOCK: tail (origin) must be the fletching — its band is
+// wider than the head band. A flipped template loads every arrow backwards. ──
+const arrowOrient = await page.evaluate(() => {
+  const T3 = window.__lab.THREE;
+  const tpl = window.__eng.arrowTpl;
+  tpl.updateMatrixWorld(true);
+  const inv = new T3.Matrix4().copy(tpl.matrixWorld).invert();
+  const v = new T3.Vector3();
+  let tailR = 0, tailN = 0, tipR = 0, tipN = 0;
+  tpl.traverse(m => {
+    if (!m.isMesh) return;
+    const pos = m.geometry.getAttribute('position');
+    for (let i = 0; i < pos.count; i++) {
+      v.fromBufferAttribute(pos, i).applyMatrix4(m.matrixWorld).applyMatrix4(inv);
+      const r = Math.hypot(v.x, v.z);
+      if (v.y < 1.15 * 0.12) { tailR += r; tailN++; }
+      else if (v.y > 1.15 * 0.88) { tipR += r; tipN++; }
+    }
+  });
+  return { tail: +(tailN ? tailR / tailN : 0).toFixed(3), tip: +(tipN ? tipR / tipN : 0).toFixed(3) };
+});
+
 // ── morph contracts via the external draw seam (the future gesture input) ──
 const morph = await page.evaluate(() => {
   const bow = window.__eng.objects.find(o => o.userData.eng.type === 'bow');
@@ -314,8 +336,10 @@ const holo = await page.evaluate(async () => {
 });
 await browser.close();
 
-console.log(JSON.stringify({ morph, hintShown, during, shot, after, gest, holo }, null, 2));
+console.log(JSON.stringify({ arrowOrient, morph, hintShown, during, shot, after, gest, holo }, null, 2));
 const fail = [];
+if (arrowOrient.tail <= arrowOrient.tip)
+  fail.push('ARROW FLIPPED: template tail (origin) must be the wide fletching end: ' + JSON.stringify(arrowOrient));
 if (!holo.user.on || !holo.user.posLogged) fail.push('USER PRESENCE: tracked user not located/logged: ' + JSON.stringify(holo.user));
 if (holo.spawn.gripAtLeftHand > 0.25) fail.push('bow grip did not materialize AT the left hand: ' + holo.spawn.gripAtLeftHand + 'm away');
 if (holo.spawn.arrowAtRightHand > 0.25) fail.push('arrow did not materialize AT the right hand: ' + holo.spawn.arrowAtRightHand + 'm away');

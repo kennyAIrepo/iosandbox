@@ -4918,22 +4918,47 @@ function engLoadArrowTpl(GLTFLoader) {
       return out;
     };
     const endA = far(c), endB = far(endA);
-    const axis = new THREE.Vector3().subVectors(endB, endA);
-    const len = axis.length();
-    axis.normalize();
-    const spreadNear = end => {                // cross-section spread in the outer 8%
-      let s = 0, m = 0;
+    // PRINCIPAL axis (power iteration on the covariance), seeded by the
+    // extreme pair. The naked extreme-pair axis runs point-to-feather-CORNER
+    // and tilts off the shaft — a spread test along it once read the
+    // fletching as the tip and every arrow loaded head-backwards. MEASURE.
+    const cov = [0, 0, 0, 0, 0, 0];
+    for (let v = 0; v < pos.count; v += step) {
+      _bV.fromBufferAttribute(pos, v).sub(c);
+      cov[0] += _bV.x * _bV.x; cov[1] += _bV.x * _bV.y; cov[2] += _bV.x * _bV.z;
+      cov[3] += _bV.y * _bV.y; cov[4] += _bV.y * _bV.z; cov[5] += _bV.z * _bV.z;
+    }
+    const axis = new THREE.Vector3().subVectors(endB, endA).normalize();
+    for (let it = 0; it < 12; it++) {
+      axis.set(
+        cov[0] * axis.x + cov[1] * axis.y + cov[2] * axis.z,
+        cov[1] * axis.x + cov[3] * axis.y + cov[4] * axis.z,
+        cov[2] * axis.x + cov[4] * axis.y + cov[5] * axis.z).normalize();
+    }
+    let tMin = Infinity, tMax = -Infinity;
+    for (let v = 0; v < pos.count; v += step) {
+      const a = _bV.fromBufferAttribute(pos, v).sub(c).dot(axis);
+      if (a < tMin) tMin = a;
+      if (a > tMax) tMax = a;
+    }
+    const len = tMax - tMin;
+    // SUSTAINED width (p75 radial spread over the outer 12%): the fletching
+    // stays wide to its very end, the head narrows to a point — that contrast
+    // survives decimation, re-scans and axis noise
+    const spreadNear = (tEnd, inward) => {
+      const rs = [];
       for (let v = 0; v < pos.count; v += step) {
-        _bV.fromBufferAttribute(pos, v).sub(end);
-        const a = Math.abs(_bV.dot(axis));
-        if (a > len * 0.08) continue;
-        s += _bV.addScaledVector(axis, -_bV.dot(axis)).length(); m++;
+        _bV.fromBufferAttribute(pos, v).sub(c);
+        const a = _bV.dot(axis);
+        if (inward > 0 ? a > tEnd + len * 0.12 : a < tEnd - len * 0.12) continue;
+        rs.push(_bV.addScaledVector(axis, -a).length());
       }
-      return m ? s / m : 0;
+      rs.sort((p2, q2) => p2 - q2);
+      return rs.length ? rs[Math.floor(rs.length * 0.75)] : 0;
     };
-    const tip = spreadNear(endA) < spreadNear(endB) ? endA : endB;
-    const tail = tip === endA ? endB : endA;
-    const dir = new THREE.Vector3().subVectors(tip, tail).normalize();
+    const tipAtMax = spreadNear(tMax, -1) < spreadNear(tMin, 1);
+    const dir = tipAtMax ? axis.clone() : axis.clone().negate();
+    const tail = c.clone().addScaledVector(axis, tipAtMax ? tMin : tMax);
     const s = ENG_ARROW_REL / len;             // arrow length for the 1.9-span bow
     const q = new THREE.Quaternion().setFromUnitVectors(dir, _bY);
     const tpl = new THREE.Group();
