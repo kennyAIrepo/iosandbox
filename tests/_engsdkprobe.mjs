@@ -50,11 +50,13 @@ const offSync = await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 150));
   return res;
 });
-// BODY CHIRALITY CONTRACT: raw MediaPipe world pose (left wrist raised) through
-// retarget + povFaceAway must land real-LEFT on screen-LEFT, keep the raise on
-// the left limb, and INVERT the facing (nose depth flips about the hips).
+// BODY POV CONTRACT: raw MediaPipe world pose (left wrist raised) through
+// retarget + the MEASURED povFaceAway normalizer must come out PROPER (real
+// left on screen-left, raise on the left limb, shoulder-frame facing agreeing
+// with the nose facing) and FACING AWAY from the dolly — whatever convention
+// retarget emits. The full 4-state input matrix lives in tests/_povprobe.mjs.
 const chirality = await page.evaluate(() => {
-  const { bodyPose, povFaceAway, THREE } = window.__lab;
+  const { bodyPose, povFaceAway, THREE, camera } = window.__lab;
   // raw convention: +x = camera-right = subject's LEFT, +y = down, +z = toward camera
   const P = (x, y, z) => ({ x, y, z });
   const w = new Array(33).fill(0).map(() => P(0, -0.3, 0));
@@ -65,7 +67,8 @@ const chirality = await page.evaluate(() => {
   for (const i of [17, 19, 21]) w[i] = P(0.48, -0.85, 0.05);
   for (const i of [18, 20, 22]) w[i] = P(-0.34, -0.05, 0.05);
   w[0] = P(0, -0.68, 0.12);                                        // nose toward camera
-  for (const i of [1,2,3,4,5,6,7,8,9,10]) w[i] = P(0, -0.66, 0.1);
+  for (const i of [1,2,3,4,5,6,9,10]) w[i] = P(0, -0.66, 0.1);
+  w[7] = P(0.06, -0.7, 0.04); w[8] = P(-0.06, -0.7, 0.04);         // ears BEHIND the nose
   w[25] = P(0.1, 0.45, 0); w[26] = P(-0.1, 0.45, 0);
   w[27] = P(0.1, 0.85, 0); w[28] = P(-0.1, 0.85, 0);
   w[29] = P(0.1, 0.9, -0.02); w[30] = P(-0.1, 0.9, -0.02);
@@ -74,19 +77,21 @@ const chirality = await page.evaluate(() => {
   const vis = new Float32Array(33).fill(1);
   const spawn = new THREE.Vector3(0, 0, 0);
   let pts = null;
-  for (let k = 0; k < 6; k++) pts = bodyPose.retarget(w, img, spawn, 0, vis, k / 10);
-  const hipZ = (pts[23].z + pts[24].z) / 2;
-  const rawNoseRel = pts[0].z - hipZ;
-  const raw15 = { x: pts[15].x, y: pts[15].y };
-  const raw16 = { x: pts[16].x, y: pts[16].y };
-  povFaceAway(pts);
-  const flipNoseRel = pts[0].z - ((pts[23].z + pts[24].z) / 2);
+  for (let k = 0; k < 12; k++) {                                   // fresh retarget per pass —
+    pts = bodyPose.retarget(w, img, spawn, 0, vis, k / 10);        // the normalizer's decision
+    povFaceAway(pts);                                              // latch settles over frames
+  }
+  const up = new THREE.Vector3(0, 1, 0);
+  const hip = pts[23].clone().lerp(pts[24], 0.5);
+  const away = hip.clone().sub(camera.position); away.y = 0; away.normalize();
+  const nose = pts[0].clone().sub(pts[7].clone().lerp(pts[8], 0.5)).normalize();
+  const shoulderFwd = pts[11].clone().sub(pts[12]).cross(up).normalize();
   bodyPose.drop();
   return {
     leftOnScreenLeft: pts[15].x < pts[16].x,
     leftRaised: pts[15].y > pts[16].y,
-    sideUnchangedByFlip: pts[15].x === raw15.x,
-    facingFlipped: Math.sign(flipNoseRel) === -Math.sign(rawNoseRel) && Math.abs(rawNoseRel) > 1e-4,
+    proper: +shoulderFwd.dot(nose).toFixed(2),
+    facesAway: +nose.dot(away).toFixed(2),
   };
 });
 // hand↔body PROPORTION: welded hands must RESIZE to the figure (palm = 0.40 ×
@@ -261,7 +266,7 @@ if (inputOk.trackers !== 3) fail.push('tracked anchors missing from OBJECTS: ' +
 if (Math.abs(offSync.y - 0.4) > 0.02 || Math.abs(offSync.s - 1.3) > 0.02) fail.push('anchor gizmo not driving TRACK_OFF: ' + JSON.stringify(offSync));
 if (Math.abs(offSync.qy - 0.707) > 0.01 || Math.abs(offSync.qw - 0.707) > 0.01) fail.push('anchor ROTATION not driving TRACK_OFF: ' + JSON.stringify(offSync));
 if (!chirality.leftOnScreenLeft || !chirality.leftRaised) fail.push('POV chirality wrong (left limb not on screen-left): ' + JSON.stringify(chirality));
-if (!chirality.sideUnchangedByFlip || !chirality.facingFlipped) fail.push('povFaceAway broken: ' + JSON.stringify(chirality));
+if (chirality.proper < 0.05 || chirality.facesAway < 0.05) fail.push('povFaceAway broken (must land proper + facing away): ' + JSON.stringify(chirality));
 const okProp = r => Math.abs(r.palmL - 0.4) < 0.01 && Math.abs(r.palmR - 0.4) < 0.01 && r.seated;
 if (!okProp(prop.full) || !okProp(prop.half)) fail.push('HAND/BODY PROPORTION broken (palm should be 0.40× forearm at any body scale): ' + JSON.stringify(prop));
 if (!figure.hasProxy || !figure.selected || !figure.gizmo || !figure.boxHugs) fail.push('TRACKED FIGURE not a clickable game object (hugger/selection/gizmo): ' + JSON.stringify(figure));

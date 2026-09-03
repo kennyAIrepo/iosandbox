@@ -66,9 +66,9 @@
   .chk input { accent-color: var(--cy); }
   #metrics { font-family: Consolas, monospace; font-size: 10.5px; line-height: 1.75; color: var(--txt); }
   #metrics b { color: var(--cy); font-weight: 600; }
-  #gameBtn, #cubeBtn { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--cy-dim);
+  #gameBtn, #cubeBtn, #bowBtn { width: 100%; padding: 8px; border-radius: 8px; border: 1px solid var(--cy-dim);
     background: rgba(28,64,86,.7); color: #fff; font-size: 12px; letter-spacing: .1em; cursor: pointer; }
-  #gameBtn.on, #cubeBtn.on { background: rgba(120,40,40,.6); border-color: rgba(255,120,120,.5); }
+  #gameBtn.on, #cubeBtn.on, #bowBtn.on { background: rgba(120,40,40,.6); border-color: rgba(255,120,120,.5); }
   #entry { position: fixed; inset: 0; display: grid; place-items: center; z-index: 40;
     background: radial-gradient(ellipse at 50% 40%, #0d1622 0%, #05070c 70%); }
   #entry .card { text-align: center; max-width: 420px; padding: 30px; }
@@ -208,6 +208,7 @@
       <button class="opt" data-sp="cylinder">▮ Cyl</button>
       <button class="opt" data-sp="cone">▲ Cone</button>
       <button class="opt" data-sp="avatar" title="rigged avatar (riggedmale) with reusable animation packages — walk · run">🧍 Avatar</button>
+      <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
   </div>
@@ -258,6 +259,7 @@
     <div class="lbl" id="engMindLbl" style="display:none;margin-top:6px">MIND · role → reaction loops</div>
     <div class="row" id="engMindRow" style="display:none"></div>
     <div class="sname" id="engMindInfo" style="display:none"></div>
+    <div class="sname" id="engBowHint" style="display:none">🏹 HOLD SPACE = draw · release = shoot — draw <span id="engBowPct">0%</span></div>
     <div class="sname">click = select · ⧉ duplicates the selection</div>
     <div class="row" style="margin-top:6px">
       <button class="opt" id="engDup">⧉ Duplicate</button>
@@ -470,6 +472,17 @@
       grip a layer with the other and TWIST like a cap — clicks every 90°</div>
   </div>
   <div class="sec">
+    <div class="lbl">GAME · BOW &amp; ARROW</div>
+    <button id="bowBtn">🏹 BOW &amp; ARROW</button>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button id="bowScaleDn" style="flex:1;padding:6px;border-radius:8px;border:1px solid var(--cy-dim);background:rgba(28,64,86,.7);color:#fff;font-size:11px;cursor:pointer">➖ smaller</button>
+      <button id="bowScaleUp" style="flex:1;padding:6px;border-radius:8px;border:1px solid var(--cy-dim);background:rgba(28,64,86,.7);color:#fff;font-size:11px;cursor:pointer">➕ bigger</button>
+    </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">arrow comes PRE-LOADED · grab the
+      bow's rod with your LEFT fist (or make TWO FISTS to summon it into your grasp) · tilt
+      the wrist to aim · hook 🤏 the string, pull back to draw, open your fingers to LOOSE</div>
+  </div>
+  <div class="sec">
     <div class="lbl">GAME · BEAT RUSH</div>
     <div class="row" id="diffOpts">
       <button class="opt" data-d="chill">Chill</button>
@@ -549,7 +562,8 @@ import { HandFilterBank } from './sdk/core/filters.js';
 import { HoloHandRig } from './sdk/core/hand-rig.js';
 import { HandViews } from './sdk/core/hand-views.js';
 import { REST_R42, REST_L42 } from './sdk/core/hands.js';
-import { HandBody, GrabbableSphere, GrabbableBox, BodyBody } from './sdk/core/game-physics.js';
+import { HandBody, GrabbableSphere, GrabbableBox, BodyBody, JOINT_RADII } from './sdk/core/game-physics.js';
+import { PropHull } from './sdk/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdk/core/rubiks-cube.js';
 import { BeatGame } from './sdk/core/beat-game.js';
 import { HoloBodyRig, BodyPose, BODY_RADII } from './sdk/core/body-rig.js';
@@ -578,7 +592,7 @@ const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' 
 const BUILD = 'cs-21';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
-  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','trackName','hint']
+  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','trackName','hint']
     .map(id => [id, document.getElementById(id)]));
 
 function toast(m, ms = 2200) {
@@ -971,6 +985,17 @@ const ballCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BALL
 const CUBE_EDGE = 0.17, CUBE_HALF = CUBE_EDGE / 2;
 const cubeCollider = { type: 'box', center: new THREE.Vector3(), quat: new THREE.Quaternion(),
                        half: new THREE.Vector3(CUBE_HALF, CUBE_HALF, CUBE_HALF), active: false };
+// 🏹 engine-bow grip collider: the engine streams the stave's grip volume here
+// so tracked HoloHands CONFORM around the wood (fingers wrap, never pierce)
+const bowGripCollider = { type: 'box', center: new THREE.Vector3(), quat: new THREE.Quaternion(),
+                          half: new THREE.Vector3(0.035, 0.14, 0.04), active: false };
+// 🏹 arrow shaft conform collider — a thin OBB riding the live shaft, so
+// fingers wrap the stick itself (streamed each frame from the arrow pose)
+const arrowCollider = { type: 'box', center: new THREE.Vector3(), quat: new THREE.Quaternion(),
+                        half: new THREE.Vector3(0.02, 0.4, 0.02), active: false };
+// 🏹 nock/string conform: the drawing fingers HOOK around the string+fletching
+// junction instead of sliding through it (a 2mm string needs a graspable body)
+const nockCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.03, active: false };
 
 // Hand PHYSICS bodies — joint colliders + velocities + palm frame, fed the
 // SAME world packs the rigs render, so physics matches pixels exactly.
@@ -1517,7 +1542,7 @@ let engBodyPts = null;          // this frame's retargeted 33-pt POV body (world
 // Raw tracking feed for the engine's avatar live-drive (BipedDriver wants the
 // RAW MediaPipe world data — it does its own filtering, z-sign calibration and
 // human-ROM clamping). Written every lab frame, consumed in engLoop.
-const AVSYNC = { poseWorld: null, handsWorld: null, handedness: null, t: 0 };
+const AVSYNC = { poseWorld: null, handsWorld: null, handedness: null, packs: null, t: 0 };
 let faceReady = false;          // face landmarker loaded (runtime re-init)
 const _engSdk = () => (window.__eng && window.__eng.sdk) || null;
 
@@ -1580,15 +1605,50 @@ const ENG_SKEL_PAIRS = [
   [0,1],[1,2],[2,3],[3,7],[0,4],[4,5],[5,6],[6,8],[9,10],             // face: eyes · ears · mouth
 ];
 let engSkel = null, engGroundDy = null;
-// POV facing fix: the retargeted pose reads as a MIRROR figure (facing the camera).
-// The POV avatar must face AWAY — z-reflect about the hips, which keeps your real
-// left arm/leg on screen-left, driving the avatar's screen-left limb (the ask),
-// while depth moves the right way round (step forward → avatar steps deeper).
-const _povHip = new THREE.Vector3();
+// POV facing fix — MEASURED, never assumed (the hand-chirality doctrine applied
+// to the whole body). The retargeted cloud can arrive in any of four states
+// (proper/mirrored × facing the dolly/away), and hard-coding one blind flip is
+// exactly how the body ends up mirrored while the hands are right. Two facts
+// are measured every frame instead:
+//   · TRUE facing  = ear-midpoint → nose (protrusion is the signal — the same
+//     headFromPose doctrine; nose/ear POSITIONS carry no chirality error)
+//   · chirality    = shoulder-cross facing (L−R)×up vs the nose facing: they
+//     agree on a PROPER body and oppose on a MIRRORED one
+// Fix order: mirrored → reflect across the hip plane ⊥ the live dolly→hip view
+// axis (one reflection restores chirality AND reverses depth, so your real left
+// arm drives the figure's anatomical left); still dolly-facing after that →
+// proper yaw-180 about the hips. Both decisions ride a decay latch so a noisy
+// frame can never flip the whole body.
+const _povHip = new THREE.Vector3(), _povN = new THREE.Vector3(), _povS = new THREE.Vector3(),
+      _povE = new THREE.Vector3(), _povUp = new THREE.Vector3(0, 1, 0), _povAway = new THREE.Vector3();
+const _povL = { chir: 0, face: 0 };
 function povFaceAway(pts) {
-  if (!pts || !pts[23] || !pts[24]) return pts;
-  const hz = (pts[23].z + pts[24].z) / 2;
-  for (const p of pts) p.z = 2 * hz - p.z;
+  if (!pts || !pts[23] || !pts[24] || !pts[11] || !pts[12]) return pts;
+  _povHip.copy(pts[23]).lerp(pts[24], 0.5);
+  _povAway.copy(_povHip).sub(camera.position); _povAway.y = 0;   // dolly → hips, horizontal
+  if (_povAway.lengthSq() < 1e-6) return pts;
+  _povAway.normalize();
+  if (pts[0] && pts[7] && pts[8]) {
+    _povE.copy(pts[7]).lerp(pts[8], 0.5);
+    _povN.copy(pts[0]).sub(_povE);                               // true facing (nose protrudes)
+    _povS.copy(pts[11]).sub(pts[12]).cross(_povUp);              // (L−R)×up — proper-body facing
+    if (_povN.lengthSq() > 1e-8 && _povS.lengthSq() > 1e-8) {
+      _povN.normalize(); _povS.normalize();
+      _povL.chir += (_povS.dot(_povN) - _povL.chir) * 0.15;
+      _povL.face += (_povN.dot(_povAway) - _povL.face) * 0.15;
+    }
+  }
+  const reflect = _povL.chir < 0;                                // mirrored cloud
+  const toward = (reflect ? -_povL.face : _povL.face) < 0;       // would still face the dolly
+  if (reflect) for (const p of pts) {
+    if (!p) continue;
+    const d = 2 * ((p.x - _povHip.x) * _povAway.x + (p.z - _povHip.z) * _povAway.z);
+    p.x -= d * _povAway.x; p.z -= d * _povAway.z;
+  }
+  if (toward) for (const p of pts) {
+    if (!p) continue;
+    p.x = 2 * _povHip.x - p.x; p.z = 2 * _povHip.z - p.z;
+  }
   return pts;
 }
 const ENG_SKEL_FLOOR = -1.45;                 // lab-space floor line for the POV figure
@@ -1648,6 +1708,613 @@ function weldHandsToBody(packs, pts) {
     if (straight <= crossed) { seat(packs.R, wr, er); seat(packs.L, wl, el); }
     else { seat(packs.R, wl, el); seat(packs.L, wr, er); }
   } else { seat(packs.R || packs.L, packs.R ? wr : wl, packs.R ? er : el); }
+}
+
+// ═══ LABBOW — GRAB-BASED bow & arrow MIRROR overlay (rubik's-cube lane) ══════
+// The proven mirror recipe: ghost hands float over the live camera and props
+// live in the SAME lab space the rigs render in — so touch works by
+// construction. Real-archery doctrine — NOTHING EVER STICKS TO A HAND:
+//   · 🏹 floats the bow (upright, string toward you) and the arrow (lying
+//     flat) in easy reach; both stay put until fingers WRAP them
+//   · GRAB = a real closing of the hand at the object: LEFT fist around the
+//     grip takes the bow (the bind keeps the pose it was grabbed in — like
+//     wrapping your fingers on the stave against the inner palm, pic-4 style);
+//     RIGHT fist/pinch ANYWHERE along the shaft takes the arrow
+//   · OPEN the hand → the object is released and stays where you let it go
+//   · carry the arrow's TAIL to the string → it nocks (snaps onto the string)
+//   · then HOOK curled fingers at string + fletching → that landmark signal is
+//     the draw: pulling back bends the string (BowRig morph); the instant the
+//     curl OPENS, the arrow shoots — draw/aim/range all land in the world log
+//   · fingers CONFORM around the stave (bowGripCollider streams every frame);
+//     bow + arrow scale to the PALM ruler while nothing is held
+const LABBOW = { on: false, grp: null, mesh: null, rig: null, s: 0.3,
+                 userS: 1, scal: null,          // two-hand pinch resize (DEI basketball gesture)
+                 held: false, grabQ: new THREE.Quaternion(), grabP: new THREE.Vector3(), relT: 0,
+                 arrow: null, aHeld: false, aGrabQ: new THREE.Quaternion(), aGrabP: new THREE.Vector3(), aRelT: 0,
+                 nocked: false, stringHeld: false, openT: 0, draw: 0,
+                 flying: [], respawnT: 0, hud: null, _logAcc: 0, _logDraw: -1,
+                 bowHome: new THREE.Vector3(-0.22, -0.02, -0.52),
+                 arrHome: new THREE.Vector3(0.24, 0.04, -0.5) };
+const _lbQd = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -Math.PI / 2);
+const _lbQa = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0, 0));
+const _lbA = new THREE.Vector3(), _lbB = new THREE.Vector3(), _lbP = new THREE.Vector3();
+const _lbTgt = new THREE.Vector3(), _lbQ1 = new THREE.Quaternion();
+function _lbShaftDist(p, A, s) {               // point → nearest point on the arrow SHAFT
+  _lbA.set(0, 1, 0).applyQuaternion(A.quaternion);
+  _lbB.copy(p).sub(A.position);
+  const t = Math.min(ENG_ARROW_REL * s, Math.max(0, _lbB.dot(_lbA)));
+  _lbB.copy(A.position).addScaledVector(_lbA, t);
+  return p.distanceTo(_lbB);
+}
+function _lbArrowHome(A) {
+  // fresh arrows float back in AT THE HANDS' current working depth
+  views.workspaceCenter(camera, _lbA);
+  const vh = 2 * Math.max(0.3, camera.position.distanceTo(_lbA)) * Math.tan(camera.fov * Math.PI / 360);
+  LABBOW.arrHome.set(_lbA.x + 0.24 * vh, _lbA.y + 0.04 * vh, _lbA.z);
+  A.position.copy(LABBOW.arrHome);
+  A.quaternion.copy(_lbQa);                    // lying flat, tip toward the bow side
+}
+// ── mesh-true touch (the basketball doctrine): the prop's PropHull capsule
+// chain vs the hand's 21 JOINT SPHERES — grab/touch fire on REAL surface
+// contact, never on proximity to an anchor point ──
+const _hgR = new Array(21).fill(0);
+function _packRadii(pack) {                    // world joint radii off the palm ruler
+  const palm = Math.max(0.02, _lbB.copy(pack[0]).distanceTo(pack[9]));
+  const k = palm / 0.204;                      // REST_SPAN·povHandScale ref (game-physics)
+  for (let i = 0; i < 21; i++) _hgR[i] = JOINT_RADII[i] * k;
+  return _hgR;
+}
+function _hullTouch(hull, obj, pack) {         // min gap: joint spheres ↔ hull surface
+  if (!hull || !pack || !pack[0]) return Infinity;
+  return hull.begin(obj).handGap(pack, _packRadii(pack)).gap;
+}
+// ── HAND RESISTANCE (the if/else contact clamp): when the rendered hand's
+// joint spheres reach a prop's hull surface (gap ≤ a ~4mm skin), the WHOLE
+// pack is translated back out along the deepest contact normal — however far
+// the tracked hand keeps pushing, the pixels never pass through the mesh.
+// `share` splits the correction: a FREE prop yields (hand takes 0.3, the prop
+// shove takes the rest), an ANCHORED prop is rigid (hand takes 1.0). Mutates
+// the pack IN PLACE — the rigs render, and every gesture reads, the stopped
+// hand, so physics keeps matching pixels. Returns the resolved depth.
+function _handResist(hull, obj, pack, share) {
+  if (!hull || !pack || !pack[0]) return 0;
+  hull.begin(obj);
+  const radii = _packRadii(pack);
+  let depth = 0;
+  for (let i = 0; i < 21; i++) {
+    if (!pack[i]) continue;
+    const g = hull.closest(pack[i], null, _lbB) - radii[i] - 0.004;   // skin
+    if (g < depth) { depth = g; _lbA.copy(_lbB); }       // deepest contact
+  }
+  if (depth >= 0) return 0;
+  const push = -depth * share;
+  for (const p of pack) {
+    if (!p) continue;
+    p.x += _lbA.x * push; p.y += _lbA.y * push; p.z += _lbA.z * push;
+  }
+  return -depth;
+}
+function labArrowHull(A) {                     // cache one hull per arrow SOURCE (asset/stick)
+  const src = A.userData.src || 'stick';
+  if (!LABBOW._aHulls) LABBOW._aHulls = {};
+  if (!LABBOW._aHulls[src]) LABBOW._aHulls[src] = PropHull.fromObject(A, { bins: 12 });
+  LABBOW.aHull = LABBOW._aHulls[src];
+}
+// ── the SEATED-GRIP orientation (the pic-3 reference): a bow held in a fist
+// runs ACROSS the closed fingers (the palm frame's X axis, pointed skyward),
+// string side facing the DRAW hand. The bow's own axes are MEASURED from the
+// live rig (never "the string is local −Y" lore — that bit us): the delta
+// rotation maps the measured (drawDir, spine) world frame onto the target.
+// Leaves the string direction in _sbD for seating the arrow (which flies the
+// opposite way).
+const _sbS = new THREE.Vector3(), _sbD = new THREE.Vector3(), _sbZ = new THREE.Vector3();
+const _sbS0 = new THREE.Vector3(), _sbD0 = new THREE.Vector3(), _sbZ0 = new THREE.Vector3();
+const _sbM = new THREE.Matrix4(), _sbM2 = new THREE.Matrix4(), _sbQ = new THREE.Quaternion();
+function seatBow(P, palmQL, palmPL, palmPR) {
+  _sbS.set(1, 0, 0).applyQuaternion(palmQL);           // across the grip
+  if (_sbS.y < 0) _sbS.negate();                       // spine points UP out of the fist
+  if (palmPR) _sbD.copy(palmPR).sub(palmPL);
+  else _sbD.set(0, 0, 1).applyQuaternion(palmQL).negate();
+  _sbD.addScaledVector(_sbS, -_sbD.dot(_sbS));         // ⊥ spine
+  if (_sbD.lengthSq() < 1e-8) _sbD.set(0, 0, 1).addScaledVector(_sbS, -_sbS.z);
+  _sbD.normalize();                                     // string side → the draw hand
+  _sbZ.crossVectors(_sbD, _sbS);
+  _sbM.makeBasis(_sbD, _sbS, _sbZ);                     // TARGET world frame
+  P.mesh.updateWorldMatrix(true, false);                // MEASURED current frame
+  _sbD0.copy(P.rig.drawDir).transformDirection(P.mesh.matrixWorld).normalize();
+  _sbS0.copy(P.rig.chordDir).transformDirection(P.mesh.matrixWorld).normalize();
+  _sbZ0.crossVectors(_sbD0, _sbS0);
+  _sbM2.makeBasis(_sbD0, _sbS0, _sbZ0).invert();
+  _sbM.multiply(_sbM2);                                 // delta = target · current⁻¹
+  _sbQ.setFromRotationMatrix(_sbM);
+  P.grp.quaternion.premultiply(_sbQ);
+}
+async function labBowToggle() {
+  if (LABBOW.on) return labBowOff();
+  const [{ GLTFLoader }, { BowRig }] = await Promise.all([
+    import('three/addons/loaders/GLTFLoader.js'),
+    import('./sdk/core/bow-rig.js'),
+  ]);
+  if (!LABBOW.grp) {
+    const gltf = await new Promise((res, rej) => new GLTFLoader().load(ENG_BOW_URL, res, null, rej));
+    let mesh = null;
+    gltf.scene.traverse(o => {
+      if (!o.isMesh) return;
+      if (!mesh) mesh = o;
+      if (o.material && o.material.metalness !== undefined) o.material.metalness = Math.min(o.material.metalness, 0.1);
+    });
+    if (!mesh) throw new Error('no mesh in bow asset');
+    const grp = new THREE.Group();
+    grp.add(gltf.scene);
+    // same basis as the engine bow: spine → +Y, string/draw side → +X
+    gltf.scene.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1)));
+    // deeper drawMax than the keyboard bow: a live hand pulls far — the string
+    // must reach the full triangular peak instead of stopping short of it
+    LABBOW.grp = grp; LABBOW.mesh = mesh; LABBOW.rig = new BowRig(mesh, { drawMax: 0.6 });
+    // mesh-true collision shape: capsule chain baked from the WOOD verts
+    // (BowRig's own classification — the 2mm string is gesture-space, not
+    // collision space); local = mesh frame, posed via mesh.matrixWorld
+    const posA = mesh.geometry.getAttribute('position');
+    const step = Math.max(1, Math.floor(posA.count / 6000));
+    const woodPts = [];
+    for (let v = 0; v < posA.count; v += step) {
+      if (LABBOW.rig.w[v] > 0.5) continue;
+      woodPts.push(new THREE.Vector3().fromBufferAttribute(posA, v));
+    }
+    LABBOW.hull = PropHull.fromPoints(woodPts, { bins: 16 });
+  }
+  scene.add(LABBOW.grp);
+  // the lab's only Standard-material lights are born with the cube — the bow
+  // needs the same shading (unlit PBR renders flat black: zero depth cues)
+  if (!cubeLab.lit) {
+    const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+    sun.position.set(1.4, 2.6, 2.2);
+    scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun);
+    cubeLab.lit = true;
+  }
+  // homes at the HANDS' working depth (views.workspaceCenter — the cube's
+  // recipe): overlay props must live where the tracked hands actually move,
+  // or no amount of reaching can ever touch them. Scale = framing at that
+  // depth (fraction of the visible frame), so it can never swallow the screen.
+  views.workspaceCenter(camera, _lbA);
+  const vhs = 2 * Math.max(0.3, camera.position.distanceTo(_lbA)) * Math.tan(camera.fov * Math.PI / 360);
+  LABBOW.bowHome.set(_lbA.x - 0.22 * vhs, _lbA.y - 0.02 * vhs, _lbA.z);
+  LABBOW.arrHome.set(_lbA.x + 0.24 * vhs, _lbA.y + 0.04 * vhs, _lbA.z);
+  LABBOW.s = 0.55 * vhs * LABBOW.userS / LABBOW.rig.span;
+  LABBOW.on = true;
+  LABBOW.grp.visible = true;
+  LABBOW.grp.position.copy(LABBOW.bowHome);    // floats in reach until GRABBED
+  LABBOW.grp.quaternion.copy(_lbQd);           // upright, string toward you
+  LABBOW.grp.scale.setScalar(LABBOW.s);
+  LABBOW.rig.setDraw(0);
+  engLoadArrowTpl(GLTFLoader);                 // real arrow in the background
+  if (!LABBOW.hud) {
+    const d = document.createElement('div');
+    d.id = 'labBowHud';
+    d.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:12%;z-index:40;'
+      + 'font:12px system-ui;color:#bfe8ff;background:rgba(10,22,32,.6);padding:6px 12px;'
+      + 'border-radius:8px;pointer-events:none;white-space:nowrap';
+    document.body.appendChild(d);
+    LABBOW.hud = d;
+  }
+  LABBOW.hud.style.display = 'block';
+  LABBOW.hud.textContent = '🏹 arrow loaded — grab the bow\'s ROD with your LEFT fist';
+  if (els.bowBtn) { els.bowBtn.textContent = '✕ REMOVE BOW'; els.bowBtn.classList.add('on'); }
+  toast('🏹 arrow pre-loaded — grab the rod (or make two fists), then pull the string', 5000);
+}
+function labBowOff() {
+  LABBOW.on = false;
+  if (LABBOW.grp) scene.remove(LABBOW.grp);
+  if (LABBOW.arrow) { scene.remove(LABBOW.arrow); LABBOW.arrow = null; }
+  for (const a of LABBOW.flying) scene.remove(a.mesh);
+  LABBOW.flying.length = 0;
+  LABBOW.nocked = false; LABBOW.stringHeld = false; LABBOW.openT = 0;
+  LABBOW.held = false; LABBOW.aHeld = false; LABBOW.draw = 0;
+  if (LABBOW.rig) LABBOW.rig.setDraw(0);
+  bowGripCollider.active = false;
+  arrowCollider.active = false;
+  nockCollider.active = false;
+  if (LABBOW.hud) LABBOW.hud.style.display = 'none';
+  if (els.bowBtn) { els.bowBtn.textContent = '🏹 BOW & ARROW'; els.bowBtn.classList.remove('on'); }
+  toast('bow overlay off');
+}
+function labBowLoose() {                        // curled fingers OPENED at the string
+  const B = LABBOW;
+  B.stringHeld = false; B.openT = 0;
+  if (B.draw > 0.12 && B.arrow && B.nocked) {   // real draw → the arrow shoots INSTANTLY
+    engAimArrow(B, B.arrow);
+    _gW.copy(B.rig.drawDir).negate().transformDirection(B.mesh.matrixWorld);
+    const el = Math.round(Math.asin(Math.max(-1, Math.min(1, _gW.y))) * 57.2958);
+    const az = Math.round(Math.atan2(_gW.x, -_gW.z) * 57.2958);   // screen-relative
+    engWorldLog('user', 'shot', Math.round(B.draw * 100) + '% power · az ' + az + '° el ' + el + '°');
+    B.flying.push({ mesh: B.arrow, vel: _gW.clone().multiplyScalar(1.2 + 3.3 * B.draw),
+                    t: 0, from: B.arrow.position.clone() });
+    toast('🏹 loosed — ' + Math.round(B.draw * 100) + '%');
+    B.arrow = null; B.respawnT = 0.6;           // a fresh arrow floats back in
+    B.nocked = false;
+  }
+  // draw ≤ 0.12: the hand just let go of the string — stays nocked, string
+  // snaps home via the decay branch
+}
+function labBowTick(pk, dt) {
+  const B = LABBOW;
+  if (!B.on || !B.grp) return;
+  // The LABBOW lane lives in the LAB SCENE — the same scene, same camera, the
+  // BLUE HOLO HANDS render in. That is what makes touch/occlusion/conform
+  // real by construction, in MIRROR and in ENGINE POV alike. (Engine-side
+  // objects can never visually sit on the overlay hands — two cameras.)
+  const L = pk && pk.L, R = pk && pk.R;
+  // ── HAND RESISTANCE first (packs mutate in place BEFORE palm frames are
+  // measured, so render + every gesture see the stopped hand). A free prop
+  // yields (share 0.3, the prop shove takes the rest); one anchored by the
+  // other hand or the string is rigid (share 1.0). Engaged hands are exempt:
+  // the holding fist wraps via conform, the draw hand works the string, and
+  // the nocked arrow RESTS on the bow fist rather than repelling it. ──
+  if (B.hull) {
+    const shareB = B.held ? 1 : 0.3;
+    if (L && L[0] && !B.held) _handResist(B.hull, B.mesh, L, shareB);
+    if (R && R[0] && !(B.nocked && B.stringHeld)) _handResist(B.hull, B.mesh, R, shareB);
+  }
+  if (B.aHull && B.arrow) {
+    const shareA = (B.nocked || B.aHeld) ? 1 : 0.3;
+    if (L && L[0] && !(B.held && B.nocked)) _handResist(B.aHull, B.arrow, L, shareA);
+    if (R && R[0] && !B.aHeld && !B.nocked) _handResist(B.aHull, B.arrow, R, shareA);
+  }
+  const hasL = !!(L && L[0]) && _palmPose(L, _palmP, _palmQ);
+  const hasR = !!(R && R[0]) && _palmPose(R, _gP2, _gQ3);
+  const palL = hasL ? Math.max(0.02, _lbA.copy(L[0]).distanceTo(L[9])) : 0.1;
+  const palR = hasR ? Math.max(0.02, _lbA.copy(R[0]).distanceTo(R[9])) : 0.1;
+  // ── two-hand pinch = SCALE (the DEI basketball / cube gesture): pinch with
+  // BOTH hands near the bow or the arrow, pull apart / squeeze to resize.
+  // The multiplier persists (userS) on top of the framing base scale. ──
+  let scaling2 = false;
+  if (L && L[0] && R && R[0] && !B.held && !B.aHeld && !B.stringHeld
+      && _pinchR(L) < 0.35 && _pinchR(R) < 0.35) {
+    _lbA.copy(L[4]).lerp(L[8], 0.5);
+    _lbB.copy(R[4]).lerp(R[8], 0.5);
+    const d2 = _lbA.distanceTo(_lbB);
+    _gC.copy(_lbA).lerp(_lbB, 0.5);            // pinch midpoint
+    B.grp.updateMatrixWorld(true);
+    _gW.copy(B.rig.gripLocal).applyMatrix4(B.mesh.matrixWorld);
+    const spanW2 = B.rig.span * B.s;
+    const near2 = _gC.distanceTo(_gW) < 0.6 * spanW2
+      || (B.arrow && !B.nocked && _lbShaftDist(_gC, B.arrow, B.s) < 0.3 * spanW2);
+    if (B.scal || near2) {
+      if (!B.scal) B.scal = { d0: Math.max(d2, 1e-3), u0: B.userS };
+      B.userS = Math.max(0.45, Math.min(2.6, B.scal.u0 * d2 / B.scal.d0));
+      scaling2 = true;
+      _gC.sub(_gW);                            // the bow rides between the pinches
+      B.grp.position.addScaledVector(_gC, 0.3);
+    }
+  }
+  if (!scaling2) B.scal = null;
+  // framing scale — a fraction of the visible frame AT THE BOW'S OWN DEPTH
+  // (never palm-absolute: that let it swallow the screen) × the pinch
+  // multiplier. Frozen while anything is held.
+  if (!B.held && !B.aHeld && !B.stringHeld) {
+    const vh = 2 * Math.max(0.3, camera.position.distanceTo(B.grp.position)) * Math.tan(camera.fov * Math.PI / 360);
+    B.s += (0.55 * vh * B.userS / B.rig.span - B.s) * (scaling2 ? 0.4 : 0.08);
+    B.grp.scale.setScalar(B.s);
+  }
+  // ── DOUBLE-FIST SUMMON (the pic-3 reference): BOTH hands closed as fists →
+  // the bow SEATS INTO the left grasp — grip in the fist, spine across the
+  // closed fingers, string side toward the draw hand — and is immediately
+  // held; the arrow seats tail-first into the right fist. The holding gesture
+  // IS the positioning trigger: no reaching, no fumbling, correct archery
+  // pose by construction (fingers conform around the stave via the collider).
+  if (!scaling2 && !B.held && hasL && hasR && _closure(L) > 0.6 && _closure(R) > 0.6) {
+    seatBow(B, _palmQ, _palmP, _gP2);
+    B.grp.updateMatrixWorld(true);
+    _gW.copy(B.rig.gripLocal).applyMatrix4(B.mesh.matrixWorld);
+    B.grp.position.add(_lbA.copy(_palmP).sub(_gW));
+    B.held = true; B.relT = 0;
+    B.grabQ.copy(_palmQ).invert().multiply(B.grp.quaternion);
+    B.grabP.copy(B.grp.position).sub(_palmP).applyQuaternion(_gQ2.copy(_palmQ).invert());
+    if (B.arrow && !B.nocked) {
+      B.arrow.quaternion.setFromUnitVectors(_bY, _lbA.copy(_sbD).negate());
+      B.arrow.position.copy(_gP2);             // tail in the right fist, tip target-ward
+      B.aHeld = true; B.aRelT = 0;
+      B.aGrabQ.copy(_gQ3).invert().multiply(B.arrow.quaternion);
+      B.aGrabP.copy(B.arrow.position).sub(_gP2).applyQuaternion(_gQ2.copy(_gQ3).invert());
+    }
+    engWorldLog('user', 'summon', 'bow seated in the left fist');
+    toast('🏹 seated in your grasp — string toward your draw hand');
+  }
+  // ── BOW: floats until the LEFT fist WRAPS the grip; open hand = let go ──
+  B.grp.updateMatrixWorld(true);
+  _gW.copy(B.rig.gripLocal).applyMatrix4(B.mesh.matrixWorld);
+  if (hasL && !scaling2) {
+    const close = _closure(L);
+    if (!B.held) {
+      // closing hand AND fingers ON the wood — the mesh-true hull gap, never
+      // anchor proximity: wrap the stave ANYWHERE along its length, like a
+      // real bow. Generous (0.7 palm) because webcam z-noise makes a
+      // millimetre-exact gate feel like grabbing at air.
+      const touching = B.hull ? _hullTouch(B.hull, B.mesh, L) < 0.7 * palL
+                             : _palmP.distanceTo(_gW) < 2.8 * palL;
+      if (close > 0.45 && touching) {
+        B.held = true; B.relT = 0;
+        // BIAS INTO THE GRASP: the nearest stave point comes to the palm —
+        // the rod seats BETWEEN the wrapped fingers, never alongside them
+        // (orientation keeps the grabbed pose; only the seat translates)
+        if (B.hull) {
+          B.hull.begin(B.mesh);
+          B.hull.closest(_palmP, _lbB, null);
+          B.grp.position.add(_lbA.copy(_palmP).sub(_lbB));
+          B.grp.updateMatrixWorld(true);
+        }
+        B.grabQ.copy(_palmQ).invert().multiply(B.grp.quaternion);
+        B.grabP.copy(B.grp.position).sub(_palmP)
+          .applyQuaternion(_gQ2.copy(_palmQ).invert());
+        engWorldLog('user', 'grab', 'bow');
+        toast('🏹 bow in hand — tilt the wrist to aim');
+      }
+    } else {
+      if (close < 0.3) {
+        B.relT += dt;                            // sticky: flicker must not drop it
+        if (B.relT > 0.16) { B.held = false; engWorldLog('user', 'release', 'bow let go'); }
+      } else B.relT = 0;
+      if (B.held) {
+        // AIM ASSIST — the arrow must never point back at the archer: when
+        // the fire direction (−drawDir) swings clearly BEHIND the camera
+        // plane, flip the grip bind 180° about the bow's spine — the string
+        // side swings back to face you, the arrow back at the target. The
+        // ±0.25 band is its own hysteresis; free angling inside it.
+        _lbA.copy(B.rig.drawDir).negate().transformDirection(B.mesh.matrixWorld);
+        camera.getWorldDirection(_lbB);
+        if (_lbA.dot(_lbB) < -0.25) {
+          _lbP.copy(B.rig.chordDir).transformDirection(B.mesh.matrixWorld).normalize();
+          _gQ2.setFromAxisAngle(_lbP, Math.PI);
+          _lbQ1.copy(_palmQ).invert();
+          B.grabQ.premultiply(_palmQ).premultiply(_gQ2).premultiply(_lbQ1);
+          engWorldLog('user', 'aim', 'auto-flip — arrow back toward the target');
+        }
+        // crisp 1:1 follow — wrist angling IS the aiming, so the bow has to
+        // track rotation tightly enough to swing onto different targets
+        _gQ2.copy(_palmQ).multiply(B.grabQ);
+        B.grp.quaternion.slerp(_gQ2, 1 - Math.exp(-24 * dt));
+        _lbA.copy(B.grabP).applyQuaternion(_palmQ).add(_palmP);
+        B.grp.position.lerp(_lbA, 1 - Math.exp(-20 * dt));
+        B.grp.updateMatrixWorld(true);
+        // SEAT BIAS: if the rod drifts OUT of the fist cavity (tracking
+        // noise, changing curl), pull the nearest stave point back toward
+        // the palm — the contact settle below pushes back to the skin, so
+        // the equilibrium is the rod RESTING between the wrapped fingers
+        if (B.hull) {
+          B.hull.begin(B.mesh);
+          if (B.hull.closest(_palmP, _lbB, null) > 0.004) {
+            _lbA.copy(_palmP).sub(_lbB);
+            const cap2 = 0.025 * B.rig.span * B.s;
+            if (_lbA.length() > cap2) _lbA.setLength(cap2);
+            B.grp.position.addScaledVector(_lbA, 0.5);
+            B.grp.updateMatrixWorld(true);
+          }
+        }
+        // CONTACT-HELD, never glued: the same hull-vs-joint-spheres resolution
+        // runs WHILE held, so the stave rests against the finger flesh instead
+        // of passing through it. A wrapped fist presses from opposing sides —
+        // those corrections cancel and the bow settles CENTRED in the grip.
+        if (B.hull) {
+          B.hull.begin(B.mesh);
+          _lbP.set(0, 0, 0);
+          const nc = B.hull.pushOut(L, _packRadii(L), _lbP);
+          if (nc) {
+            _lbP.divideScalar(nc);             // AVERAGE, not sum: the min-translation
+            const cap = 0.02 * B.rig.span * B.s;   // is the deepest contact, and a
+            if (_lbP.length() > cap) _lbP.setLength(cap);   // wrapped fist's opposing
+            B.grp.position.addScaledVector(_lbP, 0.5);      // normals cancel to centre
+            B.grp.updateMatrixWorld(true);
+          }
+        }
+      }
+    }
+  } else if (B.held) {
+    B.relT += dt;                              // hand lost → keep briefly, then let go
+    if (B.relT > 0.5) B.held = false;
+  }
+  // ghost fingers CONFORM around the stave (same lane as the rubik's cube)
+  bowGripCollider.center.copy(B.rig.gripLocal).applyMatrix4(B.mesh.matrixWorld);
+  B.grp.getWorldQuaternion(bowGripCollider.quat);
+  bowGripCollider.half.set(0.035, 0.14, 0.04).multiplyScalar(B.s);
+  bowGripCollider.active = true;
+  // ── ARROW: floats until fingers wrap the SHAFT (anywhere along the stick) ──
+  B.respawnT -= dt;
+  if (!B.arrow && B.respawnT <= 0) {
+    // PRE-LOADED: every arrow arrives already NOCKED on the string, so the
+    // whole loop is just "grab the rod, pull the string, loose" — the arrow
+    // can still be taken OFF (fist on the mid-shaft away from the string).
+    B.arrow = engMakeArrow();
+    B.arrow.scale.setScalar(B.s);
+    scene.add(B.arrow);
+    labArrowHull(B.arrow);                     // its mesh-true collision shape
+    B.nocked = true; B.stringHeld = false; B.openT = 0;
+    engAimArrow(B, B.arrow);
+  }
+  const A = B.arrow;
+  if (A) {
+    A.scale.setScalar(B.s);
+    if (!B.nocked) {
+      if (hasR && !scaling2) {
+        const close = _closure(R), pr = _pinchR(R);
+        if (!B.aHeld) {
+          // GRAB the stick itself — joint spheres ON the shaft's real surface
+          const touchA = B.aHull ? _hullTouch(B.aHull, A, R) < 0.35 * palR
+            : Math.min(_lbShaftDist(_gP2, A, B.s),
+                       _lbShaftDist(_gB.copy(R[4]).lerp(R[8], 0.5), A, B.s)) < 1.8 * palR;
+          if ((close > 0.5 || pr < 0.35) && touchA) {
+            B.aHeld = true; B.aRelT = 0;
+            B.aGrabQ.copy(_gQ3).invert().multiply(A.quaternion);   // held WHERE you grabbed it
+            B.aGrabP.copy(A.position).sub(_gP2)
+              .applyQuaternion(_gQ2.copy(_gQ3).invert());
+            engWorldLog('user', 'grab', 'arrow (shaft)');
+            toast('arrow in hand — set its tail on the string');
+          }
+        } else {
+          if (close < 0.3 && pr > 0.55) {
+            B.aRelT += dt;                     // fingers opened → the arrow is let go
+            if (B.aRelT > 0.12) { B.aHeld = false; engWorldLog('user', 'release', 'arrow let go'); }
+          } else B.aRelT = 0;
+          if (B.aHeld) {
+            _gQ2.copy(_gQ3).multiply(B.aGrabQ);
+            A.quaternion.slerp(_gQ2, 1 - Math.exp(-16 * dt));
+            _lbA.copy(B.aGrabP).applyQuaternion(_gQ3).add(_gP2);
+            A.position.lerp(_lbA, 1 - Math.exp(-16 * dt));
+            // NOCK: the tail meets the string → the arrow snaps onto it
+            B.rig.nock(_gC); B.mesh.localToWorld(_gC);
+            if (A.position.distanceTo(_gC) < 2.2 * palR) {
+              B.nocked = true; B.aHeld = false; B.stringHeld = false;
+              engAimArrow(B, A);
+              engWorldLog('user', 'nock', 'arrow on string');
+              toast('nocked — hook your fingers on string + fletching, pull back');
+            }
+          }
+        }
+      } else if (B.aHeld) {
+        B.aRelT += dt;
+        if (B.aRelT > 0.5) B.aHeld = false;    // hand lost → the arrow stays where it is
+      }
+    } else {
+      // ── NOCKED: the arrow rides the string; curled fingers AT the nock
+      // (string + fletching together) are the draw grip — the reference-photo
+      // hook. Pull back = draw; the moment the curl opens → labBowLoose ──
+      engAimArrow(B, A);
+      B.rig.nockLive(_gC); B.mesh.localToWorld(_gC);
+      if (hasR && !scaling2) {
+        const close = _closure(R), pr = _pinchR(R);
+        // the reference gesture: index+middle CURLED over the string — a
+        // two-finger hook reads lower on the closure metric than a fist
+        const hooked = close > 0.35 || pr < 0.4;
+        _gB.copy(R[8]).lerp(R[12], 0.5);       // the hook point: index↔middle
+        if (!B.stringHeld) {
+          // the hook can start from the palm OR the pinch point — a curled
+          // hand meeting the nock/fletching is enough (generous: the string
+          // is 2mm and webcam depth is noisy)
+          const dHook = Math.min(_gB.distanceTo(_gC), _gP2.distanceTo(_gC));
+          if (hooked && dHook < 4.0 * palR) {
+            B.stringHeld = true; B.openT = 0;
+            engWorldLog('user', 'hold', 'string + fletching');
+          } else if (close > 0.55 && _lbShaftDist(_gP2, A, B.s) < 1.6 * palR
+                     && _gP2.distanceTo(_gC) > 4 * palR) {
+            // fist back on the mid-shaft, away from the string → un-nock
+            B.nocked = false; B.aHeld = true; B.aRelT = 0;
+            B.aGrabQ.copy(_gQ3).invert().multiply(A.quaternion);
+            B.aGrabP.copy(A.position).sub(_gP2).applyQuaternion(_gQ2.copy(_gQ3).invert());
+          }
+        } else if (!hooked) {
+          B.openT += dt;
+          if (B.openT > 0.04) labBowLoose();   // curl opened → INSTANT release
+        } else {
+          B.openT = 0;
+          B.rig.nockRest(_gC); B.mesh.localToWorld(_gC);
+          _gW.copy(B.rig.drawDir).transformDirection(B.mesh.matrixWorld);
+          const pull = _lbA.copy(_gB).sub(_gC).dot(_gW);
+          B.draw = Math.min(1, Math.max(0, pull / (B.rig.opts.drawMax * B.rig.span * B.s)));
+          // STICK TO THE FINGERS: the string's live nock IS the hook point —
+          // clamped along the draw axis with overdraw headroom (the peak
+          // keeps following past full power) and bounded across it, so
+          // there is NEVER a gap between the pulling fingers and the string
+          _lbTgt.copy(_gB);
+          B.mesh.worldToLocal(_lbTgt);
+          _lbA.copy(_lbTgt).sub(B.rig.chordMid);
+          const along = Math.max(0.01 * B.rig.span,
+            Math.min(1.35 * B.rig.opts.drawMax * B.rig.span, _lbA.dot(B.rig.drawDir)));
+          _lbB.copy(B.rig.drawDir).multiplyScalar(along);
+          _lbA.sub(_lbB);                      // off-axis part, bounded
+          if (_lbA.length() > 0.3 * B.rig.span) _lbA.setLength(0.3 * B.rig.span);
+          _lbTgt.copy(B.rig.chordMid).add(_lbB).add(_lbA);
+          B.rig.setDraw(B.draw, _lbTgt);
+          engAimArrow(B, A);
+          _lbA.copy(_gW).negate();
+          const el = Math.round(Math.asin(Math.max(-1, Math.min(1, _lbA.y))) * 57.2958);
+          const az = Math.round(Math.atan2(_lbA.x, -_lbA.z) * 57.2958);
+          if (B.hud) B.hud.textContent = '🏹 draw ' + Math.round(B.draw * 100) + '% · pull '
+            + Math.max(0, pull).toFixed(2) + 'm · az ' + az + '° el ' + el + '° — open fingers to loose';
+          B._logAcc += dt;
+          if (B._logAcc > 0.35 && Math.abs(B.draw - B._logDraw) > 0.03) {
+            engWorldLog('user', 'draw', Math.round(B.draw * 100) + '% · pull '
+              + Math.max(0, pull).toFixed(2) + 'm · az ' + az + '° el ' + el + '°');
+            B._logAcc = 0; B._logDraw = B.draw;
+          }
+        }
+      } else if (B.stringHeld) { B.stringHeld = false; B.openT = 0; }   // hand lost → relax
+    }
+  }
+  if (!B.stringHeld && B.draw > 0) {           // string snaps home when not held
+    B.draw = Math.max(0, B.draw - dt * 7);
+    B.rig.setDraw(B.draw);
+    if (B.nocked && B.arrow) engAimArrow(B, B.arrow);
+  }
+  // ── TOUCH RESPONSE (the basketball's avoidance layer on the hull): joint
+  // spheres SHOVE the free props out along real contact normals — you can
+  // nudge and bat the floating bow/arrow, and fingers never pass through.
+  // Skipped while held (it rides the hand) or mid-archery (aHeld/drawing:
+  // incidental grazes must not walk the bow away from the nocking hand). ──
+  if (!scaling2) {
+    if (B.hull && !B.held && !B.aHeld && !(B.nocked && B.stringHeld)) {
+      B.hull.begin(B.mesh);
+      _lbP.set(0, 0, 0);
+      let nc = 0;
+      if (hasL) nc += B.hull.pushOut(L, _packRadii(L), _lbP);
+      if (hasR) nc += B.hull.pushOut(R, _packRadii(R), _lbP);
+      if (nc) {
+        _lbP.divideScalar(nc);                 // averaged min-translation
+        if (_lbP.length() > 0.05) _lbP.setLength(0.05);
+        B.grp.position.add(_lbP);
+      }
+    }
+    if (B.aHull && B.arrow && !B.aHeld && !B.nocked) {
+      B.aHull.begin(B.arrow);
+      _lbP.set(0, 0, 0);
+      let nc = 0;
+      if (hasL) nc += B.aHull.pushOut(L, _packRadii(L), _lbP);
+      if (hasR) nc += B.aHull.pushOut(R, _packRadii(R), _lbP);
+      if (nc) {
+        _lbP.divideScalar(nc);
+        if (_lbP.length() > 0.05) _lbP.setLength(0.05);
+        B.arrow.position.add(_lbP);
+      }
+    }
+  }
+  // arrow shaft conform: fingers WRAP the stick (thin OBB rides the shaft)
+  if (B.arrow && B.arrow.visible) {
+    const sA = B.arrow.scale.x || 1;
+    _lbA.set(0, 1, 0).applyQuaternion(B.arrow.quaternion);
+    arrowCollider.center.copy(B.arrow.position).addScaledVector(_lbA, 0.5 * ENG_ARROW_REL * sA);
+    arrowCollider.quat.copy(B.arrow.quaternion);
+    arrowCollider.half.set(0.018 * sA + 0.008, 0.5 * ENG_ARROW_REL * sA, 0.018 * sA + 0.008);
+    arrowCollider.active = true;
+  } else arrowCollider.active = false;
+  // string/nock conform: the drawing fingers hook AROUND the nock instead of
+  // sliding through the 2mm string — a graspable body at the LIVE draw point
+  if (B.nocked) {
+    B.rig.nockLive(_lbA); B.mesh.localToWorld(_lbA);
+    nockCollider.center.copy(_lbA);
+    nockCollider.radius = 0.02 * B.rig.span * B.s;
+    nockCollider.active = true;
+  } else nockCollider.active = false;
+  // state guidance on the HUD (the draw branch writes its own live numbers)
+  if (B.hud && !(B.nocked && B.stringHeld)) {
+    B.hud.textContent = !B.held
+        ? (B.nocked ? '🏹 arrow loaded — grab the bow\'s ROD with your LEFT fist (or make TWO FISTS)'
+                    : '🏹 grab the bow\'s ROD with your LEFT fist')
+      : B.nocked ? '🏹 loaded — hook curled fingers on the string, pull back to draw'
+      : B.aHeld ? '🏹 bring the arrow\'s TAIL to the string'
+      : '🏹 bow in hand — grab the arrow by its shaft with your RIGHT hand';
+  }
+  for (let i = B.flying.length - 1; i >= 0; i--) {           // arrows fly into the scene
+    const a = B.flying[i];
+    a.t += dt;
+    a.vel.y -= 2.5 * dt;                                     // gentle overlay-scale gravity
+    a.mesh.position.addScaledVector(a.vel, dt);
+    if (a.vel.lengthSq() > 1e-6) a.mesh.quaternion.setFromUnitVectors(_bY, _lbA.copy(a.vel).normalize());
+    if (a.t > 2.2) {
+      _lbA.copy(a.mesh.position).sub(a.from);
+      engWorldLog('user', 'range', (_lbA.length() / Math.max(0.05, B.s)).toFixed(1) + 'm (bow-relative)');
+      scene.remove(a.mesh);
+      B.flying.splice(i, 1);
+    }
+  }
 }
 
 // Face outline: MediaPipe face landmarks drawn as neon contours. Mirror view →
@@ -1784,6 +2451,8 @@ function loop() {
     AVSYNC.poseWorld = AVSYNC.ovPose;
     AVSYNC.handsWorld = AVSYNC.ovHands ?? null;
     AVSYNC.handedness = AVSYNC.ovHanded ?? null;
+    AVSYNC.packs = AVSYNC.ovPacks ?? null;
+    AVSYNC.packsAligned = AVSYNC.ovPacks != null;
   } else {
     if (frame.poseWorld) { AVSYNC.poseWorld = frame.poseWorld; AVSYNC.pT = now; }
     else if (AVSYNC.poseWorld && now - (AVSYNC.pT || 0) > 900) AVSYNC.poseWorld = null;
@@ -1839,11 +2508,24 @@ function loop() {
       applyHandOffsets(packs);
     }
   }
-  const cols = S.conform ? [ballCollider, cubeCollider] : null;
+  // packs → engine gestures (bow grab/draw). These are the EXACT points the
+  // HoloHand rigs render from — packsAligned certifies the chain: tracking →
+  // views.resolve (measured chirality) → POV placement (welded onto the body
+  // skeleton's wrists whenever the body is live) → anchor offsets. POV only:
+  // mirror-view hands live on the video overlay, not in engine space — those
+  // never grab. Hands-only POV counts: where you SEE your hand is where it is.
+  if (AVSYNC.ovPose === undefined) {
+    AVSYNC.packs = packs;
+    const es = _engSdk();
+    AVSYNC.packsAligned = !!(es && es.on && es.view === 'pov' && (packs.L || packs.R));
+  }
+  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active)
+    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
   if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
   M.pose += (performance.now() - t1 - M.pose) * 0.1;
+  labBowTick(AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs, dt);   // 🏹 bow-in-hands overlay
 
   // 4a. MP extra players: own rig pair + per-player hand physics so they can
   //     punch BEAT RUSH too (co-op). mpExtraHands is fed to the games below.
@@ -1919,7 +2601,7 @@ function loop() {
       // face AWAY like a game avatar (see povFaceAway) — the reflected points against
       // the back bind's reflected rest compose to a PROPER motion, so LBS stays clean
       if (pts) { povFaceAway(pts); applyBodyOffset(pts); bodyPosed = bodyRigB.pose(pts); engBodyPts = pts; }
-      else bodyRigB.pose(bodyRestPose(spawn));   // no pose yet → stand at spawn (rest)
+      else { bodyRigB.pose(bodyRestPose(spawn)); engBodyPts = null; }   // pose died → no ghost coords
     } else {
       bodyRig.pose(null); bodyRigB?.pose(null);   // inspect: no body
     }
@@ -3422,6 +4104,24 @@ els.cubeBtn.addEventListener('click', () => {
   try { cubeLab.toggle(!cubeLab.on); }
   catch (e) { console.error(e); toast('🧊 cube failed: ' + (e.message || e), 6000); }
 });
+els.bowBtn.addEventListener('click', () => {
+  // spawning the bow means you want to SEE it — exit mesh isolation first
+  // (same as the cube), unless the engine SDK owns the display right now
+  if (!LABBOW.on && !ENG.sdk.on && meshOnly()) applyDisplay('lab');
+  labBowToggle().catch(e => { console.error(e); toast('🏹 bow failed: ' + (e.message || e), 6000); });
+});
+// ± size buttons — same multiplier the two-hand pinch gesture drives (userS),
+// applied immediately even mid-hold
+function labBowScaleBy(f) {
+  LABBOW.userS = Math.max(0.45, Math.min(2.6, LABBOW.userS * f));
+  if (LABBOW.on && LABBOW.grp) {
+    LABBOW.s = Math.max(0.05, LABBOW.s * f);
+    LABBOW.grp.scale.setScalar(LABBOW.s);
+  }
+  toast('🏹 bow size ×' + LABBOW.userS.toFixed(2));
+}
+document.getElementById('bowScaleDn').addEventListener('click', () => labBowScaleBy(1 / 1.25));
+document.getElementById('bowScaleUp').addEventListener('click', () => labBowScaleBy(1.25));
 document.getElementById('bodyChk').addEventListener('change', (e) => {
   S.body = e.target.checked;
   // in an isolation mode the checkbox picks WHICH isolation you're in
@@ -3460,12 +4160,17 @@ const engEls = Object.fromEntries(['engBtn', 'engBack', 'engc', 'engSkyChk', 'en
   .map(id => [id, document.getElementById(id)]));
 const ENG_STORE = 'mpbrowser-engine-scene';
 window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs, tests/_fleshprobe.mjs)
-  get S() { return S; }, get scene() { return scene; },
+  get S() { return S; }, get scene() { return scene; }, get camera() { return camera; },
   get rigR() { return rigR; }, get rigL() { return rigL; },
   get faceReady() { return faceReady; },
   get TRACK_OFF() { return TRACK_OFF; },
   get AVSYNC() { return AVSYNC; },
   get engBodyPts() { return engBodyPts; },
+  get bowCol() { return bowGripCollider; },
+  get labBow() { return LABBOW; },
+  get nockCol() { return nockCollider; },
+  get arrowCol() { return arrowCollider; },
+  labBowToggle, PropHull,
   REST_R42, setHandSkin, THREE, bodyPose, povFaceAway, weldHandsToBody,
 };
 const ENG_COLORS = [0x5b7fa6, 0xb0714f, 0x7d9471, 0xc9b27c, 0x8b93a3, 0x9a7fa6];   // deliberately non-neon
@@ -3571,6 +4276,7 @@ async function engInit() {
 }
 
 const _cbA = new THREE.Box3(), _cbB = new THREE.Box3(), _cv = new THREE.Vector3();
+const _heldBow = o => { const bb = BOWS.get(o.userData.eng.id); return !!(bb && (bb.held || bb.holo)); };
 function engCollideTick() {
   const objs = ENG.objects.filter(o => o.userData.eng.type !== 'tracker');
   if (objs.length < 2 && !AVREG.size) return;
@@ -3582,6 +4288,7 @@ function engCollideTick() {
       const A = boxes[i], B = boxes[j];
       if (!A.intersectsBox(B)) continue;
       if (isAv[i] && isAv[j]) continue;                   // avatars may stand close
+      if (_heldBow(objs[i]) || _heldBow(objs[j])) continue;   // a held bow rides the hand
       // pick who yields: never an avatar; else the currently-dragged one; else the smaller
       let t;
       if (isAv[i]) t = j; else if (isAv[j]) t = i;
@@ -3617,6 +4324,7 @@ function engCollideTick() {
           if (nr && nr.mind) nr.mind._touchT = performance.now();
           continue;
         }
+        if (_heldBow(objs[k])) continue;        // the held bow belongs to the hand
         const c = boxes[k].getCenter(new THREE.Vector3());
         const push = c.sub(_cv); push.y = 0;
         if (push.lengthSq() < 1e-6) push.set(0, 0, 0.05); else push.setLength(0.05);
@@ -3624,6 +4332,50 @@ function engCollideTick() {
       }
     }
   }
+}
+// ═══ HAND DEPTH OCCLUDERS — real occlusion between tracked hands and engine
+// objects. The hands render on the LAB overlay canvas (its own GL context), so
+// the engine's depth buffer never sees them; these invisible depth-writing
+// spheres stand in at the pack joints (engine space ≡ lab space), drawn FIRST
+// (renderOrder −10, colorWrite off), so any engine object BEHIND the hand is
+// z-rejected — it visually gives way to the overlay hand at the right depth.
+// (An object in FRONT of the hand still wins the engine pass; full mutual
+// occlusion needs the scene merge — flagged, later.)
+const ENG_HOCC = { grp: null };
+function engHandOccTick() {
+  const T = window.__lab && window.__lab.AVSYNC;
+  const packs = ENG.sdk.on && ENG.sdk.view === 'pov' && T && T.packsAligned ? T.packs : null;
+  if (!packs || (!packs.L && !packs.R)) { if (ENG_HOCC.grp) ENG_HOCC.grp.visible = false; return; }
+  if (!ENG_HOCC.grp) {
+    const g = new THREE.Group();
+    const mat = new THREE.MeshBasicMaterial({ colorWrite: false });   // depth only
+    for (let i = 0; i < 44; i++) {
+      const m = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 6), mat);
+      m.renderOrder = -10;
+      m.visible = false;
+      g.add(m);
+    }
+    ENG_HOCC.grp = g;
+    ENG.scene.add(g);
+  }
+  ENG_HOCC.grp.visible = true;
+  const set = (pack, base) => {
+    const on = !!(pack && pack[0] && pack[9]);
+    const palm = on ? Math.max(0.02, _gA.copy(pack[0]).distanceTo(pack[9])) : 0;
+    for (let i = 0; i < 22; i++) {
+      const m = ENG_HOCC.grp.children[base + i];
+      if (!on) { m.visible = false; continue; }
+      m.visible = true;
+      if (i === 21) {                          // palm filler between wrist and knuckles
+        m.position.copy(pack[0]).lerp(pack[9], 0.55);
+        m.scale.setScalar(palm * 0.62);
+      } else {
+        m.position.copy(pack[i]);
+        m.scale.setScalar(palm * (i === 0 ? 0.5 : 0.28));
+      }
+    }
+  };
+  set(packs.L, 0); set(packs.R, 22);
 }
 function engLoop() {
   if (!ENG.on) return;
@@ -3648,7 +4400,13 @@ function engLoop() {
       engRestoreHands(rec);                    // demoted → stumps return, rigs hide
     }
   }
+  engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
+  engGestureTick(avDt);                        // hand gestures: grab bow, draw string
+  engBowTick(avDt);                            // bow draw/loose + arrow ballistics
+  // (hand depth-occluders retired: depth-only spheres punched BLACK hand-
+  // shaped holes in the sky, and the free engine camera can never line up
+  // with the overlay hands anyway — on-hands props live in the LAB scene)
   ENG.renderer.render(ENG.scene, ENG.camera);
 }
 
@@ -3940,6 +4698,8 @@ function engAvCtlRefresh() {
   lbl.style.display = show ? 'block' : 'none';
   host.style.display = show ? 'flex' : 'none';
   engMindRows(rec);                            // MIND section rides the selection too
+  const bh = document.getElementById('engBowHint');
+  if (bh) bh.style.display = ENG.sel && BOWS.has(ENG.sel.userData.eng.id) ? 'block' : 'none';
   if (!show) return;
   host.innerHTML = '';
   const mk = (txt, sel, fn) => {
@@ -3979,9 +4739,634 @@ function engAvCtlRefresh() {
   });
 }
 ENG.spawnAvatar = engSpawnAvatar; ENG.avatarSetClip = engAvatarSetClip; ENG.avatars = AVREG;
-ENG.mindSet = engMindSet;                       // hoisted fn — safe here
+ENG.mindSet = engMindSet;                       // hoisted fns — safe here
+ENG.spawnBow = engSpawnBow; ENG.bowSetDraw = engBowSetDraw;
 Object.defineProperty(ENG, 'minds', { get: () => ENG_MINDS });   // consts live later
-Object.defineProperty(ENG, 'world', { get: () => ENG_WORLD });   // in the file (TDZ)   // probe/debug handles
+Object.defineProperty(ENG, 'world', { get: () => ENG_WORLD });   // in the file (TDZ)
+Object.defineProperty(ENG, 'bows', { get: () => BOWS });
+Object.defineProperty(ENG, 'arrowTpl', { get: () => ENG_ARROW_TPL });   // probe/debug handles
+Object.defineProperty(ENG, 'user', { get: () => ENG_USER });            // tracked-user presence
+Object.defineProperty(ENG, 'handOcc', { get: () => ENG_HOCC });         // depth-occluder rig
+// ═══ BOW — a drawable prop game object (BowRig procedural morph) ═════════════
+// The interaction sequence is PARAMETERIZED BY DRAW (0..1): however the input
+// arrives — SPACE hold now, hand-pull gesture next — it lands in one seam,
+// engBowSetDraw / b.draw, and the string peak + limb flex + nocked arrow all
+// follow that single number. Keyboard: hold = draw grows, release = loose
+// (arrow ballistics) and the string snaps home.
+const BOWS = new Map();                        // eng.id → { rig, grp, mesh, draw, ... }
+const ENG_BOW_URL = 'sdk/assets/props/bow.glb';
+const ENG_HULLS = new Map();                   // url → wood PropHull (mesh-true touch)
+const ENG_AHULLS = {};                         // arrow src → PropHull
+function engArrowHull(A) {
+  const src = A.userData.src || 'stick';
+  if (!ENG_AHULLS[src]) ENG_AHULLS[src] = PropHull.fromObject(A, { bins: 12 });
+  return ENG_AHULLS[src];
+}
+const _bN = new THREE.Vector3(), _bV = new THREE.Vector3(), _bY = new THREE.Vector3(0, 1, 0);
+async function engSpawnBow(url = ENG_BOW_URL, meta = {}) {
+  const [{ GLTFLoader }, { BowRig }] = await Promise.all([
+    import('three/addons/loaders/GLTFLoader.js'),
+    import('./sdk/core/bow-rig.js'),
+  ]);
+  const gltf = await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej));
+  let mesh = null;
+  gltf.scene.traverse(o => {
+    if (!o.isMesh) return;
+    if (!mesh) mesh = o;
+    // scans ship metalness 1 / roughness 1 — full metal with no envMap renders
+    // near-black; keep the texture, drop the metal
+    if (o.material && o.material.metalness !== undefined) o.material.metalness = Math.min(o.material.metalness, 0.1);
+  });
+  if (!mesh) throw new Error('no mesh in ' + url);
+  const grp = new THREE.Group();
+  grp.add(gltf.scene);
+  // upright: spine (local X) → world Y; slack-string side (local −Y) → +X —
+  // SIDE PROFILE to the default dolly (edge-on, the draw peak moves along the
+  // view axis and reads as a sliver). Rotate freely with the gizmo.
+  gltf.scene.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 0, 1)));
+  const rig = new BowRig(mesh);
+  if (!ENG_HULLS.has(url)) {                   // mesh-true wood hull, cached per asset
+    const posH = mesh.geometry.getAttribute('position');
+    const stepH = Math.max(1, Math.floor(posH.count / 6000));
+    const woodPts = [];
+    for (let v = 0; v < posH.count; v += stepH) {
+      if (rig.w[v] > 0.5) continue;
+      woodPts.push(new THREE.Vector3().fromBufferAttribute(posH, v));
+    }
+    ENG_HULLS.set(url, PropHull.fromPoints(woodPts, { bins: 16 }));
+  }
+  gltf.scene.position.y = rig.span / 2 + 0.02;
+  // placement doctrine: with a LIVE tracked user (body OR hands mode) the bow
+  // spawns as a HOLOGRAM with its GRIP a hair in front of the LEFT hand and
+  // the arrow at the RIGHT hand — instantly touchable, no walking, no gizmo.
+  // SIZED to the figure, never absolute meters (the HAND_BODY_PROP doctrine at
+  // prop scale): span ≈ ¾ of the measured figure height; hands-only sizes off
+  // the palm ruler. Without tracking (or on restore) it stands on the floor.
+  let holo = null, spanW = rig.span;
+  const U = ENG_USER;
+  if (!meta.noHolo && U.on) {
+    _bV.copy(U.fwd); _bV.y = 0;
+    if (_bV.lengthSq() < 1e-6) ENG.camera.getWorldDirection(_bV).setY(0);
+    _bV.normalize();
+    // body live → ¾ of the figure height; hands-only → the PALM is the ruler
+    // (POV hands render large — a graspable bow spans ~8 palms)
+    spanW = U.height > 0 ? 0.75 * U.height : 8 * Math.max(0.05, U.palm);
+    grp.scale.setScalar(spanW / rig.span);
+    grp.rotation.y = Math.atan2(_bV.z, -_bV.x);      // string side (+X local) faces the user
+    holo = { t: 0, baseY: 0, mats: [] };             // baseY set after grip alignment
+  } else {
+    const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+    const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.0);
+    grp.position.set(p.x, 0, p.z);
+  }
+  engAdopt(grp, { type: 'bow', url, label: meta.label || 'bow ' + (ENG.seq + 1) });
+  const b = { rig, grp, mesh, hull: ENG_HULLS.get(url) || null,
+              draw: 0, drawing: false, wasDrawing: false,
+              hold: false, nocked: null, flying: [], free: null, holo,
+              held: false, velY: 0, relT: 0, nockPin: false, pinchRel: 0 };
+  BOWS.set(grp.userData.eng.id, b);
+  if (holo) {
+    // grip → a hair (0.05·span) in front of the left hand: translate the whole
+    // group by (target − live grip world) so the grab point lands exactly there
+    const eps = 0.05 * spanW;
+    const target = (U.hL ? U.handL : U.hR ? U.handR : U.chest).clone().addScaledVector(_bV, eps);
+    grp.updateMatrixWorld(true);
+    const gw = rig.gripLocal.clone().applyMatrix4(mesh.matrixWorld);
+    grp.position.add(target.sub(gw));
+    grp.position.y = Math.max(0.1, grp.position.y);
+    holo.baseY = grp.position.y;
+    engHoloMats(grp, holo.mats);
+    // the arrow floats at the RIGHT hand (tail at the palm, tip along the
+    // facing); no right hand tracked → beside the bow instead
+    const ar = engMakeArrow();
+    ar.scale.setScalar(grp.scale.x);
+    ar.quaternion.setFromUnitVectors(_bY, _bV.clone());
+    if (U.hR) ar.position.copy(U.handR).addScaledVector(_bV, eps);
+    else {
+      _bN.crossVectors(_bV, _bY).normalize();        // user's right of the spawn axis
+      ar.position.copy(target).addScaledVector(_bN, 0.35 * spanW);
+    }
+    ENG.scene.add(ar);
+    b.free = { grp: ar, held: false, velY: 0, hull: engArrowHull(ar),
+               holo: { t: Math.PI / 2, baseY: ar.position.y, mats: [] } };
+    engHoloMats(ar, b.free.holo.mats);
+    engWorldLog('world', 'spawn', 'bow+arrow hologram at user hands @ ' + _fmtV(target));
+    toast('🏹 at your hands — close your left hand on the grip, right pinch takes the arrow', 5000);
+  }
+  engLoadArrowTpl(GLTFLoader);                 // background — stick fallback until it lands
+  return grp;
+}
+// hologram look: ghost-blue translucent clones; originals restored on grab
+function engHoloMats(root, list) {
+  root.traverse(o => {
+    if (!o.isMesh || !o.material) return;
+    o.userData._holoOrig = o.material;
+    const m = o.material.clone();                // clones — the shared arrow template
+    m.transparent = true; m.opacity = 0.82;      // material must never be dimmed
+    if (m.emissive) { m.emissive.set(0x4fc3f7); m.emissiveIntensity = 0.45; }
+    o.material = m; list.push(m);
+  });
+}
+function engHoloOff(root) {
+  root.traverse(o => {
+    if (!o.isMesh || !o.userData._holoOrig) return;
+    o.material.dispose();
+    o.material = o.userData._holoOrig;
+    delete o.userData._holoOrig;
+  });
+}
+function engBowSetDraw(obj, d) {               // external draw authority (probes now, gestures next)
+  const b = BOWS.get(obj.userData.eng.id);
+  if (!b) return;
+  b.hold = d > 0;                              // held externally — no auto-snap-home
+  b.draw = Math.min(1, Math.max(0, d));
+  b.rig.setDraw(b.draw);
+}
+// The REAL arrow asset (a heavy scan: 733k verts, 76MB) loads lazily in the
+// background at first bow spawn; until it lands, shots use the stick fallback.
+// The scan lies DIAGONALLY in its own frame, so the template normalizes it:
+// true axis from the extreme-vert pair, TIP = the end with the smaller
+// cross-section (the other end wears the fletching), then rotate tip→+Y,
+// tail→origin, scale to arrow length — the same convention engAimArrow seats.
+let ENG_ARROW_TPL = null, _arrowLoading = false;
+const ENG_ARROW_URL = 'sdk/assets/props/arrow.glb';
+const ENG_ARROW_REL = 1.15;                    // arrow length vs the 1.9-span bow (~60%)
+function engLoadArrowTpl(GLTFLoader) {
+  if (_arrowLoading) return;
+  _arrowLoading = true;
+  new GLTFLoader().load(ENG_ARROW_URL, gltf => {
+    let mesh = null;
+    gltf.scene.traverse(o => {
+      if (!o.isMesh) return;
+      if (!mesh) mesh = o;
+      if (o.material && o.material.metalness !== undefined) o.material.metalness = Math.min(o.material.metalness, 0.1);
+    });
+    if (!mesh) return;
+    const pos = mesh.geometry.getAttribute('position');
+    const step = Math.max(1, Math.floor(pos.count / 4000));
+    const c = new THREE.Vector3();
+    let n = 0;
+    for (let v = 0; v < pos.count; v += step) { c.add(_bV.fromBufferAttribute(pos, v)); n++; }
+    c.multiplyScalar(1 / n);
+    const far = from => {                      // farthest sampled vert from a point
+      const out = new THREE.Vector3(); let best = -1;
+      for (let v = 0; v < pos.count; v += step) {
+        const d = _bV.fromBufferAttribute(pos, v).distanceToSquared(from);
+        if (d > best) { best = d; out.copy(_bV); }
+      }
+      return out;
+    };
+    const endA = far(c), endB = far(endA);
+    const axis = new THREE.Vector3().subVectors(endB, endA);
+    const len = axis.length();
+    axis.normalize();
+    const spreadNear = end => {                // cross-section spread in the outer 8%
+      let s = 0, m = 0;
+      for (let v = 0; v < pos.count; v += step) {
+        _bV.fromBufferAttribute(pos, v).sub(end);
+        const a = Math.abs(_bV.dot(axis));
+        if (a > len * 0.08) continue;
+        s += _bV.addScaledVector(axis, -_bV.dot(axis)).length(); m++;
+      }
+      return m ? s / m : 0;
+    };
+    const tip = spreadNear(endA) < spreadNear(endB) ? endA : endB;
+    const tail = tip === endA ? endB : endA;
+    const dir = new THREE.Vector3().subVectors(tip, tail).normalize();
+    const s = ENG_ARROW_REL / len;             // arrow length for the 1.9-span bow
+    const q = new THREE.Quaternion().setFromUnitVectors(dir, _bY);
+    const tpl = new THREE.Group();
+    gltf.scene.quaternion.copy(q);
+    gltf.scene.scale.setScalar(s);
+    gltf.scene.position.copy(tail).applyQuaternion(q).multiplyScalar(-s);   // tail → origin
+    tpl.add(gltf.scene);
+    tpl.userData.src = 'asset';
+    ENG_ARROW_TPL = tpl;
+    toast('🏹 real arrow loaded');
+  }, null, () => { _arrowLoading = false; }); // load error → retry on next spawn
+}
+function engMakeArrow() {
+  if (ENG_ARROW_TPL) return ENG_ARROW_TPL.clone();   // shares geometry — instant
+  const g = new THREE.Group();                 // +Y = forward, tail at origin (fallback)
+  const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.007, 0.007, 1.09, 6),
+    new THREE.MeshStandardMaterial({ color: 0x8a6a42, roughness: 0.85 }));
+  shaft.position.y = 0.545;
+  const tip = new THREE.Mesh(new THREE.ConeGeometry(0.016, 0.06, 8),
+    new THREE.MeshStandardMaterial({ color: 0x777777, metalness: 0.6, roughness: 0.4 }));
+  tip.position.y = ENG_ARROW_REL - 0.03;
+  g.add(shaft, tip);
+  return g;
+}
+function engAimArrow(b, arrow) {               // seat the tail on the LIVE nock point
+  arrow.scale.setScalar(b.grp.scale.x || 1);   // nocked arrow rides the bow's scale
+  b.mesh.updateWorldMatrix(true, false);
+  b.rig.nockLive(_bN);                         // = the fingers when a hand is on the string
+  b.mesh.localToWorld(_bN);
+  _bV.copy(b.rig.drawDir).multiplyScalar(-1).transformDirection(b.mesh.matrixWorld);
+  arrow.position.copy(_bN);
+  arrow.quaternion.setFromUnitVectors(_bY, _bV);
+}
+// aim as numbers (for the world log + HUD): elevation absolute, azimuth
+// relative to the tracked user's facing when live, else to the world −Z
+const _aV = new THREE.Vector3(), _aF = new THREE.Vector3();
+function engAimAngles(b) {
+  _aV.copy(b.rig.drawDir).multiplyScalar(-1).transformDirection(b.mesh.matrixWorld);
+  const el = Math.round(Math.asin(Math.max(-1, Math.min(1, _aV.y))) * 57.2958);
+  let az;
+  if (ENG_USER.on) {
+    _aF.copy(ENG_USER.fwd); _aF.y = 0; _aF.normalize();
+    az = Math.round(Math.atan2(_aF.z * _aV.x - _aF.x * _aV.z, _aF.x * _aV.x + _aF.z * _aV.z) * 57.2958);
+  } else az = Math.round(Math.atan2(_aV.x, -_aV.z) * 57.2958);
+  return { az, el };
+}
+function engBowShoot(b) {
+  const power = b.draw;
+  const arrow = b.nocked || engMakeArrow();
+  arrow.scale.setScalar(b.grp.scale.x || 1);   // arrow rides its bow's figure scale
+  if (b.nocked) b.nocked = null; else ENG.scene.add(arrow);
+  engAimArrow(b, arrow);
+  _bV.copy(b.rig.drawDir).multiplyScalar(-1).transformDirection(b.mesh.matrixWorld);
+  const vel = _bV.clone().multiplyScalar(5 + 18 * power);
+  b.flying.push({ mesh: arrow, vel, t: 0, dead: false, from: arrow.position.clone() });
+  const A = engAimAngles(b);
+  engWorldLog('user', 'shot', Math.round(power * 100) + '% power · az ' + A.az + '° el ' + A.el
+    + '° · ' + vel.length().toFixed(1) + ' m/s');
+  toast('🏹 loosed — ' + Math.round(power * 100) + '% draw');
+}
+function engBowTick(dt) {
+  let heldBow = null, anyHolo = false;
+  for (const b of BOWS.values()) {
+    if (b.holo) {                                                      // hologram idle: bob + slow
+      b.holo.t += dt;                                                  // spin + emissive pulse
+      b.grp.position.y = b.holo.baseY + Math.sin(b.holo.t * 1.6) * 0.03;
+      b.grp.rotateY(dt * 0.5);
+      for (const m of b.holo.mats) if (m.emissive) m.emissiveIntensity = 0.36 + 0.18 * Math.sin(b.holo.t * 2.2);
+      anyHolo = true;
+    }
+    if (b.free && b.free.holo) {
+      const H = b.free.holo;
+      H.t += dt;
+      b.free.grp.position.y = H.baseY + Math.sin(H.t * 1.6) * 0.03;
+      for (const m of H.mats) if (m.emissive) m.emissiveIntensity = 0.36 + 0.18 * Math.sin(H.t * 2.2);
+      anyHolo = true;
+    }
+    if (b.held) heldBow = b;
+    if (b.drawing) { b.hold = false; b.draw = Math.min(1, b.draw + dt * 0.85); b.rig.setDraw(b.draw); }
+    else if (b.wasDrawing && b.draw > 0.12) engBowShoot(b);            // release edge → loose
+    if (!b.drawing && !b.hold && b.draw > 0) {
+      b.draw = Math.max(0, b.draw - dt * 7);                           // string snaps home
+      b.rig.setDraw(b.draw);
+    }
+    b.wasDrawing = b.drawing;
+    if (b.draw > 0.03 || b.nockPin) {                                  // nocked arrow rides the string
+      if (!b.nocked) {
+        b.nocked = engMakeArrow();
+        b.nocked.scale.setScalar(b.grp.scale.x || 1);                  // arrow scales with its bow
+        ENG.scene.add(b.nocked);
+      }
+      engAimArrow(b, b.nocked);
+    } else if (b.nocked) { ENG.scene.remove(b.nocked); b.nocked = null; }
+    for (let i = b.flying.length - 1; i >= 0; i--) {                   // simple ballistics
+      const a = b.flying[i];
+      a.t += dt;
+      if (!a.dead) {
+        a.vel.y -= 9.8 * dt;
+        a.mesh.position.addScaledVector(a.vel, dt);
+        if (a.vel.lengthSq() > 1e-4) a.mesh.quaternion.setFromUnitVectors(_bY, _bV.copy(a.vel).normalize());
+        if (a.mesh.position.y <= 0.02) {
+          a.dead = true; a.mesh.position.y = 0.02;
+          if (a.from) {                                                // shot result → world log
+            _bV.copy(a.mesh.position).sub(a.from); _bV.y = 0;
+            engWorldLog('user', 'land', _bV.length().toFixed(1) + 'm out');
+          }
+        }
+      }
+      if (a.t > 5) { ENG.scene.remove(a.mesh); b.flying.splice(i, 1); }
+    }
+    if (ENG.sel === b.grp) {
+      const el = document.getElementById('engBowPct');
+      if (el) el.textContent = Math.round(b.draw * 100) + '%';
+    }
+  }
+  // live readout on the one hint line: gesture-held draw/aim > hologram prompt
+  // > the keyboard hint (restored untouched when the gesture lanes go quiet)
+  const bh = document.getElementById('engBowHint');
+  if (bh) {
+    if (heldBow || anyHolo) {
+      if (bh._kb === undefined) bh._kb = bh.innerHTML;
+      if (heldBow) {
+        const A = engAimAngles(heldBow);
+        bh.textContent = heldBow.nockPin
+          ? '🏹 draw ' + Math.round(heldBow.draw * 100) + '% · pull ' + Math.max(0, heldBow._pull || 0).toFixed(2)
+            + 'm · az ' + A.az + '° el ' + A.el + '° — open fingers to loose'
+          : '🏹 held — aim by pointing (az ' + A.az + '° el ' + A.el + '°) · right hand: take the arrow, bring it to the string';
+      } else bh.textContent = '🏹 at your hands — close your left hand on the grip, right pinch takes the arrow';
+      bh.style.display = 'block';
+    } else if (bh._kb !== undefined) {
+      bh.innerHTML = bh._kb; bh._kb = undefined;
+      bh.style.display = ENG.sel && BOWS.has(ENG.sel.userData.eng.id) ? 'block' : 'none';
+    }
+  }
+  // stream the first bow's grip volume to the lab conform collider — tracked
+  // HoloHand fingers wrap around the stave instead of passing through it
+  const BC = window.__lab && window.__lab.bowCol;
+  if (BC && !LABBOW.on) {                      // LABBOW owns the collider when armed
+    const first = BOWS.values().next().value;
+    if (first && ENG.sdk && ENG.sdk.on) {
+      first.mesh.updateWorldMatrix(true, false);
+      BC.center.copy(first.rig.gripLocal).applyMatrix4(first.mesh.matrixWorld);
+      first.grp.getWorldQuaternion(BC.quat);
+      BC.half.set(0.035, 0.14, 0.04).multiplyScalar(first.grp.scale.x || 1);   // grip volume rides the bow scale
+      BC.active = true;
+    } else BC.active = false;
+  }
+}
+
+// ═══ USER PRESENCE — the tracked user is a LOCATED game object ══════════════
+// Live position/reach/facing in real engine-space coordinates, derived every
+// frame from whatever the tracker offers: the full 33-pt body when it is live
+// (pelvis/chest/shoulder facing — the same points the figure renders from), or
+// the HAND PACKS when only hands are tracked (the reach zone IS the hands —
+// where you see your hand is where you are). Logged to the world ring on
+// arrival and on real movement, and consumed by NPC minds (proximity),
+// hologram spawns (in-reach placement) and the archery readouts — so game
+// objects interact with WHERE THE USER ACTUALLY IS.
+const ENG_USER = { on: false, src: '', pos: new THREE.Vector3(), chest: new THREE.Vector3(),
+                   fwd: new THREE.Vector3(0, 0, 1), t: 0, height: 0, palm: 0.1,
+                   handL: new THREE.Vector3(), handR: new THREE.Vector3(), hL: false, hR: false,
+                   _lgP: new THREE.Vector3(1e9, 0, 0), _lgT: 0 };
+const _uA = new THREE.Vector3(), _uUp = new THREE.Vector3(0, 1, 0);
+const _fmtV = p => p.x.toFixed(2) + ', ' + p.y.toFixed(2) + ', ' + p.z.toFixed(2);
+function engUserTick(nowT) {
+  const U = ENG_USER;
+  const T = window.__lab && window.__lab.AVSYNC;
+  // live HAND anchors first — the rendered pack palms are exactly where the
+  // user sees their hands, in BOTH modes (welded to the body wrists when the
+  // body is live). Palm length is the scale-free ruler every radius uses.
+  const pk = T && T.packsAligned ? T.packs : null;
+  U.hL = !!(pk && pk.L && pk.L[0]);
+  if (U.hL) U.handL.copy(pk.L[0]).lerp(pk.L[9], 0.5);
+  U.hR = !!(pk && pk.R && pk.R[0]);
+  if (U.hR) U.handR.copy(pk.R[0]).lerp(pk.R[9], 0.5);
+  const ph = pk && (pk.L || pk.R);
+  if (ph && ph[0] && ph[9]) U.palm = _uA.copy(ph[0]).distanceTo(ph[9]) || U.palm;
+  const pts = ENG.ovBodyPts || (window.__lab && window.__lab.engBodyPts);
+  if (pts && pts[23] && pts[24] && pts[11] && pts[12]) {
+    U.on = true; U.src = 'body';
+    U.pos.copy(pts[23]).lerp(pts[24], 0.5);                // pelvis = hip midpoint
+    U.chest.copy(pts[11]).lerp(pts[12], 0.5);
+    _uA.copy(pts[11]).sub(pts[12]);                        // (L−R shoulder) × up = facing
+    if (_uA.lengthSq() > 1e-8) U.fwd.crossVectors(_uA, _uUp).normalize();
+    // figure HEIGHT — the ruler holograms scale to (head→ankle extent when the
+    // legs are tracked, else the torso × anatomical ratio)
+    const top = Math.max(pts[0] ? pts[0].y : -1e9, pts[11].y, pts[12].y);
+    const bot = Math.min(pts[27] ? pts[27].y : 1e9, pts[28] ? pts[28].y : 1e9);
+    U.height = bot < 1e8 ? Math.max(0.2, (top - bot) * (pts[0] ? 1.05 : 1.15))
+                         : Math.max(0.2, (U.chest.y - U.pos.y) * 3.6);
+    // no hand packs → the body's own wrists anchor the hands, palm via the
+    // HAND_BODY_PROP doctrine (palm ≈ 0.40 × forearm)
+    if (!U.hL && pts[15]) { U.handL.copy(pts[15]); U.hL = true; }
+    if (!U.hR && pts[16]) { U.handR.copy(pts[16]); U.hR = true; }
+    if (!ph && pts[13] && pts[15]) U.palm = Math.max(0.02, 0.4 * _uA.copy(pts[13]).distanceTo(pts[15]));
+  } else if (U.hL || U.hR) {
+    // hands-only tracking: the hands ARE the presence
+    U.on = true; U.src = 'hands'; U.height = 0;
+    if (U.hL && U.hR) U.pos.copy(U.handL).lerp(U.handR, 0.5);
+    else U.pos.copy(U.hL ? U.handL : U.handR);
+    U.chest.copy(U.pos);
+    const cam = window.__lab && window.__lab.camera;       // facing = dolly → hands
+    if (cam) {
+      _uA.copy(U.pos).sub(cam.position); _uA.y = 0;
+      if (_uA.lengthSq() > 1e-6) U.fwd.copy(_uA).normalize();
+    }
+  } else { U.on = false; U.src = ''; return; }
+  U.t = nowT;
+  if (nowT - U._lgT > 1000 && U._lgP.distanceTo(U.pos) > 0.4) {
+    engWorldLog('user', 'pos', _fmtV(U.pos));              // tracked like any object
+    U._lgP.copy(U.pos); U._lgT = nowT;
+  }
+}
+
+// ═══ GESTURE ARCHERY — the keyboard lane transposed to the tracked hands ═══
+// LEFT fist near the grip GRABS the bow: it rides the palm 6-DoF, so AIMING is
+// simply pointing the bow — wrist micro-angles adjust range and direction, and
+// the loosed arrow flies where the bow points (engBowShoot already fires along
+// the bow's own forward). RIGHT pinch near the nock takes the string: dragging
+// back is the draw (same engBowSetDraw seam as the keyboard — further back =
+// further the string bends = harder the shot), opening the pinch looses.
+// GRAVITY: an un-held bow falls and rests on the floor; a held bow never
+// falls. Hand data = the SAME welded packs the flesh hands render from
+// (AVSYNC.packs; lab space ≡ engine space — the anchors doctrine).
+const _palmP = new THREE.Vector3(), _palmQ = new THREE.Quaternion();
+const _gW = new THREE.Vector3(), _gA = new THREE.Vector3(), _gB = new THREE.Vector3(), _gC = new THREE.Vector3();
+const _gQ2 = new THREE.Quaternion(), _gM = new THREE.Matrix4();
+const _gP2 = new THREE.Vector3(), _gQ3 = new THREE.Quaternion();
+function _palmPose(pack, outP, outQ) {          // palm frame (hands.js basis doctrine)
+  _gA.copy(pack[9]).sub(pack[0]);               // wrist→middle MCP = Y
+  if (_gA.lengthSq() < 1e-10) return false;
+  _gA.normalize();
+  _gB.copy(pack[5]).sub(pack[17]);              // index−pinky
+  _gC.crossVectors(_gA, _gB);                   // palm normal = Z
+  if (_gC.lengthSq() < 1e-10) return false;
+  _gC.normalize();
+  _gB.crossVectors(_gA, _gC).normalize();       // X = Y×Z (right-handed)
+  _gM.makeBasis(_gB, _gA, _gC);
+  outQ.setFromRotationMatrix(_gM);
+  outP.copy(pack[0]).lerp(pack[9], 0.5);
+  return true;
+}
+function _closure(pack) {                       // 0 open … 1 fist (scale-free)
+  const palm = _gA.copy(pack[0]).distanceTo(pack[9]);
+  if (palm < 1e-6) return 0;
+  let d = 0;
+  for (const i of [8, 12, 16, 20]) d += _gA.copy(pack[i]).distanceTo(pack[0]);
+  return Math.min(1, Math.max(0, (1.6 - (d / 4) / palm) / 0.6));
+}
+function _pinchR(pack) {                        // thumb-tip↔index-tip / palm length
+  const palm = _gA.copy(pack[0]).distanceTo(pack[9]);
+  return palm < 1e-6 ? 9 : _gA.copy(pack[4]).distanceTo(pack[8]) / palm;
+}
+function engGestureTick(dt) {
+  if (!BOWS.size) return;
+  if (LABBOW.on) return;   // the on-hands LAB lane owns hand gestures while armed
+  const T = window.__lab && window.__lab.AVSYNC;
+  const packs = T && T.packsAligned ? T.packs : null;   // rendered POV HoloHands only
+  const L = packs && packs.L, R = packs && packs.R;
+  for (const b of BOWS.values()) {
+    const grp = b.grp;
+    // ── two-hand pinch = SCALE (the DEI basketball / cube gesture): both
+    // pinches near the bow, pull apart / squeeze — engine lane too ──
+    let scal2 = false;
+    if (L && L[0] && R && R[0] && !b.held && !b.nockPin && !(b.free && b.free.held)
+        && _pinchR(L) < 0.35 && _pinchR(R) < 0.35) {
+      _gA.copy(L[4]).lerp(L[8], 0.5);
+      _gB.copy(R[4]).lerp(R[8], 0.5);
+      const d2 = _gA.distanceTo(_gB);
+      _gC.copy(_gA).lerp(_gB, 0.5);
+      b.mesh.updateWorldMatrix(true, false);
+      _gW.copy(b.rig.gripLocal).applyMatrix4(b.mesh.matrixWorld);
+      if (b._scal || _gC.distanceTo(_gW) < 0.6 * b.rig.span * (grp.scale.x || 1)) {
+        if (!b._scal) b._scal = { d0: Math.max(d2, 1e-3), s0: grp.scale.x || 1 };
+        grp.scale.setScalar(Math.max(0.2, Math.min(3, b._scal.s0 * d2 / b._scal.d0)));
+        scal2 = true;
+      }
+    }
+    if (!scal2) b._scal = null;
+    // ── LEFT fist ↔ grip: grab / 6-DoF follow / release ──
+    if (!scal2 && L && L[0] && _palmPose(L, _palmP, _palmQ)) {
+      b.mesh.updateWorldMatrix(true, false);
+      _gW.copy(b.rig.gripLocal).applyMatrix4(b.mesh.matrixWorld);
+      const close = _closure(L);
+      // every radius is PALM-PROPORTIONAL (scale-free): welded hands shrink
+      // with the figure, so absolute meters would break small/distant figures
+      const palL = L[9] ? Math.max(0.02, _gA.copy(L[0]).distanceTo(L[9])) : 0.1;
+      if (!b.held) {
+        // NOTHING sticks to an open hand: taking the bow is a real FIST wrap
+        // with fingers ON the wood (mesh-true hull gap when available)
+        const touching = b.hull ? _hullTouch(b.hull, b.mesh, L) < (b.holo ? 0.5 : 0.35) * palL
+                               : _palmP.distanceTo(_gW) < (b.holo ? 3.0 : 2.4) * palL;
+        if ((b.holo ? close > 0.55 : close > 0.62) && touching) {
+          b.held = true; b.velY = 0; b.relT = 0;
+          if (b.holo) { engHoloOff(grp); b.holo = null; }
+          b.grabQ = _palmQ.clone().invert().multiply(grp.quaternion);
+          b.grabP = grp.position.clone().sub(_palmP).applyQuaternion(_palmQ.clone().invert());
+          engWorldLog('user', 'grab', 'bow @ ' + _fmtV(grp.position));
+          toast('🏹 grabbed — aim by pointing; take the arrow with your other hand');
+        }
+      } else {
+        if (close < 0.4) {
+          b.relT += dt;
+          if (b.relT > 0.15) {
+            b.held = false; b.nockPin = false; b.hold = false;
+            engWorldLog('user', 'release', 'bow dropped');
+            toast('bow released');
+          }
+        } else b.relT = 0;
+        if (b.held) {
+          _gQ2.copy(_palmQ).multiply(b.grabQ);
+          grp.quaternion.slerp(_gQ2, 1 - Math.exp(-14 * dt));
+          _gW.copy(b.grabP).applyQuaternion(_palmQ).add(_palmP);
+          grp.position.lerp(_gW, 1 - Math.exp(-14 * dt));
+        }
+      }
+    } else if (b.held) {
+      b.relT += dt;                             // hand lost → drop after a grace window
+      if (b.relT > 0.4) { b.held = false; b.nockPin = false; b.hold = false; }
+    }
+    // ── gravity: held bows and holograms defy it, everything else falls ──
+    if (!b.held && !b.holo && grp.position.y > 0.0005) {
+      b.velY -= 9.8 * dt;
+      grp.position.y = Math.max(0, grp.position.y + b.velY * dt);
+      if (grp.position.y === 0) b.velY = 0;
+    }
+    // ── RIGHT hand · the FREE ARROW: pick up by pinch, carry, seat on the string ──
+    const F = b.free;
+    if (F) F.grp.scale.setScalar(grp.scale.x || 1);   // arrow rides the bow's scale
+    if (F && !scal2 && R && R[0]) {
+      const pr = _pinchR(R);
+      const palR = R[9] ? Math.max(0.02, _gA.copy(R[0]).distanceTo(R[9])) : 0.1;
+      _gB.copy(R[4]).lerp(R[8], 0.5);                       // pinch point
+      if (!F.held) {
+        const sA = F.grp.scale.x || 1;
+        _gA.set(0, 1, 0).applyQuaternion(F.grp.quaternion); // shaft: tail=origin, +Y fwd
+        _gC.copy(F.grp.position).addScaledVector(_gA, 0.5 * ENG_ARROW_REL * sA);
+        // a real grip on the stick — joint spheres ON the shaft's true surface
+        const touchA = F.hull ? _hullTouch(F.hull, F.grp, R) < (F.holo ? 0.5 : 0.35) * palR
+          : Math.min(_gB.distanceTo(_gC), _gB.distanceTo(F.grp.position)) < (F.holo ? 2.6 : 2.2) * palR;
+        if ((_closure(R) > 0.5 || pr < 0.4) && touchA) {
+          F.held = true; F.velY = 0;
+          if (F.holo) { engHoloOff(F.grp); F.holo = null; }
+          engWorldLog('user', 'grab', 'arrow');
+          toast('arrow in hand — bring it to the string');
+        }
+      } else if (pr > 0.8) {
+        F.held = false;                                     // fingers opened → the arrow drops
+      } else {
+        // carry: the shaft rides the pinch; near the held bow it turns toward
+        // the nock (guided seating), free carry points along the fingers
+        let dN = Infinity;
+        if (b.held) {
+          b.mesh.updateWorldMatrix(true, false);
+          b.rig.nock(_gC); b.mesh.localToWorld(_gC);
+          dN = _gB.distanceTo(_gC);
+        }
+        if (b.held && dN > 1e-4 && dN < 7 * palR) _gA.copy(_gC).sub(_gB).normalize();
+        else if (_palmPose(R, _gP2, _gQ3)) _gA.set(0, 1, 0).applyQuaternion(_gQ3);
+        else _gA.set(0, 1, 0).applyQuaternion(F.grp.quaternion);
+        F.grp.position.lerp(_gB, 1 - Math.exp(-16 * dt));
+        _gQ2.setFromUnitVectors(_bY, _gA);
+        F.grp.quaternion.slerp(_gQ2, 1 - Math.exp(-12 * dt));
+        if (b.held && dN < 1.9 * palR) {                    // tail reaches the string → nocked
+          b.nockPin = true; b.pinchRel = 0;
+          b.nocked = F.grp; b.free = null;                  // the carried arrow IS the arrow
+          engWorldLog('user', 'nock', 'arrow on string');
+          toast('nocked — drag back to draw, open fingers to loose');
+        }
+      }
+    } else if (F && F.held) F.held = false;                 // hand lost → drop
+    if (b.free && !b.free.held && !b.free.holo && b.free.grp.position.y > 0.012) {
+      const A = b.free;                                     // arrow gravity — lands flat
+      A.velY -= 9.8 * dt;
+      A.grp.position.y = Math.max(0.01, A.grp.position.y + A.velY * dt);
+      if (A.grp.position.y === 0.01) {
+        A.velY = 0;
+        _gA.set(0, 1, 0).applyQuaternion(A.grp.quaternion); _gA.y = 0;
+        if (_gA.lengthSq() < 1e-6) _gA.set(1, 0, 0);
+        A.grp.quaternion.setFromUnitVectors(_bY, _gA.normalize());
+      }
+    }
+    // ── RIGHT pinch ↔ string: nock, drag back = draw, open = loose ──
+    if (b.held && R && R[0]) {
+      const pr = _pinchR(R);
+      const palR = R[9] ? Math.max(0.02, _gA.copy(R[0]).distanceTo(R[9])) : 0.1;
+      _gB.copy(R[4]).lerp(R[8], 0.5);           // pinch point
+      b.mesh.updateWorldMatrix(true, false);
+      if (!b.nockPin) {
+        // bare-string pinch auto-nocks only while no carried arrow is in play
+        if (!b.free) {
+          b.rig.nock(_gC); b.mesh.localToWorld(_gC);
+          if (pr < 0.35 && _gB.distanceTo(_gC) < 2.6 * palR) {
+            b.nockPin = true; b.pinchRel = 0;
+            engWorldLog('user', 'nock', 'string pinched');
+            toast('arrow nocked — drag back to draw, open fingers to loose');
+          }
+        }
+      } else if (pr > 0.55) {
+        b.pinchRel += dt;
+        if (b.pinchRel > 0.05) {                // fingers opened → loose!
+          if (b.draw > 0.12) engBowShoot(b);
+          else if (b.nocked) {                  // weak release — the arrow just falls
+            b.flying.push({ mesh: b.nocked, vel: new THREE.Vector3(), t: 0, dead: false });
+            b.nocked = null;
+          }
+          b.nockPin = false; b.hold = false;    // decay snaps the string home
+        }
+      } else {
+        b.pinchRel = 0;
+        // draw = pull distance from the REST nock, along the bow's pull axis
+        b.rig.nockRest(_gC); b.mesh.localToWorld(_gC);
+        _gW.copy(b.rig.drawDir).transformDirection(b.mesh.matrixWorld);
+        const sw = grp.scale.x || 1;
+        const pull = _gA.copy(_gB).sub(_gC).dot(_gW);
+        const d = pull / (b.rig.opts.drawMax * b.rig.span * sw);
+        b.hold = true;
+        b.draw = Math.min(1, Math.max(0, d));
+        b.rig.setDraw(b.draw);
+        b._pull = pull;
+        // in-process telemetry: the tracked pull + aim land in the world ring
+        b._logAcc = (b._logAcc || 0) + dt;
+        if (b._logAcc > 0.35 && Math.abs(b.draw - (b._logDraw ?? -1)) > 0.03) {
+          const A = engAimAngles(b);
+          engWorldLog('user', 'draw', Math.round(b.draw * 100) + '% · pull '
+            + Math.max(0, pull).toFixed(2) + 'm · az ' + A.az + '° el ' + A.el + '°');
+          b._logAcc = 0; b._logDraw = b.draw;
+        }
+      }
+    } else if (b.nockPin) { b.nockPin = false; b.hold = false; }
+  }
+}
+
 // ═══ NPC MIND — interaction loops for avatar game objects ═══════════════════
 // Same trigger→script pattern as any game object, plus an ANIMATION STACK and
 // a STAT LINEAGE:
@@ -4017,9 +5402,12 @@ const ENG_MINDS = {
     ] },
 };
 const ENG_WORLD = { stats: { interactions: 0, touches: 0, byRole: {} }, log: [] };
+function engWorldLog(who, kind, msg) {         // the ONE ring every actor writes —
+  ENG_WORLD.log.push({ t: +(performance.now() / 1000).toFixed(1), npc: who, kind, msg });
+  if (ENG_WORLD.log.length > 60) ENG_WORLD.log.shift();   // NPCs, the user, bow shots
+}
 function engLog(rec, kind, msg) {
-  ENG_WORLD.log.push({ t: +(performance.now() / 1000).toFixed(1), npc: rec.grp.userData.eng.label, kind, msg });
-  if (ENG_WORLD.log.length > 60) ENG_WORLD.log.shift();
+  engWorldLog(rec.grp.userData.eng.label, kind, msg);
   rec.mind.lastEvt = kind + (msg ? ' · ' + msg : '');
   if (ENG.sel === rec.grp) engMindUiRefresh();
 }
@@ -4048,6 +5436,10 @@ function engReactStart(rec, r, evt, nowT) {
     const i = rec.clips.findIndex(c => c.name === r.play[0]);
     if (i >= 0) { resume = rec.clipIdx; engAvatarSetClip(rec.grp, i); }
   }
+  // an INTERRUPTING reaction inherits the interrupted one's base clip: the
+  // stack must pop to the ORIGINAL underneath, never to a mid-reaction clip
+  // (probe-caught: touch→approach 0.3s apart "restored" the touch's run clip)
+  if (M.active && M.active.resume !== undefined) resume = M.active.resume;
   M.active = { r, until: nowT + dur, dur, resume };
   engLog(rec, evt, Object.entries(deltas).map(([k, v]) => k + (v > 0 ? '+' : '') + v).join(' ')
     + (r.play && r.play.length ? ' ▶' + r.play[0] : '') + (r.move ? ' ⇢' + r.move.dir : ''));
@@ -4056,6 +5448,7 @@ const _mU = new THREE.Vector3(), _mD = new THREE.Vector3(), _mQ2 = new THREE.Qua
 const _mY = new THREE.Vector3(0, 1, 0), _mX = new THREE.Vector3(1, 0, 0);
 function engUserPos(out) {
   for (const r of AVREG.values()) if (r.role === 'user' && r.driveOn) return out.copy(r.grp.position);
+  if (ENG_USER.on) return out.copy(ENG_USER.pos);   // the LIVE tracked pelvis — real coords
   const b = ENG.objects.find(o => o.userData.eng && o.userData.eng.sub === 'body');
   return b ? out.copy(b.position) : null;
 }
@@ -4182,7 +5575,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -4197,6 +5590,13 @@ function engDelete(o) {
     if (T) Object.assign(T[d.sub], { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 });
   }
   AVREG.delete(o.userData.eng.id);
+  const bw = BOWS.get(o.userData.eng.id);
+  if (bw) {
+    if (bw.nocked) ENG.scene.remove(bw.nocked);
+    if (bw.free) ENG.scene.remove(bw.free.grp);
+    for (const a of bw.flying) ENG.scene.remove(a.mesh);
+    BOWS.delete(o.userData.eng.id);
+  }
   ENG.objRoot.remove(o); ENG.objects = ENG.objects.filter(x => x !== o);
   o.traverse(c => c.geometry && c.geometry.dispose());
   engRefreshList();
@@ -4224,6 +5624,12 @@ async function engRestore(snap) {
           const rr = AVREG.get(g.userData.eng.id);
           if (rr && rr.mind) rr.mind.stats = { ...rec.mind.stats };
         }
+      } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'bow') {
+      try {
+        const g = await engSpawnBow(rec.url, { label: rec.label, noHolo: true });
+        g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
     }
     else if (rec.type === 'glb') { try { await engImportGLB(rec.url, rec); } catch { toast('⚠ could not reload ' + rec.label); } }
@@ -4495,6 +5901,18 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
       .catch(err => toast('⚠ avatar failed: ' + (err.message || err), 5000));
     return;
   }
+  if (b.dataset.sp === 'bow') {
+    if (ENG.sdk.on) {   // tracking live (POV or mirror) → the ON-HANDS lane:
+      // the bow renders IN the lab scene, on the blue holo hands themselves
+      labBowToggle().catch(err => toast('⚠ bow overlay failed: ' + (err.message || err), 5000));
+      return;
+    }
+    toast('loading bow…', 5000);
+    engSpawnBow().then(g => {                  // hologram path toasts its own hint
+      if (!BOWS.get(g.userData.eng.id).holo) toast('🏹 bow — select it, HOLD SPACE to draw, release to shoot');
+    }).catch(err => toast('⚠ bow failed: ' + (err.message || err), 5000));
+    return;
+  }
   engSpawn(b.dataset.sp);
 }));
 document.querySelectorAll('#engGizRow .opt').forEach(b => b.addEventListener('click', () => {
@@ -4553,6 +5971,14 @@ addEventListener('keydown', e => {
   if (e.key === '1' || e.key === '2' || e.key === '3') document.querySelectorAll('#engGizRow .opt')[+e.key - 1].click();
   if ((e.key === 'Delete' || e.key === 'Backspace') && ENG.sel) engDelete(ENG.sel);
   if (e.key === 'Escape') engSelect(null);
+  if (e.code === 'Space' && ENG.sel && BOWS.has(ENG.sel.userData.eng.id)) {
+    e.preventDefault();                        // draw the selected bow, not scroll
+    BOWS.get(ENG.sel.userData.eng.id).drawing = true;
+  }
+});
+addEventListener('keyup', e => {
+  if (e.code !== 'Space' || !ENG.on) return;
+  for (const b of BOWS.values()) b.drawing = false;   // release → engBowTick looses
 });
 </script>
 <script src="./sdk/ui/panel-toggle.js" defer></script>

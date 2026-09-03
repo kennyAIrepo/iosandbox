@@ -7,7 +7,7 @@ import puppeteer from 'puppeteer-core';
 import { readFileSync } from 'node:fs';
 import os from 'node:os';
 const SP = process.env.PROBE_SHOTS || os.tmpdir();   // screenshot output dir
-const POSES = JSON.parse(readFileSync(SP + '/test_poses.json', 'utf8'));   // fist/flat, gltf coords
+const POSES = JSON.parse(readFileSync(new URL('./fixtures/test_poses.json', import.meta.url), 'utf8'));   // fist/flat, gltf coords
 const browser = await puppeteer.launch({
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe',
   headless: 'new',

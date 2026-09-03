@@ -287,7 +287,8 @@ const mind = await page.evaluate(async () => {
   npc.position.set(0, 0, 0); user.position.set(5, 0, 5);
   window.__eng.mindSet(npc, 'skittish');
   await new Promise(r => setTimeout(r, 300));             // near-state seeds FAR
-  user.position.set(1.0, 0, 0);                           // step inside 1.4 → approach
+  user.position.set(0, 0, 1.2);                           // step inside 1.4 → approach
+  // (approach along +z: the T-pose arms span ±x, so no accidental hand-touch)
   await new Promise(r => setTimeout(r, 600));
   const duringClip = nrec.clipIdx >= 0 ? nrec.clips[nrec.clipIdx].name : 'idle';
   const d1 = Math.hypot(npc.position.x - user.position.x, npc.position.z - user.position.z);
@@ -315,6 +316,7 @@ const mind = await page.evaluate(async () => {
     restored, touched,
     statsDropped: statsAfterFlee.energy < 100 && statsAfterFlee.mood < 50,
     logKinds: [...new Set(window.__eng.world.log.map(e => e.kind))],
+    log: window.__eng.world.log.map(e => e.t + ' ' + e.kind + ' ' + e.msg),
     interactions: window.__eng.world.stats.interactions,
     ui,
   };
