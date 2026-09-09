@@ -1,0 +1,482 @@
+/**
+ * hopeOS SDK — In-runtime AI Agent (Claude-powered)
+ * ═══════════════════════════════════════════════════════════════
+ * Turns natural-language commands (typed or voice-transcribed) into real
+ * actions on the world — for BOTH navigating and creating. Claude decides
+ * which tools to call; this module executes them against the live scene.
+ *
+ *   const agent = new WorldAgent({ apiKey, model, world, nav, scene });
+ *   await agent.command("take me to the stairs");
+ *   await agent.command("make me face up, not the floor");
+ *   await agent.command("add a gold sphere in front of me and make it bigger");
+ *
+ * Navigation intent uses Claude (this module). Whisper (OpenAI) only does the
+ * speech→text step upstream; its transcript is fed straight into command().
+ */
+
+import { searchModels, resolveGLB } from './sketchfab.js';
+
+// Choose the result whose name best matches the query (token overlap), preferring
+// models with real geometry — beats blindly taking result #0.
+function bestMatch(results, q) {
+  const qs = String(q).toLowerCase().split(/\W+/).filter(Boolean);
+  let best = results[0], bs = -Infinity;
+  for (const r of results) {
+    const n = (r.name || '').toLowerCase();
+    let s = qs.reduce((a, t) => a + (n.includes(t) ? 1 : 0), 0);
+    if (r.faces > 0) s += 0.1;
+    if (s > bs) { bs = s; best = r; }
+  }
+  return best;
+}
+
+const TOOLS = [
+  // ── Understanding ──
+  { name: 'get_scene', description: 'Read the full world state: avatar transform, what the user is looking at, landmarks, and every object with its id/type/position/rotation/scale/color. Call this first when you need to know what exists or which object the user means.',
+    input_schema: { type: 'object', properties: {} } },
+  { name: 'select_in_view', description: 'Return the id of the object the user is currently looking at (raycast from their eyes). Use for "this"/"that".',
+    input_schema: { type: 'object', properties: {} } },
+
+  // ── Spatial selection (mark a wall/floor/region for editing) ──
+  { name: 'mark_surface_in_view', description: 'Mark the wall/floor/ceiling the user is looking at as the active selection. Returns its centre, normal, tangent basis, size and area — the spatial matrix to build against.',
+    input_schema: { type: 'object', properties: { size: { type: 'number', description: 'edge length of the marked square (m), default 2' } } } },
+  { name: 'mark_region', description: 'Mark a free box region floating at a world coordinate.',
+    input_schema: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' }, size: { type: 'number' } }, required: ['x', 'y', 'z'] } },
+  { name: 'get_selection', description: 'Read the active spatial selection (centre/normal/basis/size/area/type).',
+    input_schema: { type: 'object', properties: {} } },
+  { name: 'clear_selection', description: 'Clear the active selection.', input_schema: { type: 'object', properties: {} } },
+  { name: 'place_in_selection', description: 'Place one object on the active selection at grid coords u,v ∈ [-0.5,0.5] (0,0 = centre). Sits it on the surface.',
+    input_schema: { type: 'object', properties: { type: { type: 'string', enum: ['box', 'sphere', 'cylinder', 'cone'] }, color: { type: 'string' }, scale: { type: 'number' }, u: { type: 'number' }, v: { type: 'number' } }, required: ['type'] } },
+  { name: 'fill_selection', description: 'Fill the active selection with a rows×cols grid of primitive objects (e.g. tile a wall).',
+    input_schema: { type: 'object', properties: { type: { type: 'string', enum: ['box', 'sphere', 'cylinder', 'cone'] }, rows: { type: 'number' }, cols: { type: 'number' }, color: { type: 'string' }, scale: { type: 'number' } }, required: ['type', 'rows', 'cols'] } },
+  { name: 'set_selection_shape', description: 'Choose the marking shape: "surface" snaps to the wall/floor you face; "box" marks a free region in front of you.',
+    input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['surface', 'box'] }, size: { type: 'number' } }, required: ['kind'] } },
+
+  // ── Import real 3D assets (Sketchfab / direct GLB / Meshy) ──
+  { name: 'import_sketchfab', description: 'Search Sketchfab for a downloadable model matching the query and import the best NAME match into the active selection (collidable, lit, shadowed). Convenience: searches + picks + imports in one step. If the query is ambiguous or the first guess might be wrong, prefer search_assets → import_model instead.',
+    input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'search_assets', description: 'Browse Sketchfab: search downloadable models and SEE the candidates (name, uid, poly count, author) WITHOUT importing. Use this to choose deliberately — when the query is ambiguous, the obvious pick might be wrong, or you want a specific style/era. Returns a list; then call import_model with the chosen uid.',
+    input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+  { name: 'import_model', description: 'Import a SPECIFIC Sketchfab model by its uid (taken from search_assets results) into the active selection. Give it a recall label.',
+    input_schema: { type: 'object', properties: { uid: { type: 'string' }, label: { type: 'string' } }, required: ['uid'] } },
+  { name: 'set_skybox', description: 'Wrap the whole scene in a SKY / environment shell from a Sketchfab query OR a direct .glb URL — a dome/sphere rendered from the INSIDE. It is AUTOMATICALLY centred on the world and auto-scaled to fully ENCLOSE it (you do NOT need to scale it yourself), and it re-fits itself whenever the world is moved or resized, so it always reads as the surrounding sky. Use for "add a sky", "put a skybox", "wrap this in a night sky". Persists with the world. It becomes a recallable object named "sky" (id __sky__): to make the sky bigger/smaller later call scale_object {label:"sky", factor:…} — NOT transform_scene (that resizes the building, not the sky).',
+    input_schema: { type: 'object', properties: { query: { type: 'string' }, url: { type: 'string' }, scale: { type: 'number', description: 'optional enclose multiplier ≥1 (1 = snug fit around the world; 2 = roomier). Usually leave unset — it auto-encloses.' } } } },
+  { name: 'import_glb_url', description: 'Import any direct .glb URL (Meshy export, self-hosted, etc.) into the active selection.',
+    input_schema: { type: 'object', properties: { url: { type: 'string' }, label: { type: 'string', description: 'recall name for the object, e.g. "lamp"' } }, required: ['url'] } },
+  { name: 'fill_selection_with_import', description: 'Clone the most recently imported model across the marked region as miniatures.',
+    input_schema: { type: 'object', properties: { rows: { type: 'number' }, cols: { type: 'number' }, scale: { type: 'number' } }, required: ['rows', 'cols'] } },
+
+  // ── Navigation / camera ──
+  { name: 'navigate_to', description: 'Instantly BRING the avatar to a place — teleports the POV straight there, THROUGH walls (unlike walking, which collides). Target a named landmark, an OBJECT by its label (e.g. "the cat", "tree"), or x/z coordinates. It lands them standing on the floor beneath the target.',
+    input_schema: { type: 'object', properties: {
+      target: { type: 'string', description: 'a landmark name, or an object label like "cat" / "tree"' },
+      x: { type: 'number' }, z: { type: 'number' } } } },
+  { name: 'go_to_spawn', description: 'Teleport the user to their designated SPAWN point (home) — instantly, THROUGH walls/collision, from anywhere (across a wall, outside the room, mid-air). Use whenever they say "take me back to spawn", "go home", "bring me to the start". The spawn is in scene state as `spawn`; if it is null, tell them to set one with the ◎ Spawn tool first.',
+    input_schema: { type: 'object', properties: {} } },
+  { name: 'look', description: 'Aim the camera vertically.',
+    input_schema: { type: 'object', properties: { direction: { type: 'string', enum: ['up', 'down', 'level'] }, degrees: { type: 'number' } }, required: ['direction'] } },
+  { name: 'turn', description: 'Rotate the view. + = right, − = left (degrees).',
+    input_schema: { type: 'object', properties: { degrees: { type: 'number' } }, required: ['degrees'] } },
+  { name: 'set_walk', description: 'Start or stop walking.',
+    input_schema: { type: 'object', properties: { state: { type: 'string', enum: ['go', 'stop'] } }, required: ['state'] } },
+
+  // ── L5 creator layer (full CRUD + transform) ──
+  { name: 'create_object', description: 'Create a primitive. Defaults to ~2m in front of the avatar if no position given.',
+    input_schema: { type: 'object', properties: {
+      type: { type: 'string', enum: ['box', 'sphere', 'cylinder', 'cone'] },
+      color: { type: 'string', description: 'hex like #d4a843' },
+      scale: { type: 'number' },
+      position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } } },
+      required: ['type'] } },
+  { name: 'set_transform', description: 'Set an object\'s ABSOLUTE position / rotation(deg) / scale. Any subset. Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'string' }, label: { type: 'string', description: 'recall name, e.g. "dragon"' },
+      position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+      rotationDeg: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } },
+      scale: { type: 'number' } } } },
+  { name: 'translate_object', description: 'Move an object by a delta (metres). Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, dx: { type: 'number' }, dy: { type: 'number' }, dz: { type: 'number' } } } },
+  { name: 'rotate_object', description: 'Rotate an object around Y by degrees (relative). Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, degrees: { type: 'number' } }, required: ['degrees'] } },
+  { name: 'scale_object', description: 'Scale an object by a factor (relative). Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, factor: { type: 'number' } }, required: ['factor'] } },
+  { name: 'set_color', description: 'Recolor an object (hex). Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, color: { type: 'string' } }, required: ['color'] } },
+  { name: 'rename_object', description: 'Give an object a new recall name so the user can refer to it by word later. Target it by id or by its current name (target); omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, target: { type: 'string', description: 'current name to find' }, label: { type: 'string', description: 'new name' } }, required: ['label'] } },
+  { name: 'duplicate_object', description: 'Clone an object. Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' } } } },
+  { name: 'delete_object', description: 'Delete an object. Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' } } } },
+  { name: 'center_object', description: 'Seat an object at the ABSOLUTE world centre (x,z → 0) resting on the ground, then re-fit the sky so it surrounds it. Use for "put the church in the dead centre", "centre the model so the sky wraps it". Target by id OR label.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' } } } },
+  { name: 'lock_object', description: 'Lock or unlock a game object so it can/can\'t be moved, scaled or edited. Works on props, the sky (label "sky") and the whole environment (label "world"). Target by id OR label; omit both = most recent.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, label: { type: 'string' }, locked: { type: 'boolean' } }, required: ['locked'] } },
+
+  // ── Atmosphere / time / lighting (realistic environment, savable) ──
+  { name: 'set_time_of_day', description: 'Set the scene time of day (0–24h). Moves the sun on a realistic arc (sunrise ~6, noon overhead, sunset ~18, night below the horizon), warms/cools the key light and sky, and recasts every shadow from the sun direction. Use for "make it golden hour", "sunrise", "midnight".',
+    input_schema: { type: 'object', properties: { hour: { type: 'number', description: '0–24' } }, required: ['hour'] } },
+  { name: 'set_sun', description: 'Aim the sun directly: azimuth 0–360° (90=east, 180=south, 270=west) and elevation° above the horizon. Shadows follow the new direction.',
+    input_schema: { type: 'object', properties: { azimuth: { type: 'number' }, elevation: { type: 'number' } }, required: ['azimuth', 'elevation'] } },
+  { name: 'set_atmosphere', description: 'Set mood: sky/background colour, fog colour + near/far distance, and tone-mapping exposure. Hex colours like #87b0e0.',
+    input_schema: { type: 'object', properties: { sky: { type: 'string' }, fog: { type: 'string' }, fogNear: { type: 'number' }, fogFar: { type: 'number' }, exposure: { type: 'number' } } } },
+  { name: 'set_shadows', description: 'Toggle shadows and set their quality for realism. quality: low|medium|high|ultra.',
+    input_schema: { type: 'object', properties: { enabled: { type: 'boolean' }, quality: { type: 'string', enum: ['low', 'medium', 'high', 'ultra'] } } } },
+  { name: 'set_weather', description: 'Set weather mood (composes light + fog): clear, cloudy, foggy, or storm. Combine with set_time_of_day for full atmosphere.',
+    input_schema: { type: 'object', properties: { kind: { type: 'string', enum: ['clear', 'cloudy', 'foggy', 'storm'] } }, required: ['kind'] } },
+  { name: 'make_scene_editable', description: 'Promote (or demote) the base world ENVIRONMENT to a manipulable game object. By default the scene GLB is a fixed backdrop — NOT clickable/selectable. Only call this with editable:true when the user explicitly asks to "make the world/scene a game object" or to make the whole environment movable/editable. After that it can be click-selected with a gizmo and transformed like any object.',
+    input_schema: { type: 'object', properties: { editable: { type: 'boolean' } }, required: ['editable'] } },
+  { name: 'transform_scene', description: 'Transform the WHOLE world ENVIRONMENT — the base scene GLB itself (the building / landscape / room you walk inside), NOT a placed object. Use this whenever the user means "the world / scene / environment / whole place / the map / the floor (as a whole)". scaleFactor multiplies its overall size (2 = twice as big), rotationDegY spins it, position moves it. Colliders rebuild automatically so walking still works. (This also promotes the environment to an editable object.)',
+    input_schema: { type: 'object', properties: { scaleFactor: { type: 'number' }, rotationDegY: { type: 'number' }, position: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, z: { type: 'number' } } } } } },
+
+  // ── Animation (managed: ALWAYS stoppable + revertible — never animate via run_script) ──
+  { name: 'animate_object', description: 'Continuously animate an object: spin, bob (up/down), pulse (scale in/out), or orbit. This is the ONLY correct way to animate — it is registered so it can be cleanly STOPPED and REVERTED later (a run_script animation loop CANNOT be stopped — never use one). Target by id OR label; omit both = the user\'s currently SELECTED object. Re-animating an object replaces its current animation.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'string' }, label: { type: 'string' },
+      type: { type: 'string', enum: ['spin', 'bob', 'pulse', 'orbit'] },
+      axis: { type: 'string', enum: ['x', 'y', 'z'], description: 'spin axis (default y)' },
+      speed: { type: 'number', description: 'spin: rad/s; bob/pulse: cycles/s; orbit: rad/s. Default 1' },
+      amplitude: { type: 'number', description: 'bob: metres; pulse: scale fraction (0.15 = ±15%)' },
+      radius: { type: 'number', description: 'orbit radius in metres' } },
+      required: ['type'] } },
+  { name: 'stop_animation', description: 'Stop an object\'s animation. revert:true (default) snaps it back to where it started (use for "stop and revert"); revert:false freezes it where it is now (use for plain "stop"/"hold it there"). Set all:true to stop EVERY animation in the scene. Target by id OR label; omit both = the user\'s currently SELECTED object.',
+    input_schema: { type: 'object', properties: {
+      id: { type: 'string' }, label: { type: 'string' },
+      all: { type: 'boolean', description: 'stop every animation in the scene' },
+      revert: { type: 'boolean', description: 'snap back to the original transform (default true)' } } } },
+
+  { name: 'clear_sketch', description: 'Remove an AI directional sketch (the neon guide-line the user drew) once you have acted on it — by its id from scene state `sketches`, or all:true to clear them all. Keeps the scene tidy and stops you re-applying the same directive.',
+    input_schema: { type: 'object', properties: { id: { type: 'string' }, all: { type: 'boolean' } } } },
+  { name: 'remove_script', description: 'Delete a saved behavior/script by its index (see scripts[] in scene state) so it stops replaying — use to remove a buggy or unwanted scripted effect (e.g. a misbehaving panel). Its already-running effects clear on the next world load; to also undo it NOW, follow up with run_script that removes/hides what it created.',
+    input_schema: { type: 'object', properties: { index: { type: 'number', description: 'the scripts[] index to remove' }, all: { type: 'boolean', description: 'remove every saved script' } } } },
+
+  { name: 'place_on_surface', description: 'Place or move an object onto the EXACT mesh-surface point the user is pointing at with Surface Trace (read scene state `surfaceHit` = {point, normal, id}). Creates a primitive (give type) or moves an existing object (id/label), seating it on the surface. Use for "put a box right HERE", "stick it on this wall/this spot". Requires surfaceHit to be present (the user has Surface Trace on and is pointing at a mesh).',
+    input_schema: { type: 'object', properties: {
+      type: { type: 'string', enum: ['box', 'sphere', 'cylinder', 'cone'], description: 'create this primitive at the point (omit to move an existing object instead)' },
+      id: { type: 'string' }, label: { type: 'string' },
+      scale: { type: 'number' }, color: { type: 'string' } } } },
+
+  // ── Live frontend scripting (escape hatch for anything the tools can't express) ──
+  { name: 'run_script', description: 'Run a small JavaScript snippet to make a custom LIVE change the other tools cannot express — wire a custom interaction, tweak materials/lights, batch-edit objects. Do NOT use this to ANIMATE — use animate_object (a run_script loop cannot be stopped). Your snippet body runs with these in scope: world (WorldTemplate), scene, camera, THREE, hope (the SDK), nav. You may use await. Return a short status string. Keep it small, reversible, and only when no dedicated tool fits.',
+    input_schema: { type: 'object', properties: { code: { type: 'string', description: 'JS to execute (function body; may use await; can return a string)' }, explanation: { type: 'string', description: 'one line on what it does' } }, required: ['code'] } },
+];
+
+// Loaded into the system prompt if agent-guide.md can't be fetched (file://, offline).
+const FALLBACK_GUIDE =
+  'You are a co-creator and spatial designer in a Three.js + Rapier world (metres, Y-up; human ≈1.7m). ' +
+  'Converse AND act. Understand first (get_scene/select_in_view), mark surfaces before placing, import real ' +
+  'assets by query (name them), edit by label, and use run_script only when no tool fits. Design with a clear ' +
+  'focal point, leading lines, negative space, human-readable scale, warm/cool light, a small palette, and ' +
+  'walkable flow. Match imported assets to the scene\'s style and the space they fill.';
+
+// Loaded into the BUILD agent's system prompt — deep, ready-to-use scene/game construction know-how.
+const BUILD_KNOWLEDGE = [
+  "GAME-SCENE CONSTRUCTION PLAYBOOK — you are the BUILD AGENT, running at maximum capability. Be ambitious, decisive and thorough; build complete, polished, playable scenes, not fragments.",
+  "• Plan then mass: state the concept in a phrase, block out the big forms (ground plane, walls/horizon, major landmarks) before details. Keep the base model's floor centered near origin so the spawn is reachable; keep human eye level (~1.7m) and real-world scale in mind (doorway ~2m, chair ~0.5m).",
+  "• Composition: one clear focal point, leading lines toward it, walkable lanes, deliberate negative space, foreground/mid/background depth. Compose situationally from scene.bounds/center/size and the existing objects[].",
+  "• Light & atmosphere: a tight palette; warm key + cool fill; set_time_of_day / set_sun to rake light and set mood; set_atmosphere (sky/fog/exposure) for depth; set_shadows for grounding; set_weather to unify. Golden hour and gentle fog flatter most scenes.",
+  "• Sourcing real assets (your supply chain): import_sketchfab(query) pulls downloadable models — use concrete VISUAL queries combining material + object + style (e.g. 'weathered bronze statue', 'lowpoly pine tree', 'sci-fi crate scuffed'). import_glb_url for a direct .glb / Meshy export. Always name what you add so it's recallable; duplicate/scatter to build sets and crowds.",
+  "• Materials & believability: vary surface finish (matte vs glossy), avoid uniform scale/spacing, sit objects ON surfaces (use groundY / mark_surface_in_view → place_in_selection / fill_selection), never leave props floating or clipping.",
+  "• Spatial selection & the grid: when the user has marked the neon grid (gridSelection) or you mark a wall/region, treat it as 'here / along this / in this region' and place, line up, or fill accordingly.",
+  "• Custom behaviour: run_script is your escape hatch (scope: world, scene, camera, THREE, hope, nav; await ok; hope.onFrame(cb) for animation) — wire interactions, animate, batch-edit materials/lights, author simple game logic. Keep snippets small and reversible.",
+  "• Environment vs props: the base scene GLB is a FIXED backdrop unless the user explicitly asks to make the world a game object (make_scene_editable / transform_scene). Use per-object tools for props; don't grab the whole world by accident.",
+  "• Finish pass: check scale, grounding, lighting, and that there's a focal moment and somewhere to walk. Narrate briefly what you built and offer one concrete next step.",
+].join('\n');
+
+export class WorldAgent {
+  constructor({ apiKey, model, models, mode, world, nav, onSay, sketchfabToken, env, allowScripting, guideUrl, endpoint }) {
+    this.apiKey = apiKey || '';                          // unused — key lives server-side
+    this.endpoint = endpoint || '/api/claude';           // proxy that holds the Claude key
+    // Two tiers (never named to the user): 'build' = max-capability construct agent,
+    // 'converse' = lighter design/chat pal. The host swaps modes by context + a toggle.
+    this.models = models || { build: model || 'claude-opus-4-8', converse: model || 'claude-sonnet-4-6' };
+    this.mode = (mode === 'build' || mode === 'converse') ? mode : 'converse';
+    this.model = this.models[this.mode] || model || 'claude-sonnet-4-6';
+    this.world = world;
+    this.nav = nav;
+    this.onSay = onSay || (() => {});
+    this.sketchfabToken = sketchfabToken || '';
+    this.env = env || null;                              // { scene, camera, THREE, hope } for run_script
+    this.allowScripting = allowScripting !== false;     // live frontend scripting (on by default)
+    this.guideUrl = guideUrl || new URL('./agent-guide.md', import.meta.url).href;
+    this._guide = undefined;                             // cached design-knowledge doc
+    this.busy = false;
+  }
+
+  /** Switch capability tier: 'build' (max) or 'converse' (design pal). Returns the active mode. */
+  setMode(mode) {
+    if (mode !== 'build' && mode !== 'converse') return this.mode;
+    this.mode = mode; this.model = this.models[mode];
+    return this.mode;
+  }
+
+  /**
+   * Runtime DEI assist — write / explain / debug a live-scene JS snippet in plain
+   * language. Returns { explanation, code }. Runs against the client-side runtime API
+   * only (world/scene/camera/THREE/hope/nav/editor); never the server. Used by the
+   * in-world DEI console so the script editor has built-in NLP, not just raw code.
+   */
+  async assistCode(request, currentCode) {
+    const sys = [
+      "You are the coding assistant inside the hopeOS Runtime DEI — a live JS console that drives the in-browser 3D scene. There is NO server/backend access and no secrets here; only the runtime scene API.",
+      "Snippets run as an async function body with these in scope: world (WorldTemplate), scene (THREE.Scene), camera, THREE, hope (SDK; hope.onFrame(cb) animates), nav (avatar navigator), editor (gizmo/selection). You may use await.",
+      "Prefer the world API: addObject('box'|'sphere'|'cylinder'|'cone',{color,scale,position}); await importGLBFromURL(url,{label}); scaleObject(id,f); moveObject(id,dx,dy,dz); rotateObject(id,deg); setObjectTransform(id,{position,rotationDeg,scale}); centerObject(id); setLocked(id,bool); duplicateObject(id); deleteObject(id); findByLabel('sky'|'world'|label) (sky=__sky__, world=__scene__); listObjects(); getSceneState(); addSkybox(url); scaleSkybox(f); setSceneTransform({scaleFactor}); setTimeOfDay(h); setAtmosphere({sky,fog,fogNear,fogFar,exposure}); setWeather(kind); navigateTo(x,z); teleportNear(x,z). Also nav.turnBy(deg)/faceUp(d)/faceDown(d)/faceLevel(); editor.selectById(id)/setMode('translate'|'rotate'|'scale').",
+      "Write SMALL, safe, runnable snippets with brief inline comments. When the user asks you to WRITE or FIX code, return the full snippet. When they ask to EXPLAIN/REVIEW, explain plainly and only return code if helpful.",
+      "Respond with ONLY a JSON object: {\"explanation\":\"<plain words>\",\"code\":\"<js snippet, or empty string>\"}. No markdown, no prose outside the JSON.",
+      "Live scene state (for grounding ids/labels/coords):\n" + JSON.stringify(this.world.getSceneState()),
+    ].join('\n\n');
+    const user = (currentCode && currentCode.trim() ? "Current editor code:\n```js\n" + currentCode + "\n```\n\n" : "") + request;
+    const res = await fetch(this.endpoint, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: this.models.build, max_tokens: 1600, system: sys, messages: [{ role: 'user', content: user }] }),
+    });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('').trim();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch { const m = text.match(/\{[\s\S]*\}/); if (m) { try { parsed = JSON.parse(m[0]); } catch { /* fall through */ } } }
+    if (parsed) return { explanation: parsed.explanation || '', code: parsed.code || '' };
+    const cb = text.match(/```(?:js|javascript)?\s*\n([\s\S]*?)```/);
+    return cb ? { explanation: text.replace(/```[\s\S]*?```/, '').trim(), code: cb[1].trim() } : { explanation: text, code: '' };
+  }
+
+  /** Fetch the design-knowledge doc once (falls back to an embedded summary). */
+  async _loadGuide() {
+    if (this._guide !== undefined) return this._guide;
+    this._guide = '';
+    try { const r = await fetch(this.guideUrl); if (r.ok) this._guide = (await r.text()).trim(); } catch { /* file:// or offline */ }
+    if (!this._guide) this._guide = FALLBACK_GUIDE;
+    return this._guide;
+  }
+
+  _system(guide) {
+    const s = this.world.getSceneState();
+    return [
+      this.mode === 'build'
+        ? "You are operating as the BUILD AGENT for hopeOS — the user is in the construction/template environment and you run at MAXIMUM capability to construct worlds, scenes and games. Be ambitious, decisive and thorough; take initiative and build complete, polished, playable results — no hold back. You converse too, but your default is to MAKE."
+        : "You are operating as the conversation & design companion for hopeOS — warm, concise and helpful. Brainstorm, advise and make light edits; for heavy construction, suggest the user switch to the build agent.",
+      "You are the in-world AI co-creator for hopeOS, a browser-native 3D world. You are a designer and builder partner: you CONVERSE (brainstorm, pitch options, explain choices) AND you ACT on the live scene through tools. When the user is just talking, talk back and propose ideas; when they ask for something concrete, do it and narrate briefly.",
+      "You can move/aim the user (navigate, look, turn, walk) and fully edit the creator layer: create primitives, set absolute transforms, translate/rotate/scale/recolor/duplicate/delete, mark a wall/floor/region, and IMPORT real 3D models (import_sketchfab by query, or import_glb_url for a direct .glb/Meshy link) straight onto the marked selection — already collidable and lit. You can also run_script for custom live changes no other tool covers (animation, custom interactions, materials/lights).",
+      "Everything you add is live and physics-ready immediately; there is no build/compile step. Objects are real touchable surfaces (hands and the avatar collide with their meshes).",
+      "The user can draw on a neon 3D GRID CANVAS — marking dots, a trajectory path, a flat surface, or a 3D volume. Their current pick is in LIVE STATE as `gridSelection` (exact world coordinates). Treat it as 'here / along this / in this region': place or move objects to those coordinates, animate along the path, or fill the surface/volume. When they say 'put it here' / 'move it along this' / 'fill this', read gridSelection.",
+      "DIRECTIONAL SKETCHES (the user draws to direct YOU). LIVE STATE carries `sketches` — neon lines the user drew ON a real surface to show WHERE and WHAT to change. Each has: shape (rectangle/circle/line/freeform), closed, center [x,y,z], normal (the surface's facing), size [w,h] in metres on that surface, surfaceId (the object/__scene__ it's drawn on), and sampled world points. READ them as spatial instructions tied to that exact spot: a RECTANGLE on a wall = 'make a door/window/opening/panel here' → build it at center, sized to [w,h], lying on the surface (orient to normal); a CIRCLE = 'put something here / a portal / a round feature' → place/scale to the circle; a LINE = a path/edge/direction. Use place_on_surface, import_*, set_color, scale_object etc. against that region. After you've acted on a sketch, call clear_sketch{id} so it doesn't get re-applied. If a sketch's intent is unclear, ask one specific question referencing its shape and where it is. (True boolean mesh-cutting isn't available yet — realise a 'door' by placing/fitting a door object or recoloring/insetting the marked panel, and say so.)",
+      "SURFACE POINTING: when the user has Surface Trace on, LIVE STATE carries `surfaceHit` {point, normal, id} — the exact spot on a real mesh they're pointing at. For 'put a box right HERE', 'stick this on that wall', 'right on this spot', use place_on_surface (it seats the object on the surface along its normal). Prefer surfaceHit over guessing coordinates whenever it's present.",
+      "You also direct the ENVIRONMENT like a game engine: set_time_of_day (realistic sun arc + recast shadows), set_sun (aim azimuth/elevation), set_atmosphere (sky/fog/exposure), set_shadows (quality), set_weather (clear/cloudy/foggy/storm). For anything bespoke — animation, custom lights, shaders, materials, gameplay — use run_script (you get world/scene/camera/THREE/hope/nav; hope.onFrame(cb) animates per frame). Prefer the named tools when they fit; reach for run_script for the rest.",
+      "SPATIAL AWARENESS: scene.boundsMin/boundsMax/center/size (metres, Y up) describe the whole set, and objects[] gives every item's position/scale/label. Use them to place lights, sun, weather and objects SITUATIONALLY — a lamp tucked in a corner near a wall, the sun angled to rake light across the room, an object on the floor (groundY) not floating, spaced with good interior- and game-design sense (focal point, walkable lanes, human scale). Read the scene before placing; don't guess coordinates blindly.",
+      "THE ENVIRONMENT vs OBJECTS: the base scene GLB IS the world/environment — the building, room, landscape or 'whole place' the user walks inside (its extent = scene.size/bounds). It is a FIXED BACKDROP by default — NOT a clickable/selectable game object, so the user can't accidentally grab the whole world. Only when the user EXPLICITLY asks to 'make the world/scene a game object' (or make the whole environment movable/editable) do you call make_scene_editable(editable:true) — then it can be click-selected and transformed. To move/scale/rotate the environment on request use transform_scene (scaleFactor 2 = double the world); that also promotes it. The separate placed items in objects[] are individual props — use the per-object tools for those. Don't confuse the two.",
+      "THE SKY: a skybox (set_skybox) is the world's enclosing sky shell. It auto-centres on ALL content (the base environment AND every placed model — e.g. an imported church) and auto-sizes to fully enclose it; the engine re-fits it automatically whenever ANY model is added, moved or resized, so it can never be left small, off-centre, or covering only part of a model. It is a recallable object named 'sky' (id __sky__) that appears in objects[]. State carries scene.content (bounding sphere of everything) and sky.radius so you can reason spatially. To make the sky bigger, target the sky: scale_object {label:'sky', factor:2} (or set_transform {label:'sky', scale:…}) — NEVER transform_scene (that resizes the building, a DIFFERENT object). The sky is locked to the content centre; you cannot move it. WORKFLOW for 'situate the church at the centre so the sky surrounds it': call center_object {label:'church'} (seats it at the world origin and re-fits the sky), then if the user wants extra headroom scale_object {label:'sky', factor:…}. The sky always surrounds the whole model — it will not fall out of place or cover only part of it.",
+      "LOCKING: any object (a prop, the sky, or the whole environment) can be locked so it can't be changed. Use lock_object {label, locked:true/false}. A locked object refuses every move/scale/rotate/edit (from you, the gizmo, or hands) until unlocked — use it to protect a finished piece while you work around it.",
+      "TARGETING THE WHOLE WORLD: the base environment is also a listed object, label 'world (environment)' / id __scene__, in objects[]. Use transform_scene (preferred) or scale_object/set_transform with label:'world' to resize/rotate the whole environment — its colliders rebuild and the sky re-encloses automatically. Keep the two straight: 'sky' = the surrounding sky shell; 'world'/'environment' = the building/landscape you walk in.",
+      "BRING-ME-TO: navigate_to teleports the avatar's POV straight to a landmark, an object by its label ('the cat', 'tree'), or x/z coordinates — it passes THROUGH walls and lands them standing on the floor there. (Walking with keys/hands still collides normally; only this is a direct jump.)",
+      "SPAWN / HOME: the user can designate a SPAWN point (a neon halo on a surface or mid-air); it's in scene state as `spawn` {position,yaw,pitch}. When they say 'take me back to spawn / home / the start', call go_to_spawn — it teleports them there INSTANTLY and THROUGH walls/collision from anywhere (across a wall, outside the room, in the air). If `spawn` is null, tell them to place one with the ◎ Spawn tool first.",
+      "Every object has a short recall NAME (label) — imports are named after what was searched (e.g. 'dragon'). Act on an object by passing its label instead of its id (e.g. scale_object {label:'dragon', factor:2}); use select_in_view for 'this/that', or get_scene to read all labels. rename_object gives something a friendlier name.",
+      "TARGET EXACTLY WHAT THE USER MEANS — never edit the wrong object. LIVE STATE has `selectedObject` = the object the user currently has SELECTED (clicked, gizmo on it). RULES: (1) If the user says 'this/that/it/the selected one' OR gives no clear object, act on `selectedObject` — pass NO id/label so the tool defaults to the selection. (2) If they name an object, pass that exact label; if `selectedObject` is set and matches what they named, you may pass its id from state to be certain. (3) NEVER fall back to 'the most recent object' when the user has something selected — operate on the selection. (4) If you genuinely can't tell which object they mean and nothing is selected, ASK rather than guess. When the user selects the pedestal and says 'change its colour/texture', you change the PEDESTAL — not the sculpture.",
+      "ANIMATION — use animate_object / stop_animation ONLY; NEVER animate inside run_script. A run_script frame loop cannot be stopped, so 'stop'/'revert' would silently fail. animate_object registers a managed spin/bob/pulse/orbit that remembers the start transform. To STOP: stop_animation {revert:false} freezes it where it is; 'stop and revert'/'undo the rotation'/'put it back' → stop_animation {revert:true} (the default) snaps it to its original transform. 'stop everything' → stop_animation {all:true}. After stopping, confirm honestly — only say it stopped because the tool returned success.",
+      "EVERYTHING YOU CREATE IS A REAL GAME OBJECT — and you can SEE and EDIT all of it. Objects from create_object/import_*/place_* are auto-registered. ANYTHING you build in run_script (a text label, a sign/panel, a custom mesh/group) is ALSO auto-registered the moment your snippet adds it to `scene` — it appears in objects[], selectable and movable, with no extra step (you may still call world.adopt(obj,{label}) to set a nice label). So you ALWAYS have access to AI-made content; never claim you can't see or reach something the scene built.",
+      "BUILD IN-WORLD CONTENT AS 3D GAME OBJECTS, NOT DOM OVERLAYS. A sign/plaque/panel should be a THREE mesh placed in the scene (it becomes a real, selectable, movable game object). Do NOT build it as a full-screen HTML/DOM overlay, and NEVER attach a page-wide or document-level click handler — that hijacks clicks meant for other UI (the user couldn't even press Publish because a panel expanded on every click). If a panel must expand/collapse, the click target must be ONLY that panel's own mesh/element — tightly scoped, nothing else.",
+      "YOU CAN SEE IMAGES. The user may attach pictures with a message: a SCREENSHOT of the current 3D view (use it to judge what's actually there — scale, placement, lighting, what looks wrong — and fix it) and/or a hand-drawn SKETCH or top-down PLAN of the set (use it as a layout brief: read the marked positions/labels and place, arrange, or import objects to match). Map the sketch onto the world with scene.boundsMin/boundsMax/center/size: e.g. a mark in the top-left of a top-down plan → the −X/−Z corner of the floor; left-to-right in the image → −X to +X; the avatar/camera is your reference for 'front'. Translate what you SEE into concrete tool calls (create_object/import_*/set_transform/place_in_selection). Briefly say what you read from the image, then build it; if the picture is ambiguous, ask one specific question.",
+      "YOU CAN FIX YOUR OWN SCRIPTED EFFECTS. Scene state lists scripts[] (every saved behavior, by index + explanation) and objects[] (every game object). When the user asks to fix/change/remove something you scripted — e.g. 'fix the green panel', 'make it expand only when clicked', 'make the panel a real game object not a script' — LOCATE it in scripts[]/objects[], remove the offending behavior with remove_script {index}, then re-create it correctly with run_script (tightly-scoped handlers) or as a proper object. Confirm honestly once done; never say it's outside your reach.",
+      "Chain multiple tool calls for multi-step requests (create → position → colour). Keep spoken text short and natural — the user hears it.",
+      "When asked for an object that fits a vibe, turn it into a specific Sketchfab query (material+object+style), import the best match, name it, and place it well. Offer an alternative if it feels off.",
+      (this.mode === 'build' ? "── BUILD PLAYBOOK ──\n" + BUILD_KNOWLEDGE + "\n\n" : "") + "── DESIGN GUIDE ──\n" + (guide || FALLBACK_GUIDE),
+      "── LIVE SCENE STATE ──\n" + JSON.stringify(s),
+    ].join('\n\n');
+  }
+
+  async _exec(name, input = {}) {
+    const w = this.world, nav = this.nav;
+    // Resolve a target object id from an explicit id OR a spoken label ("the dragon").
+    // Falls back to undefined so the world's "most-recent" default still applies.
+    const rid = (inp) => inp.id || (inp.label ? (w.findByLabel(inp.label) || undefined) : undefined);
+    try {
+      switch (name) {
+        case 'get_scene':       return JSON.stringify(w.getSceneState());
+        case 'select_in_view':  return w.selectInView() || 'nothing in view';
+        case 'mark_surface_in_view': { const s = w.markSurfaceInView(input.size || 2); return s ? JSON.stringify(s) : 'no surface in view'; }
+        case 'mark_region':     { const s = w.markRegion(input.x, input.y, input.z, input.size || 2); return s ? JSON.stringify(s) : 'failed'; }
+        case 'set_selection_shape': { const s = w.setSelectionShape(input.kind, input.size || 2); return s ? JSON.stringify(s) : 'failed'; }
+        case 'get_selection':   { const s = w.getSelection(); return s ? JSON.stringify(s) : 'no active selection'; }
+        case 'clear_selection': w.clearSelection(); return 'cleared';
+        case 'place_in_selection': {
+          const color = input.color ? parseInt(input.color.replace('#', ''), 16) : undefined;
+          const id = w.placeInSelection(input.type, { color, scale: input.scale, u: input.u, v: input.v });
+          return id ? `placed ${input.type} → ${id}` : 'no active selection';
+        }
+        case 'fill_selection': {
+          const color = input.color ? parseInt(input.color.replace('#', ''), 16) : undefined;
+          const ids = w.fillSelection(input.type, input.rows, input.cols, { color, scale: input.scale });
+          return ids.length ? `filled with ${ids.length} ${input.type}s` : 'no active selection';
+        }
+        case 'import_glb_url': { const id = await w.importGLBFromURL(input.url, { label: input.label }); return `imported → ${id}`; }
+        case 'import_sketchfab': {
+          const { results } = await searchModels(input.query, { count: 24 });
+          if (!results.length) return `no downloadable models for "${input.query}" — try more specific words (material+object+style), or import_glb_url with a direct .glb link`;
+          const pick = bestMatch(results, input.query);
+          const url = await resolveGLB(pick.uid);
+          const id = await w.importGLBFromURL(url, { label: input.query });
+          const alts = results.filter(r => r.uid !== pick.uid).slice(0, 6).map(r => r.name).join('; ');
+          return `imported "${pick.name}" → ${id} (call it "${input.query}"). ${results.length} matches found${alts ? `; other options: ${alts}` : ''}`;
+        }
+        case 'search_assets': {
+          const { results } = await searchModels(input.query, { count: 24 });
+          if (!results.length) return `no downloadable models for "${input.query}" — try other words (material+object+style)`;
+          return JSON.stringify(results.slice(0, 16).map(r => ({ uid: r.uid, name: r.name, faces: r.faces, author: r.author })));
+        }
+        case 'import_model': {
+          const url = await resolveGLB(input.uid);
+          const id = await w.importGLBFromURL(url, { label: input.label || 'model' });
+          return `imported ${input.label || input.uid} → ${id}`;
+        }
+        case 'set_skybox': {
+          let url = input.url;
+          if (!url && input.query) {
+            const { results } = await searchModels(input.query, { count: 24 });
+            if (!results.length) return `no downloadable sky found for "${input.query}" — try a direct .glb URL`;
+            url = await resolveGLB(bestMatch(results, input.query).uid);
+          }
+          if (!url) return 'give a sky query or a direct .glb URL';
+          return await w.addSkybox(url, { scale: input.scale });
+        }
+        case 'fill_selection_with_import': {
+          const ids = w.fillSelectionWithImport(input.rows, input.cols, { scale: input.scale });
+          return ids.length ? `placed ${ids.length} miniatures` : 'import a model and mark a region first';
+        }
+        case 'navigate_to': {
+          let { target, x, z } = input;
+          if (target && /^(spawn|home|start)$/i.test(String(target).trim()))
+            return w.goToSpawn() ? 'brought you back to spawn' : 'no spawn point set yet — set one with the ◎ Spawn tool';
+          if (typeof x !== 'number' || typeof z !== 'number') {
+            const lm = target && w.getLandmarks()[target];
+            if (lm) { x = lm.x; z = lm.z; }
+            else if (target) { const id = w.findByLabel(target); const a = id && w._find(id); if (a) { x = a.mesh.position.x; z = a.mesh.position.z; } }
+          }
+          if (typeof x === 'number' && typeof z === 'number') { w.teleportNear(x, z); return `brought you to ${target || `(${x.toFixed(1)}, ${z.toFixed(1)})`}`; }
+          return 'no such place — give a landmark, an object name, or x/z coordinates';
+        }
+        case 'go_to_spawn': return w.goToSpawn() ? 'brought you back to the spawn point' : 'no spawn point set yet — set one with the ◎ Spawn tool (place a halo on a surface or in the air)';
+        case 'look':
+          if (input.direction === 'up') nav.faceUp(input.degrees ?? 35);
+          else if (input.direction === 'down') nav.faceDown(input.degrees ?? 35);
+          else nav.faceLevel();
+          return `looking ${input.direction}`;
+        case 'turn':     nav.turnBy(input.degrees || 0); return `turned ${input.degrees}°`;
+        case 'set_walk': input.state === 'go' ? nav.go() : nav.stop(); return input.state === 'go' ? 'walking' : 'stopped';
+        case 'create_object': {
+          const color = input.color ? parseInt(input.color.replace('#', ''), 16) : undefined;
+          const id = w.addObject(input.type, { color, scale: input.scale, position: input.position });
+          return `created ${input.type} → ${id}`;
+        }
+        case 'set_transform':    return w.setObjectTransform(rid(input), input) ? 'transformed' : 'no object';
+        case 'translate_object': return w.moveObject(rid(input), input.dx || 0, input.dy || 0, input.dz || 0) ? 'moved' : 'no object';
+        case 'rotate_object':    return w.rotateObject(rid(input), input.degrees || 0) ? 'rotated' : 'no object';
+        case 'scale_object':     return w.scaleObject(rid(input), input.factor) ? 'scaled' : 'no object';
+        case 'set_color':        return w.setObjectColor(rid(input), input.color) ? 'recolored' : 'no object';
+        case 'animate_object': {
+          const id = w.animateObject(rid(input), { type: input.type, axis: input.axis, speed: input.speed, amplitude: input.amplitude, radius: input.radius });
+          return id ? `animating ${input.type} → ${id} (call stop_animation to stop/revert)` : 'no object (or it is locked)';
+        }
+        case 'stop_animation': {
+          if (input.all) { const n = w.stopAllAnimations({ revert: input.revert !== false }); return n ? `stopped ${n} animation${n > 1 ? 's' : ''}` : 'nothing was animating'; }
+          const ok = w.stopAnimation(rid(input), { revert: input.revert !== false });
+          return ok ? (input.revert === false ? 'stopped (held in place)' : 'stopped and reverted') : 'that object was not animating';
+        }
+        case 'rename_object':    { const l = w.nameObject(input.id || (input.target ? w.findByLabel(input.target) : undefined), input.label); return l ? `renamed → "${l}"` : 'no object'; }
+        case 'duplicate_object': { const nid = w.duplicateObject(rid(input)); return nid ? `duplicated → ${nid}` : 'no object'; }
+        case 'delete_object':    return w.deleteObject(rid(input)) ? 'deleted' : 'no object (or it is locked)';
+        case 'center_object':    return w.centerObject(rid(input)) ? 'centred at the world origin; sky re-fit to surround it' : 'no object (or it is locked)';
+        case 'lock_object':      { const t = rid(input); const v = w.setLocked(t, input.locked); return v === null ? 'no object' : (input.locked ? 'locked' : 'unlocked'); }
+        case 'set_time_of_day':  w.setTimeOfDay(input.hour); return `time set to ${(((input.hour % 24) + 24) % 24).toFixed(1)}h — sun + shadows recast`;
+        case 'set_sun':          w.setSunAzEl(input.azimuth, input.elevation); return `sun → az ${input.azimuth}°, el ${input.elevation}°`;
+        case 'set_atmosphere':   w.setAtmosphere(input); return 'atmosphere updated';
+        case 'set_shadows':      w.setShadows(input); return 'shadows updated';
+        case 'set_weather':      w.setWeather(input.kind); return `weather: ${input.kind}`;
+        case 'make_scene_editable': w.sceneIsObject = !!input.editable; return input.editable ? 'the world is now a game object — click it or transform it' : 'the world is a fixed backdrop again';
+        case 'transform_scene':  { w.sceneIsObject = true; return w.setSceneTransform({ scaleFactor: input.scaleFactor, rotationDeg: input.rotationDegY != null ? { y: input.rotationDegY } : undefined, position: input.position }) ? 'transformed the whole environment' : 'no scene model loaded'; }
+        case 'place_on_surface': {
+          const color = input.color ? parseInt(input.color.replace('#', ''), 16) : undefined;
+          const id = w.placeOnSurface({ type: input.type, id: rid(input), scale: input.scale, color });
+          return id ? `placed on the surface → ${id}` : 'no surface point yet — turn on Surface Trace (⊹) and point at a mesh first';
+        }
+        case 'clear_sketch': {
+          if (input.all) { const n = w.clearSketches(); return n ? `cleared ${n} sketch${n > 1 ? 'es' : ''}` : 'no sketches'; }
+          return w.removeSketch(input.id) ? `cleared sketch ${input.id}` : 'no sketch with that id';
+        }
+        case 'remove_script': {
+          if (input.all) { const n = w.clearScripts(); return n ? `removed all ${n} script${n > 1 ? 's' : ''} (reload to fully clear their effects)` : 'no scripts to remove'; }
+          return w.removeScript(input.index) ? `removed script ${input.index} (reload to fully clear its effect, or run_script to undo it now)` : 'no script at that index';
+        }
+        case 'run_script': {
+          // Live frontend edit hatch. Runs in the user's own browser/session against
+          // the live scene — the in-world equivalent of an engine script console.
+          if (!this.allowScripting) return 'scripting is disabled';
+          if (!this.env) return 'no scene environment wired for scripting';
+          const { scene, camera, THREE, hope } = this.env;
+          try {
+            const before = w.sceneChildrenSnapshot();    // capture scene before so new objects can be auto-adopted
+            const fn = new Function('world', 'scene', 'camera', 'THREE', 'hope', 'nav',
+              `return (async () => { ${input.code}\n })();`);
+            const r = await fn(w, scene, camera, THREE, hope, nav);
+            // Auto-register ANYTHING the script added to the scene (signs, text, panels, meshes)
+            // as a real game object — selectable, movable, and visible to you in the menu.
+            const adopted = w.adoptNewChildren(before, w.scriptMarker(input.code));   // stable ids so edits/deletes track these objects across reloads
+            w.recordScript(input.code, input.explanation);   // persist so it saves + replays with the world
+            return 'ran' + (input.explanation ? ` (${input.explanation})` : '')
+                 + (adopted.length ? ` — added ${adopted.length} object${adopted.length > 1 ? 's' : ''} to the menu (${adopted.join(', ')})` : '')
+                 + (r !== undefined ? `: ${String(r).slice(0, 200)}` : '');
+          } catch (e) { return 'script error: ' + e.message; }
+        }
+        default: return `unknown tool ${name}`;
+      }
+    } catch (e) { return `error: ${e.message}`; }
+  }
+
+  /** Convert a data: URL (screenshot / uploaded sketch) into an Anthropic image block. */
+  static _imageBlock(dataURL) {
+    const m = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(String(dataURL || ''));
+    return m ? { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } } : null;
+  }
+
+  /** Run one natural-language command, optionally with attached images (screenshots of
+   *  the live view and/or a hand-drawn sketch/plan the user wants you to build to).
+   *  Loops through Claude tool calls. */
+  async command(text, images = []) {
+    const imgBlocks = (Array.isArray(images) ? images : []).map(WorldAgent._imageBlock).filter(Boolean);
+    if ((!text || !text.trim()) && !imgBlocks.length) return;
+    if (this.busy) return;
+    this.busy = true;
+    const guide = await this._loadGuide();
+    // Images first, then the text — so the model reads the picture, then the instruction.
+    const userContent = imgBlocks.length
+      ? [...imgBlocks, ...(text && text.trim() ? [{ type: 'text', text }] : [])]
+      : text;
+    const messages = [{ role: 'user', content: userContent }];
+    const isBuild = this.mode === 'build';
+    const maxTurns = isBuild ? 16 : 6;          // build agent runs long multi-step briefs to completion
+    const maxTokens = isBuild ? 8000 : 1024;    // room to plan + chain many tool calls
+    try {
+      for (let turn = 0; turn < maxTurns; turn++) {
+        const res = await fetch(this.endpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: this.model, max_tokens: maxTokens, system: this._system(guide), tools: TOOLS, messages }),
+        });
+        const data = await res.json();
+        if (data.error) { this.onSay('AI error: ' + data.error.message); break; }
+        const content = data.content || [];
+        const says = content.filter(b => b.type === 'text').map(b => b.text).join(' ').trim();
+        if (says) this.onSay(says);
+        const toolUses = content.filter(b => b.type === 'tool_use');
+        if (!toolUses.length) break;                       // done
+        messages.push({ role: 'assistant', content });
+        const results = await Promise.all(toolUses.map(async tu => ({
+          type: 'tool_result', tool_use_id: tu.id, content: String(await this._exec(tu.name, tu.input)),
+        })));
+        messages.push({ role: 'user', content: results });
+      }
+    } catch (e) {
+      this.onSay('AI request failed: ' + e.message);
+    } finally {
+      this.busy = false;
+    }
+  }
+}
