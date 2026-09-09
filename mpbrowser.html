@@ -2035,9 +2035,15 @@ function labBowTick(pk, dt) {
                              : _palmP.distanceTo(_gW) < 2.8 * palL;
       if (close > 0.45 && touching) {
         B.held = true; B.relT = 0;
+        // CANONICAL SEAT ON GRAB — a bow in a fist has ONE right pose: spine
+        // up across the closed fingers, string toward the draw hand. Freezing
+        // whatever orientation it happened to be floating in is what let it
+        // come up inverted and undrawable, so the grab always re-seats it and
+        // the wrist aims from there (the same seat the double-fist summon uses).
+        seatBow(B, _palmQ, _palmP, hasR ? _gP2 : null);
+        B.grp.updateMatrixWorld(true);
         // BIAS INTO THE GRASP: the nearest stave point comes to the palm —
         // the rod seats BETWEEN the wrapped fingers, never alongside them
-        // (orientation keeps the grabbed pose; only the seat translates)
         if (B.hull) {
           B.hull.begin(B.mesh);
           B.hull.closest(_palmP, _lbB, null);
@@ -2061,11 +2067,21 @@ function labBowTick(pk, dt) {
         // plane, flip the grip bind 180° about the bow's spine — the string
         // side swings back to face you, the arrow back at the target. The
         // ±0.25 band is its own hysteresis; free angling inside it.
-        _lbA.copy(B.rig.drawDir).negate().transformDirection(B.mesh.matrixWorld);
+        // Evaluate the fire direction the TARGET pose gives, NOT the current
+        // one: the flip edits the target while the bow still lags behind it,
+        // so testing the live mesh re-triggers every frame and flips straight
+        // back — the bow oscillates and never turns around (that is exactly
+        // how it stayed inverted). Fire dir is constant in grp space, so
+        // lift it there once and swing it by the target quaternion.
+        _lbP.copy(B.rig.drawDir).negate().transformDirection(B.mesh.matrixWorld);
+        B.grp.getWorldQuaternion(_lbQ1);
+        _lbP.applyQuaternion(_lbQ1.invert());          // → grp-local (constant)
+        _gQ2.copy(_palmQ).multiply(B.grabQ);           // the TARGET orientation
+        _lbA.copy(_lbP).applyQuaternion(_gQ2);         // fire dir once settled
         camera.getWorldDirection(_lbB);
-        if (_lbA.dot(_lbB) < -0.25) {
+        if (_lbA.dot(_lbB) < -0.15) {                  // pointing back at the archer
           _lbP.copy(B.rig.chordDir).transformDirection(B.mesh.matrixWorld).normalize();
-          _gQ2.setFromAxisAngle(_lbP, Math.PI);
+          _gQ2.setFromAxisAngle(_lbP, Math.PI);        // spin about the SPINE
           _lbQ1.copy(_palmQ).invert();
           B.grabQ.premultiply(_palmQ).premultiply(_gQ2).premultiply(_lbQ1);
           engWorldLog('user', 'aim', 'auto-flip — arrow back toward the target');
