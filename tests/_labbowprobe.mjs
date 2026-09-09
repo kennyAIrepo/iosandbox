@@ -81,10 +81,19 @@ const out = await page.evaluate(async () => {
   window.__lab.AVSYNC.ovPacks = { L: fist(g1.x, g1.y, g1.z + 0.12), R: null };
   await new Promise(r => setTimeout(r, 400));
   const noTeleGrab = !B.held;
-  // ── 3. GRAB: the FIST ON the wood takes the bow; it follows the hand ──
+  // ── 3. GRAB: the FIST ON the wood takes the bow; it follows the hand.
+  // The bow is deliberately INVERTED first (spun to point at the archer):
+  // the canonical grab seat + aim assist must bring the arrow back around,
+  // never leave it facing the wrong way and undrawable. ──
+  B.grp.quaternion.setFromAxisAngle(new T3.Vector3(0, 1, 0), Math.PI);
+  B.grp.updateMatrixWorld(true);
   window.__lab.AVSYNC.ovPacks = { L: fist(g1.x, g1.y, g1.z), R: null };
-  await new Promise(r => setTimeout(r, 400));
+  await new Promise(r => setTimeout(r, 900));
   const grabbed = B.held;
+  B.mesh.updateWorldMatrix(true, false);
+  const fireDir = B.rig.drawDir.clone().negate().transformDirection(B.mesh.matrixWorld);
+  const camFwd = window.__lab.camera.getWorldDirection(new T3.Vector3());
+  const aimFwd = +fireDir.dot(camFwd).toFixed(2);   // >0 = pointing AWAY from the archer
   const pG = B.grp.position.clone();
   window.__lab.AVSYNC.ovPacks = { L: fist(g1.x + 0.14, g1.y + 0.08, g1.z), R: null };
   await new Promise(r => setTimeout(r, 450));
@@ -214,7 +223,7 @@ const out = await page.evaluate(async () => {
   window.__lab.AVSYNC.ovPacks = null;
   return { preLoaded, hull, noGlue, noTeleGrab, grabbed, followed, released, stayedPut,
            arrowNoGlue, arrowGrabbed, arrowFollowed, nocked, draw, stick, hudDraw, loosed, fresh,
-           colOk, scaleUp, scalePersist, liveInPov, summon, resist, lit: lights >= 2, depthOk, scaleOk,
+           aimFwd, colOk, scaleUp, scalePersist, liveInPov, summon, resist, lit: lights >= 2, depthOk, scaleOk,
            scale: +B.s.toFixed(2), logs };
 });
 await browser.close();
@@ -231,6 +240,7 @@ if (out.noGlue.held) fail.push('GLUE: open hand on the grip must attach NOTHING'
 if (out.noGlue.moved < 0.004 || out.noGlue.moved > 0.2) fail.push('TOUCH RESPONSE: open-hand contact should SHOVE the bow (bounded): moved ' + out.noGlue.moved);
 if (!out.noTeleGrab) fail.push('TELE-GRAB: a fist 12cm OFF the surface must take nothing (shape-true gating)');
 if (!out.grabbed) fail.push('fist ON the wood did not take the bow');
+if (out.aimFwd < 0.15) fail.push('INVERTED: grabbing a backwards bow left the arrow facing the archer (aim dot ' + out.aimFwd + ')');
 if (out.followed < 0.1) fail.push('held bow did not follow the hand: moved ' + out.followed);
 if (!out.released) fail.push('opening the fist did not release the bow');
 if (out.stayedPut > 0.03) fail.push('GLUE: released bow must STAY PUT, moved ' + out.stayedPut);
