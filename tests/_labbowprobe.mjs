@@ -94,6 +94,21 @@ const out = await page.evaluate(async () => {
   const fireDir = B.rig.drawDir.clone().negate().transformDirection(B.mesh.matrixWorld);
   const camFwd = window.__lab.camera.getWorldDirection(new T3.Vector3());
   const aimFwd = +fireDir.dot(camFwd).toFixed(2);   // >0 = pointing AWAY from the archer
+  // ...and from that recovered pose a pull must actually DRAW and LOOSE: a
+  // bow facing the wrong way reads draw ~0, so the string snaps home and the
+  // arrow never fires (the reported 'cannot release' bug).
+  const nrI = B.rig.nockRest(new T3.Vector3()); B.mesh.localToWorld(nrI);
+  const pullI = B.rig.drawDir.clone().transformDirection(B.mesh.matrixWorld);
+  const backI = nrI.clone().addScaledVector(pullI, 0.45 * B.rig.opts.drawMax * B.rig.span * B.s);
+  window.__lab.AVSYNC.ovPacks = { L: fist(g1.x, g1.y, g1.z), R: fist(backI.x, backI.y, backI.z) };
+  await new Promise(r => setTimeout(r, 600));
+  const drawAfterFlip = +B.draw.toFixed(2);
+  const flyBefore = B.flying.length;
+  window.__lab.AVSYNC.ovPacks = { L: fist(g1.x, g1.y, g1.z), R: open(backI.x, backI.y, backI.z) };
+  await new Promise(r => setTimeout(r, 400));
+  const shotAfterFlip = B.flying.length - flyBefore;
+  window.__lab.AVSYNC.ovPacks = { L: fist(g1.x, g1.y, g1.z), R: null };
+  await new Promise(r => setTimeout(r, 500));
   const pG = B.grp.position.clone();
   window.__lab.AVSYNC.ovPacks = { L: fist(g1.x + 0.14, g1.y + 0.08, g1.z), R: null };
   await new Promise(r => setTimeout(r, 450));
@@ -194,11 +209,16 @@ const out = await page.evaluate(async () => {
     gripAtFist: +gS.distanceTo(new T3.Vector3(FL.x, FL.y, FL.z)).toFixed(3),
     stringToDraw: +dS.dot(new T3.Vector3(0, 0, 1)).toFixed(2),   // toward the RIGHT fist (+z)
   };
-  // ── 12. RESISTANCE: an open hand pressed INTO the held bow's wood is
-  // STOPPED at the mesh — the rendered hand can never pass through, and the
-  // anchored bow stays in the fist instead of being shoved away ──
-  window.__lab.AVSYNC.ovPacks = { L: fist(FL.x, FL.y, FL.z), R: open(gS.x, gS.y, gS.z) };
-  await new Promise(r => setTimeout(r, 450));
+  // ── 12. RESISTANCE: an OPEN hand pressed into a FREE bow is stopped at
+  // the mesh — the rendered hand never passes through it. A HELD bow repels
+  // nothing: the other hand must reach the string (which sits millimetres
+  // off the grip), and repelling it there is what made drawing impossible. ──
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null };
+  await new Promise(r => setTimeout(r, 500));            // let the bow go
+  B.mesh.updateWorldMatrix(true, false);
+  const gFree = B.rig.gripLocal.clone().applyMatrix4(B.mesh.matrixWorld);
+  window.__lab.AVSYNC.ovPacks = { L: null, R: open(gFree.x, gFree.y, gFree.z) };
+  await new Promise(r => setTimeout(r, 600));
   B.mesh.updateWorldMatrix(true, false);
   B.hull.begin(B.mesh);
   const Rp = window.__lab.AVSYNC.packs.R;
@@ -207,9 +227,7 @@ const out = await page.evaluate(async () => {
     const g = B.hull.surfaceDistance(Rp[i]);
     if (g < minGap) minGap = g;
   }
-  const gS2 = B.rig.gripLocal.clone().applyMatrix4(B.mesh.matrixWorld);
-  const resist = { minGap: +minGap.toFixed(3), held: B.held,
-                   bowStayed: +gS2.distanceTo(new T3.Vector3(FL.x, FL.y, FL.z)).toFixed(3) };
+  const resist = { minGap: +minGap.toFixed(3), notGrabbed: !B.held };
   window.__lab.AVSYNC.ovPacks = { L: null, R: null };
   await new Promise(r => setTimeout(r, 200));
   const colOk = window.__lab.bowCol.active;
@@ -223,7 +241,7 @@ const out = await page.evaluate(async () => {
   window.__lab.AVSYNC.ovPacks = null;
   return { preLoaded, hull, noGlue, noTeleGrab, grabbed, followed, released, stayedPut,
            arrowNoGlue, arrowGrabbed, arrowFollowed, nocked, draw, stick, hudDraw, loosed, fresh,
-           aimFwd, colOk, scaleUp, scalePersist, liveInPov, summon, resist, lit: lights >= 2, depthOk, scaleOk,
+           aimFwd, drawAfterFlip, shotAfterFlip, colOk, scaleUp, scalePersist, liveInPov, summon, resist, lit: lights >= 2, depthOk, scaleOk,
            scale: +B.s.toFixed(2), logs };
 });
 await browser.close();
@@ -240,6 +258,8 @@ if (out.noGlue.held) fail.push('GLUE: open hand on the grip must attach NOTHING'
 if (out.noGlue.moved < 0.004 || out.noGlue.moved > 0.2) fail.push('TOUCH RESPONSE: open-hand contact should SHOVE the bow (bounded): moved ' + out.noGlue.moved);
 if (!out.noTeleGrab) fail.push('TELE-GRAB: a fist 12cm OFF the surface must take nothing (shape-true gating)');
 if (!out.grabbed) fail.push('fist ON the wood did not take the bow');
+if (out.drawAfterFlip < 0.25) fail.push('after recovery a pull did not DRAW (draw ' + out.drawAfterFlip + ') — loose is impossible');
+if (out.shotAfterFlip < 1) fail.push('after recovery the release did not SHOOT — arrow just snapped home');
 if (out.aimFwd < 0.15) fail.push('INVERTED: grabbing a backwards bow left the arrow facing the archer (aim dot ' + out.aimFwd + ')');
 if (out.followed < 0.1) fail.push('held bow did not follow the hand: moved ' + out.followed);
 if (!out.released) fail.push('opening the fist did not release the bow');
@@ -265,9 +285,8 @@ if (!out.liveInPov) fail.push('ON-HANDS: the lane must stay LIVE in engine POV (
 if (!out.summon.held || !out.summon.stillLoaded) fail.push('DOUBLE-FIST SUMMON did not seat+hold the loaded bow: ' + JSON.stringify(out.summon));
 if (out.summon.gripAtFist > 0.06) fail.push('SUMMON: grip not IN the left fist: ' + out.summon.gripAtFist + 'm off');
 if (out.summon.stringToDraw < 0.6) fail.push('SUMMON: string side not facing the draw hand: dot ' + out.summon.stringToDraw);
-if (out.resist.minGap < -0.006) fail.push('RESISTANCE: the hand passed INTO the held bow mesh: minGap ' + out.resist.minGap);
-if (!out.resist.held || out.resist.bowStayed > 0.12)
-  fail.push('RESISTANCE: the anchored bow was shoved/dropped by the pressing hand: ' + JSON.stringify(out.resist));
+if (out.resist.minGap < -0.006) fail.push('RESISTANCE: the hand passed INTO the free bow mesh: minGap ' + out.resist.minGap);
+if (!out.resist.notGrabbed) fail.push('RESISTANCE: an open hand must not grab the free bow');
 for (const k of ['grab', 'nock', 'hold', 'draw', 'shot'])
   if (!out.logs[k]) fail.push('world log missing "' + k + '" — tail: ' + out.logs.tail.join(' | '));
 if (errors.length) fail.push('errors: ' + errors.join(' | '));

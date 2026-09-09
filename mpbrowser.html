@@ -1739,6 +1739,7 @@ const _lbQd = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0)
 const _lbQa = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0, 0));
 const _lbA = new THREE.Vector3(), _lbB = new THREE.Vector3(), _lbP = new THREE.Vector3();
 const _lbTgt = new THREE.Vector3(), _lbQ1 = new THREE.Quaternion();
+const LB_AIM_CONE = 70 * Math.PI / 180;   // how far off "away from you" the arrow may aim
 function _lbShaftDist(p, A, s) {               // point → nearest point on the arrow SHAFT
   _lbA.set(0, 1, 0).applyQuaternion(A.quaternion);
   _lbB.copy(p).sub(A.position);
@@ -1951,15 +1952,17 @@ function labBowTick(pk, dt) {
   // other hand or the string is rigid (share 1.0). Engaged hands are exempt:
   // the holding fist wraps via conform, the draw hand works the string, and
   // the nocked arrow RESTS on the bow fist rather than repelling it. ──
-  if (B.hull) {
-    const shareB = B.held ? 1 : 0.3;
-    if (L && L[0] && !B.held) _handResist(B.hull, B.mesh, L, shareB);
-    if (R && R[0] && !(B.nocked && B.stringHeld)) _handResist(B.hull, B.mesh, R, shareB);
+  // Resist an OPEN hand ONLY. A hand CLOSING on the wood is reaching to take
+  // it, and shoving that away is what made the bow flee the grasp — you could
+  // never land your fingers on it. Likewise the draw hand has to reach the
+  // string freely while the bow is held, so a held bow repels nothing.
+  if (B.hull && !B.held) {
+    if (L && L[0] && _closure(L) < 0.35) _handResist(B.hull, B.mesh, L, 0.3);
+    if (R && R[0] && _closure(R) < 0.35) _handResist(B.hull, B.mesh, R, 0.3);
   }
-  if (B.aHull && B.arrow) {
-    const shareA = (B.nocked || B.aHeld) ? 1 : 0.3;
-    if (L && L[0] && !(B.held && B.nocked)) _handResist(B.aHull, B.arrow, L, shareA);
-    if (R && R[0] && !B.aHeld && !B.nocked) _handResist(B.aHull, B.arrow, R, shareA);
+  if (B.aHull && B.arrow && !B.nocked && !B.aHeld) {   // a nocked arrow never repels
+    if (L && L[0] && _closure(L) < 0.35) _handResist(B.aHull, B.arrow, L, 0.3);
+    if (R && R[0] && _closure(R) < 0.35) _handResist(B.aHull, B.arrow, R, 0.3);
   }
   const hasL = !!(L && L[0]) && _palmPose(L, _palmP, _palmQ);
   const hasR = !!(R && R[0]) && _palmPose(R, _gP2, _gQ3);
@@ -1968,8 +1971,11 @@ function labBowTick(pk, dt) {
   // ── two-hand pinch = SCALE (the DEI basketball / cube gesture): pinch with
   // BOTH hands near the bow or the arrow, pull apart / squeeze to resize.
   // The multiplier persists (userS) on top of the framing base scale. ──
+  // Works WHILE HELD too: a pinch curls the other fingers, so it often reads
+  // as a grab, and gating scale on !held meant one accidental grab disabled
+  // resizing for good. Two pinches on the bow is unambiguous — it is a resize.
   let scaling2 = false;
-  if (L && L[0] && R && R[0] && !B.held && !B.aHeld && !B.stringHeld
+  if (L && L[0] && R && R[0] && !B.aHeld && !B.stringHeld
       && _pinchR(L) < 0.35 && _pinchR(R) < 0.35) {
     _lbA.copy(L[4]).lerp(L[8], 0.5);
     _lbB.copy(R[4]).lerp(R[8], 0.5);
@@ -1989,10 +1995,15 @@ function labBowTick(pk, dt) {
     }
   }
   if (!scaling2) B.scal = null;
+  else if (B.held && hasL) {                   // resizing a HELD bow: keep the grip
+    B.grabQ.copy(_palmQ).invert().multiply(B.grp.quaternion);   // bind in step so it
+    B.grabP.copy(B.grp.position).sub(_palmP)                    // never snaps back
+      .applyQuaternion(_gQ2.copy(_palmQ).invert());
+  }
   // framing scale — a fraction of the visible frame AT THE BOW'S OWN DEPTH
   // (never palm-absolute: that let it swallow the screen) × the pinch
   // multiplier. Frozen while anything is held.
-  if (!B.held && !B.aHeld && !B.stringHeld) {
+  if (scaling2 || (!B.held && !B.aHeld && !B.stringHeld)) {
     const vh = 2 * Math.max(0.3, camera.position.distanceTo(B.grp.position)) * Math.tan(camera.fov * Math.PI / 360);
     B.s += (0.55 * vh * B.userS / B.rig.span - B.s) * (scaling2 ? 0.4 : 0.08);
     B.grp.scale.setScalar(B.s);
@@ -2035,15 +2046,9 @@ function labBowTick(pk, dt) {
                              : _palmP.distanceTo(_gW) < 2.8 * palL;
       if (close > 0.45 && touching) {
         B.held = true; B.relT = 0;
-        // CANONICAL SEAT ON GRAB — a bow in a fist has ONE right pose: spine
-        // up across the closed fingers, string toward the draw hand. Freezing
-        // whatever orientation it happened to be floating in is what let it
-        // come up inverted and undrawable, so the grab always re-seats it and
-        // the wrist aims from there (the same seat the double-fist summon uses).
-        seatBow(B, _palmQ, _palmP, hasR ? _gP2 : null);
-        B.grp.updateMatrixWorld(true);
         // BIAS INTO THE GRASP: the nearest stave point comes to the palm —
         // the rod seats BETWEEN the wrapped fingers, never alongside them
+        // (orientation keeps the grabbed pose; only the seat translates)
         if (B.hull) {
           B.hull.begin(B.mesh);
           B.hull.closest(_palmP, _lbB, null);
@@ -2062,29 +2067,35 @@ function labBowTick(pk, dt) {
         if (B.relT > 0.16) { B.held = false; engWorldLog('user', 'release', 'bow let go'); }
       } else B.relT = 0;
       if (B.held) {
-        // AIM ASSIST — the arrow must never point back at the archer: when
-        // the fire direction (−drawDir) swings clearly BEHIND the camera
-        // plane, flip the grip bind 180° about the bow's spine — the string
-        // side swings back to face you, the arrow back at the target. The
-        // ±0.25 band is its own hysteresis; free angling inside it.
-        // Evaluate the fire direction the TARGET pose gives, NOT the current
-        // one: the flip edits the target while the bow still lags behind it,
-        // so testing the live mesh re-triggers every frame and flips straight
-        // back — the bow oscillates and never turns around (that is exactly
-        // how it stayed inverted). Fire dir is constant in grp space, so
-        // lift it there once and swing it by the target quaternion.
+        // ── AIM RANGE GUARD — the arrow may point anywhere inside a CONE
+        // around "away from the archer": aim freely up/down/left/right, but
+        // it can never swing back toward you. Out of range, the bind is
+        // rotated by the SMALLEST angle that puts it back on the cone edge
+        // (no 180° snap, no fighting the wrist).
+        //
+        // Evaluated on the TARGET pose, never the live one: the correction
+        // edits the target while the bow is still slerping toward it, so
+        // testing the live pose re-fires every frame and undoes itself —
+        // that oscillation is why the old flip never actually turned it.
+        //
+        // It also unblocks LOOSING: draw is the pull projected on the bow's
+        // own draw axis, so a bow facing the wrong way reads draw ≈ 0 and
+        // the string just snaps home instead of shooting.
         _lbP.copy(B.rig.drawDir).negate().transformDirection(B.mesh.matrixWorld);
         B.grp.getWorldQuaternion(_lbQ1);
-        _lbP.applyQuaternion(_lbQ1.invert());          // → grp-local (constant)
-        _gQ2.copy(_palmQ).multiply(B.grabQ);           // the TARGET orientation
-        _lbA.copy(_lbP).applyQuaternion(_gQ2);         // fire dir once settled
+        _lbP.applyQuaternion(_lbQ1.invert());        // fire dir in grp space (fixed)
+        _gQ2.copy(_palmQ).multiply(B.grabQ);         // the TARGET orientation
+        _lbA.copy(_lbP).applyQuaternion(_gQ2);       // fire dir once settled
         camera.getWorldDirection(_lbB);
-        if (_lbA.dot(_lbB) < -0.15) {                  // pointing back at the archer
-          _lbP.copy(B.rig.chordDir).transformDirection(B.mesh.matrixWorld).normalize();
-          _gQ2.setFromAxisAngle(_lbP, Math.PI);        // spin about the SPINE
+        const over = Math.acos(Math.max(-1, Math.min(1, _lbA.dot(_lbB)))) - LB_AIM_CONE;
+        if (over > 1e-3) {
+          _lbTgt.crossVectors(_lbA, _lbB);           // swing back toward the cone
+          if (_lbTgt.lengthSq() < 1e-8)              // dead-opposite → use the spine
+            _lbTgt.copy(B.rig.chordDir).transformDirection(B.mesh.matrixWorld);
+          _lbTgt.normalize();
+          _gQ2.setFromAxisAngle(_lbTgt, over);
           _lbQ1.copy(_palmQ).invert();
           B.grabQ.premultiply(_palmQ).premultiply(_gQ2).premultiply(_lbQ1);
-          engWorldLog('user', 'aim', 'auto-flip — arrow back toward the target');
         }
         // crisp 1:1 follow — wrist angling IS the aiming, so the bow has to
         // track rotation tightly enough to swing onto different targets
