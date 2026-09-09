@@ -2971,7 +2971,12 @@ async function boot() {
     toast('tracking live — raise your hands');
   } catch (e) {
     console.error(e);
-    say('✕ ' + (e.message || e) + ' — check camera permissions & reload');
+    // name the real culprit: a bare "Failed to fetch" reads as a camera
+    // problem, but it means the model/WASM download died on the network
+    const msg = String(e && e.message || e);
+    say('✕ ' + msg + (/fetch|network|HTTP|loading /i.test(msg)
+      ? ' — model download failed (network). Retry — models cache after one good load.'
+      : ' — check camera permissions & reload'));
     els.startBtn.disabled = false;
   }
 }

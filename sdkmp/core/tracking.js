@@ -56,9 +56,64 @@ export function getVision() {
 export async function getFileset() {
   if (!_filesetP) {
     const V = await getVision();
-    _filesetP = V.FilesetResolver.forVisionTasks(WASM_URL);
+    _filesetP = retry(() => V.FilesetResolver.forVisionTasks(WASM_URL), 'vision WASM')
+      .catch(e => { _filesetP = null; throw e; });     // a failed load must not memoize
   }
   return _filesetP;
+}
+
+// ── Model delivery: RETRIED + CACHED ──────────────────────────────────────
+// The .task models are ~13MB for hands+pose and live on a remote bucket. Left
+// to MediaPipe's own internal fetch, every page load re-downloads them and a
+// single network hiccup surfaces as a bare "Failed to fetch" with tracking
+// dead. So we fetch them ourselves: retry with backoff, keep a copy in the
+// CacheStorage, and hand MediaPipe the BYTES (modelAssetBuffer). After the
+// first success a flaky — or absent — network no longer blocks startup, and
+// warm loads skip the download entirely.
+const MODEL_CACHE = 'hopeos-mediapipe-models-v1';
+const _modelBufs = new Map();                          // url → Promise<Uint8Array>
+
+async function retry(fn, what, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try { return await fn(); } catch (e) {
+      last = e;
+      if (i < tries - 1) await new Promise(r => setTimeout(r, 400 * (i + 1)));
+    }
+  }
+  throw new Error((last && last.message ? last.message : String(last)) + ' — loading ' + what);
+}
+
+/** Model bytes: CacheStorage first, then a retried fetch (and cache it). */
+export function getModelBuffer(url) {
+  if (_modelBufs.has(url)) return _modelBufs.get(url);
+  const p = (async () => {
+    let cache = null;
+    try { cache = await caches.open(MODEL_CACHE); } catch { /* private mode → no cache */ }
+    if (cache) {
+      const hit = await cache.match(url).catch(() => null);
+      if (hit) return new Uint8Array(await hit.arrayBuffer());
+    }
+    const res = await retry(async () => {
+      const r = await fetch(url, { cache: 'force-cache' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r;
+    }, url.split('/').pop());
+    const buf = await res.clone().arrayBuffer();
+    if (cache) cache.put(url, res).catch(() => {});    // best-effort persist
+    return new Uint8Array(buf);
+  })();
+  p.catch(() => _modelBufs.delete(url));               // let a failure be retried
+  _modelBufs.set(url, p);
+  return p;
+}
+
+/** baseOptions with the model as BYTES, falling back to MediaPipe's own
+ *  fetch if we could not get them (e.g. CacheStorage + fetch both blocked). */
+async function modelOpts(url, delegate = 'GPU') {
+  try { return { modelAssetBuffer: await getModelBuffer(url), delegate }; }
+  catch (e) { console.warn('[tracking] buffer load failed, falling back to direct path:', e.message);
+              return { modelAssetPath: url, delegate }; }
 }
 
 /** Create a HandLandmarker (GPU, VIDEO). Same config initTracking has always used. */
@@ -66,7 +121,7 @@ export async function createHandLandmarker(opts = {}) {
   const V = await getVision();
   const fs = await getFileset();
   return V.HandLandmarker.createFromOptions(fs, {
-    baseOptions: { modelAssetPath: HAND_MODEL, delegate: 'GPU' },
+    baseOptions: await modelOpts(HAND_MODEL),
     runningMode: opts.runningMode || 'VIDEO',
     numHands: opts.numHands || 2,
     minHandDetectionConfidence: opts.handConfidence || 0.5,
@@ -79,7 +134,7 @@ export async function createPoseLandmarker(opts = {}) {
   const V = await getVision();
   const fs = await getFileset();
   return V.PoseLandmarker.createFromOptions(fs, {
-    baseOptions: { modelAssetPath: opts.model || POSE_MODEL, delegate: 'GPU' },
+    baseOptions: await modelOpts(opts.model || POSE_MODEL),
     runningMode: opts.runningMode || 'VIDEO',
     numPoses: opts.numPoses || 1,
     minPoseDetectionConfidence: opts.poseConfidence || 0.5,
@@ -94,7 +149,7 @@ export async function createFaceLandmarker(opts = {}) {
   const V = await getVision();
   const fs = await getFileset();
   return V.FaceLandmarker.createFromOptions(fs, {
-    baseOptions: { modelAssetPath: FACE_MODEL, delegate: 'GPU' },
+    baseOptions: await modelOpts(FACE_MODEL),
     runningMode: opts.runningMode || 'VIDEO',
     numFaces: opts.numFaces || 1,
     minFaceDetectionConfidence: 0.5,
