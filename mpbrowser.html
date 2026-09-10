@@ -237,6 +237,10 @@
       <button class="opt" id="engExactMove" title="shift the selection this many units along the picked axis (negative = the other way)">→ move</button>
       <button class="opt" id="engExactScale" title="scale the WHOLE object uniformly by this factor (2 = twice as big, 0.5 = half)">⤢ ×whole</button>
     </div>
+    <div class="row" id="engSizeRow">
+      <button class="opt" id="engSizeDn" title="shrink the selected object — or the bow in your hand — by 20%">➖ smaller</button>
+      <button class="opt" id="engSizeUp" title="grow the selected object — or the bow in your hand — by 25%">➕ bigger</button>
+    </div>
     <div class="sname">Unity-style numeric transform: move N units along the picked gizmo axis, or grow the whole model N× — no per-side dragging</div>
   </div>
   <div class="sec">
@@ -1739,7 +1743,19 @@ const _lbQd = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0)
 const _lbQa = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(-1, 0, 0));
 const _lbA = new THREE.Vector3(), _lbB = new THREE.Vector3(), _lbP = new THREE.Vector3();
 const _lbTgt = new THREE.Vector3(), _lbQ1 = new THREE.Quaternion();
-const LB_AIM_CONE = 70 * Math.PI / 180;   // how far off "away from you" the arrow may aim
+const LB_AIM_CONE = 85 * Math.PI / 180;   // aim anywhere forward — up, down, left, right — never back at you
+const LB_BOW_PALMS = 8;                   // bow span in palm-lengths of its archer
+// The DRAW gesture, measured on the two fingers that actually hook a string:
+// index + middle curling toward the palm. Whole-hand closure could not tell a
+// draw hook from a fist, and the thumb-index pinch is a different grip again.
+// Scale-free (palm-relative), so it reads the same at any hand size or depth.
+function _hookCurl(pack) {
+  const palm = _lbA.copy(pack[0]).distanceTo(pack[9]);
+  if (palm < 1e-6) return 0;
+  const d = (_lbA.copy(pack[8]).distanceTo(pack[0])
+           + _lbA.copy(pack[12]).distanceTo(pack[0])) / (2 * palm);
+  return Math.min(1, Math.max(0, (1.95 - d) / 0.75));   // extended ≈0 · curled ≈1
+}
 function _lbShaftDist(p, A, s) {               // point → nearest point on the arrow SHAFT
   _lbA.set(0, 1, 0).applyQuaternion(A.quaternion);
   _lbB.copy(p).sub(A.position);
@@ -2000,37 +2016,32 @@ function labBowTick(pk, dt) {
     B.grabP.copy(B.grp.position).sub(_palmP)                    // never snaps back
       .applyQuaternion(_gQ2.copy(_palmQ).invert());
   }
-  // framing scale — a fraction of the visible frame AT THE BOW'S OWN DEPTH
-  // (never palm-absolute: that let it swallow the screen) × the pinch
-  // multiplier. Frozen while anything is held.
-  if (scaling2 || (!B.held && !B.aHeld && !B.stringHeld)) {
-    const vh = 2 * Math.max(0.3, camera.position.distanceTo(B.grp.position)) * Math.tan(camera.fov * Math.PI / 360);
-    B.s += (0.55 * vh * B.userS / B.rig.span - B.s) * (scaling2 ? 0.4 : 0.08);
+  // SIZE TO THE HAND, not to the frame. POV hands render far bigger than
+  // mirror ones, so a frame-fraction bow came out looking like a toothpick
+  // beside them (and unreachable). A real bow is ~8 palm-lengths of its
+  // archer, in any view — measured off the bow hand when there is one.
+  if (scaling2 || (!B.aHeld && !B.stringHeld)) {
+    const target = hasL ? LB_BOW_PALMS * palL * B.userS
+      : 0.55 * 2 * Math.max(0.3, camera.position.distanceTo(B.grp.position))
+        * Math.tan(camera.fov * Math.PI / 360) * B.userS;
+    B.s += (target / B.rig.span - B.s) * (scaling2 ? 0.4 : (B.held ? 0.15 : 0.08));
     B.grp.scale.setScalar(B.s);
   }
-  // ── DOUBLE-FIST SUMMON (the pic-3 reference): BOTH hands closed as fists →
-  // the bow SEATS INTO the left grasp — grip in the fist, spine across the
-  // closed fingers, string side toward the draw hand — and is immediately
-  // held; the arrow seats tail-first into the right fist. The holding gesture
-  // IS the positioning trigger: no reaching, no fumbling, correct archery
-  // pose by construction (fingers conform around the stave via the collider).
-  if (!scaling2 && !B.held && hasL && hasR && _closure(L) > 0.6 && _closure(R) > 0.6) {
-    seatBow(B, _palmQ, _palmP, _gP2);
+  // ── FIST SUMMON: the LEFT hand (the bow hand in POV) closing into a fist
+  // MATERIALISES the bow in that grasp — mid-stave in the palm, spine across
+  // the closed fingers, string toward the draw hand. The holding gesture IS
+  // the trigger: nothing to chase, nothing to line up, and it can never come
+  // up in a pose you cannot draw. Fingers wrap it via the conform collider.
+  if (!scaling2 && !B.held && hasL && _closure(L) > 0.6) {
+    seatBow(B, _palmQ, _palmP, hasR ? _gP2 : null);
     B.grp.updateMatrixWorld(true);
     _gW.copy(B.rig.gripLocal).applyMatrix4(B.mesh.matrixWorld);
     B.grp.position.add(_lbA.copy(_palmP).sub(_gW));
     B.held = true; B.relT = 0;
     B.grabQ.copy(_palmQ).invert().multiply(B.grp.quaternion);
     B.grabP.copy(B.grp.position).sub(_palmP).applyQuaternion(_gQ2.copy(_palmQ).invert());
-    if (B.arrow && !B.nocked) {
-      B.arrow.quaternion.setFromUnitVectors(_bY, _lbA.copy(_sbD).negate());
-      B.arrow.position.copy(_gP2);             // tail in the right fist, tip target-ward
-      B.aHeld = true; B.aRelT = 0;
-      B.aGrabQ.copy(_gQ3).invert().multiply(B.arrow.quaternion);
-      B.aGrabP.copy(B.arrow.position).sub(_gP2).applyQuaternion(_gQ2.copy(_gQ3).invert());
-    }
-    engWorldLog('user', 'summon', 'bow seated in the left fist');
-    toast('🏹 seated in your grasp — string toward your draw hand');
+    engWorldLog('user', 'summon', 'bow seated in the fist');
+    toast('🏹 in your grasp — point it anywhere; curl index+middle on the string to draw');
   }
   // ── BOW: floats until the LEFT fist WRAPS the grip; open hand = let go ──
   B.grp.updateMatrixWorld(true);
@@ -2211,7 +2222,10 @@ function labBowTick(pk, dt) {
         const close = _closure(R), pr = _pinchR(R);
         // the reference gesture: index+middle CURLED over the string — a
         // two-finger hook reads lower on the closure metric than a fist
-        const hooked = close > 0.35 || pr < 0.4;
+        // the archer's hook, measured on the two fingers that do the work:
+        // index + middle curled over the string (a pinch still counts).
+        // Whole-hand closure could not tell this gesture from a fist.
+        const hooked = _hookCurl(R) > 0.4 || pr < 0.4;
         _gB.copy(R[8]).lerp(R[12], 0.5);       // the hook point: index↔middle
         if (!B.stringHeld) {
           // the hook can start from the palm OR the pinch point — a curled
@@ -5999,6 +6013,24 @@ function engExactApply(kind) {
 }
 document.getElementById('engExactMove').addEventListener('click', () => engExactApply('move'));
 document.getElementById('engExactScale').addEventListener('click', () => engExactApply('scale'));
+// ± SIZE — one control for everything: the selected engine object, or the
+// hand-held bow/arrow (which is a lab-scene prop, so it is never "selected"
+// and the gizmo could never reach it — that is why ×whole did nothing to it)
+function engSizeBy(f) {
+  if (LABBOW.on && (!ENG.sel || LABBOW.held)) {
+    LABBOW.userS = Math.max(0.25, Math.min(4, LABBOW.userS * f));
+    LABBOW.s = Math.max(0.02, LABBOW.s * f);
+    LABBOW.grp.scale.setScalar(LABBOW.s);
+    if (LABBOW.arrow) LABBOW.arrow.scale.setScalar(LABBOW.s);
+    toast('🏹 bow ×' + LABBOW.userS.toFixed(2));
+    return;
+  }
+  if (!ENG.sel) { toast('select an object first (or arm 🏹 to size the bow)'); return; }
+  ENG.sel.scale.multiplyScalar(f);
+  toast('⤢ ×' + ENG.sel.scale.x.toFixed(2));
+}
+document.getElementById('engSizeDn').addEventListener('click', () => engSizeBy(1 / 1.25));
+document.getElementById('engSizeUp').addEventListener('click', () => engSizeBy(1.25));
 document.getElementById('engExactVal').addEventListener('keydown', e => {
   if (e.key === 'Enter') engExactApply(ENG.tc.mode === 'scale' ? 'scale' : 'move');
 });
