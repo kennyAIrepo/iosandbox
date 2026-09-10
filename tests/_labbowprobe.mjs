@@ -76,9 +76,10 @@ const out = await page.evaluate(async () => {
   const noGlue = { held: B.held, moved: +B.grp.position.distanceTo(p0).toFixed(3) };
   window.__lab.AVSYNC.ovPacks = { L: null, R: null };
   await new Promise(r => setTimeout(r, 200));
-  // ── 2. NO TELE-GRAB: a full FIST 12cm OFF the surface takes NOTHING ──
+  // ── 2. Only a real FIST takes the bow: an open hand off the wood does
+  // not (the fist itself summons it into the grasp — that is the feature) ──
   const g1 = gripW();
-  window.__lab.AVSYNC.ovPacks = { L: fist(g1.x, g1.y, g1.z + 0.12), R: null };
+  window.__lab.AVSYNC.ovPacks = { L: open(g1.x, g1.y, g1.z + 0.12), R: null };
   await new Promise(r => setTimeout(r, 400));
   const noTeleGrab = !B.held;
   // ── 3. GRAB: the FIST ON the wood takes the bow; it follows the hand.
@@ -235,7 +236,7 @@ const out = await page.evaluate(async () => {
   const depthOk = B.bowHome.z < -1 && Math.abs(B.arrHome.z - B.bowHome.z) < 0.3;
   const scaleOk = B.s > 0.2 && B.s < 1.2;
   const kinds = k => window.__eng.world.log.filter(e => e.npc === 'user' && e.kind === k).length;
-  const logs = { grab: kinds('grab') >= 2, nock: kinds('nock') >= 1, hold: kinds('hold') >= 1,
+  const logs = { grab: kinds('grab') >= 1, summon: kinds('summon') >= 1, nock: kinds('nock') >= 1, hold: kinds('hold') >= 1,
                  draw: kinds('draw') >= 1, shot: kinds('shot') >= 1,
                  tail: window.__eng.world.log.slice(-5).map(e => e.npc + '/' + e.kind + ': ' + e.msg) };
   window.__lab.AVSYNC.ovPacks = null;
@@ -256,7 +257,7 @@ if (!out.hull.json) fail.push('hull shape-json not serializable');
 if (out.hull.gripInside > 0.01) fail.push('hull does not contain the grip point (not mesh-true): ' + out.hull.gripInside);
 if (out.noGlue.held) fail.push('GLUE: open hand on the grip must attach NOTHING');
 if (out.noGlue.moved < 0.004 || out.noGlue.moved > 0.2) fail.push('TOUCH RESPONSE: open-hand contact should SHOVE the bow (bounded): moved ' + out.noGlue.moved);
-if (!out.noTeleGrab) fail.push('TELE-GRAB: a fist 12cm OFF the surface must take nothing (shape-true gating)');
+if (!out.noTeleGrab) fail.push('an OPEN hand off the wood must not take the bow');
 if (!out.grabbed) fail.push('fist ON the wood did not take the bow');
 if (out.drawAfterFlip < 0.25) fail.push('after recovery a pull did not DRAW (draw ' + out.drawAfterFlip + ') — loose is impossible');
 if (out.shotAfterFlip < 1) fail.push('after recovery the release did not SHOOT — arrow just snapped home');
@@ -287,7 +288,7 @@ if (out.summon.gripAtFist > 0.06) fail.push('SUMMON: grip not IN the left fist: 
 if (out.summon.stringToDraw < 0.6) fail.push('SUMMON: string side not facing the draw hand: dot ' + out.summon.stringToDraw);
 if (out.resist.minGap < -0.006) fail.push('RESISTANCE: the hand passed INTO the free bow mesh: minGap ' + out.resist.minGap);
 if (!out.resist.notGrabbed) fail.push('RESISTANCE: an open hand must not grab the free bow');
-for (const k of ['grab', 'nock', 'hold', 'draw', 'shot'])
+for (const k of ['grab', 'summon', 'nock', 'hold', 'draw', 'shot'])
   if (!out.logs[k]) fail.push('world log missing "' + k + '" — tail: ' + out.logs.tail.join(' | '));
 if (errors.length) fail.push('errors: ' + errors.join(' | '));
 console.log(fail.length ? '✗ FAIL: ' + fail.join('; ') : '✓ LABBOW mesh-true touch works — hull contact, no glue, no tele-grab, shove, grab, nock, draw, loose');
