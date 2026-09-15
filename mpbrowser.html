@@ -1020,6 +1020,7 @@ const nockCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.03
 // 🟢 glass-slime conform collider: the ball's live sphere (scaled), so ghost
 // fingers WRAP it with depth-true occlusion — the same lane the cube and bow use
 const slimeCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.16, active: false };
+const _sbTmpA = new THREE.Vector3(), _sbTmpB = new THREE.Vector3(), _sbTmpC = new THREE.Vector3();
 
 // Hand PHYSICS bodies — joint colliders + velocities + palm frame, fed the
 // SAME world packs the rigs render, so physics matches pixels exactly.
@@ -1229,7 +1230,7 @@ const SLIME_R = 0.16;
 const slimeLab = {
   on: false, mesh: null, mat: null, soft: null, backdrop: null, videoTex: null,
   sphere: new GrabbableSphere(SLIME_R, { gravity: -4.2, restitution: 0.42 }),
-  center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, hull: null, userS: 1, _scal: null, _hullTick: 0, density: 2500, metrics: { squash: 0, sag: 0 },
+  center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, hull: null, userS: 1, _scal: null, _hullTick: 0, density: 2500, seek: null, seekHand: null, metrics: { squash: 0, sag: 0 },
   init() {
     this.mat = makeGlass({ tint: 0x7df0a8, lens: this.lens, thickness: SLIME_R * 2 });
     this.mesh = new THREE.Mesh(this._geo(this.detail), this.mat);
@@ -1349,13 +1350,76 @@ const slimeLab = {
       }
     }
     if (!scaling) this._scal = null;
-    // ── HAND RESISTANCE (mesh-true, from the hull): an OPEN hand cannot push
-    // through the ball; a hand closing on it, or holding it, passes freely ──
-    if (this.hull && pk && !this.sphere.grabbed() && !scaling) {
-      this.mesh.updateMatrixWorld(true);
-      for (const pack of [pk.L, pk.R]) if (pack && pack[0] && _closure(pack) < 0.35) _handResist(this.hull, this.mesh, pack, 0.3);
+    // ── SEEK THE HAND (the cube's Z-BIAS doctrine, plus the grab gesture):
+    // in mirror space the hand reaches at ITS depth while the ball sits at the
+    // workspace depth, so a grab slid past in front with no contact. Now:
+    //  · z-bias — a free ball's depth eases toward the nearest palm that is
+    //    over it on screen, so a reaching hand can ALWAYS touch it
+    //  · cup pull — fingers curling to wrap (closure 0.25…0.85) with the palm
+    //    near the ball draw it INTO the pocket the fingers wrap toward (between
+    //    palm centre and fingertip centroid — chirality-free), so the grab
+    //    lands where the hand is actually closing ──
+    const R = SLIME_R * this.userS, hands = pk ? [pk.L, pk.R].filter(h => h && h[0] && h[9]) : [];
+    this.seek = null; this.seekHand = null;
+    if (!this.sphere.grabbed() && !scaling && hands.length) {
+      let best = null, bd = Infinity;
+      for (const h of hands) {
+        const pc = _sbTmpA.copy(h[0]).lerp(h[9], 0.5);
+        const dxy = Math.hypot(pc.x - this.sphere.pos.x, pc.y - this.sphere.pos.y);
+        if (dxy < bd) { bd = dxy; best = h; }
+      }
+      if (best && bd < R * 3.2) {
+        this.seekHand = best;
+        const pc = _sbTmpA.copy(best[0]).lerp(best[9], 0.5);
+        const cl = _closure(best);
+        // inner-palm normal: MEASURED (HandBody.palmOut, chirality-latched) when
+        // that hand is live, else the curl direction (fingertips − palm)
+        const hb = handBodies[best === pk.L ? 'left' : 'right'];
+        _sbTmpB.set(0, 0, 0); for (const t of [8, 12, 16, 20]) _sbTmpB.add(_sbTmpC.copy(best[t]));
+        _sbTmpB.multiplyScalar(0.25).sub(pc);
+        if (hb && hb.present && hb.palmSign !== 0) _sbTmpB.copy(hb.palmOut);
+        if (_sbTmpB.lengthSq() < 1e-8) _sbTmpB.set(0, 0, 1);
+        _sbTmpB.normalize();
+        if (cl > 0.25 && cl < 0.85) {
+          // CUPPING → the ball comes to rest IN the pocket: one radius out along
+          // the inner-palm normal, so the fingers close around it, never into it
+          _sbTmpB.multiplyScalar(R + 0.015).add(pc);
+          this.sphere.pos.lerp(_sbTmpB, Math.min(1, dt * 5));
+          this.sphere.vel.multiplyScalar(0.7);
+          this.seek = 'cup';
+        } else {
+          // Z-BIAS → the ball's depth comes to CONTACT distance on the side the
+          // hand approaches from (never onto the palm plane itself)
+          const side = Math.sign(this.sphere.pos.z - pc.z) || -1;
+          const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, pc.z + side * (R + 0.02)));
+          this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 6);
+          this.seek = 'z';
+        }
+      }
     }
-    if (!scaling) this.sphere.update(dt, ballColliders, this.floorY());
+    // ── HAND-STOP (mesh-true, from the hull): a hand meeting the ball's surface
+    // STOPS there — however far the real hand keeps pushing, the holohand never
+    // passes through or into the glass. Every hand, every gesture; the one hand
+    // currently HOLDING it is exempt (it wraps via the conform collider, and the
+    // ball rides that palm). Free ball: the hand takes most of the correction and
+    // the ball still nudges; held ball: rigid, full stop. ──
+    if (this.hull && pk && !scaling) {
+      this.mesh.updateWorldMatrix(true, false);
+      const holder = this.sphere.held ? this.sphere.held.slot : null;
+      const share = this.sphere.grabbed() ? 1.0 : 0.6;
+      // a FREE ball never pushes back the hand it is coming to — the hand is the
+      // anchor there and the ball yields (otherwise the pair drifts off together)
+      if (pk.L && pk.L[0] && holder !== 'left' && !(this.seek && this.seekHand === pk.L)) _handResist(this.hull, this.mesh, pk.L, share);
+      if (pk.R && pk.R[0] && holder !== 'right' && !(this.seek && this.seekHand === pk.R)) _handResist(this.hull, this.mesh, pk.R, share);
+    }
+    // while a hand is being SOUGHT, gravity yields: the ball floats to the hand
+    // instead of dropping out from under it (the grab detection still runs)
+    if (!scaling) {
+      const g0 = this.sphere.gravity;
+      if (this.seek) { this.sphere.gravity = 0; this.sphere.vel.multiplyScalar(0.5); }
+      this.sphere.update(dt, ballColliders, this.floorY());
+      this.sphere.gravity = g0;
+    }
     // ── conform collider: ghost fingers wrap the live ball, depth-true ──
     slimeCollider.center.copy(this.sphere.pos);
     slimeCollider.radius = SLIME_R * this.userS * (1 - 0.15 * this.soft.softness);

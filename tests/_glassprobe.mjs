@@ -36,6 +36,14 @@ const out = await page.evaluate(async () => {
     p[4] = V(x + 0.1, y, z);
     return p;
   };
+  const cup = (x, y, z) => {                                   // fingers curling to wrap (closure ~0.5)
+    const p = mk(V(x, y, z));
+    p[0] = V(x, y - 0.05, z); p[9] = V(x, y + 0.05, z);
+    p[5] = V(x + 0.035, y + 0.04, z); p[17] = V(x - 0.035, y + 0.04, z);
+    for (const i of [8, 12, 16, 20]) p[i] = V(x, y + 0.075, z + 0.06);   // tips ahead of the palm, half curled
+    p[4] = V(x + 0.07, y, z + 0.02);
+    return p;
+  };
   const glass = { transmission: G.mat.transmission, ior: +G.mat.ior.toFixed(2), softness: G.soft.softness, state: G.state,
                   verts: verts(), backdrop: !!(G.backdrop && G.backdrop.visible && S.mode === 'mirror'), envMap: !!G.mat.envMap,
                   collider: window.__lab.slimeCol ? window.__lab.slimeCol.active : 'n/a' };
@@ -44,6 +52,26 @@ const out = await page.evaluate(async () => {
   const r = 0.16, vIdeal = 4 / 3 * Math.PI * r ** 3;
   const stats = { mass: st.mass_kg, volume: st.volume_m3, volErr: +Math.abs(st.volume_m3 - vIdeal) / vIdeal, hullSegs: st.hull && st.hull.segs,
                   hullJson: !!(st.hull && st.hull.json && st.hull.json.segs && st.hull.json.segs.length), bbox: st.bbox };
+  // ── SEEK THE HAND: a hand over the ball on screen but 0.35 m nearer the
+  // camera pulls the ball to ITS depth (z-bias); a CUPPING hand draws the
+  // ball into the pocket the fingers wrap toward ──
+  const s0 = G.sphere.pos.clone();
+  window.__lab.AVSYNC.ovPose = null;
+  window.__lab.AVSYNC.ovPacks = { L: open(s0.x + 0.02, s0.y, s0.z + 0.35), R: null };   // open hand, nearer camera
+  await wait(1200);
+  const Lz = window.__lab.AVSYNC.packs.L;
+  const zBias = { dz0: 0.35, gapNow: +Math.abs(G.sphere.pos.z - (s0.z + 0.35)).toFixed(3), seek: G.seek,
+                  handMoved: +Math.abs(Lz[0].z - (s0.z + 0.35)).toFixed(3) };   // the hand must stay put
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(300);
+  const s1 = G.sphere.pos.clone();
+  const cx = s1.x + 0.18, cy = s1.y + 0.05, cz = s1.z;                    // cupping hand beside the ball
+  window.__lab.AVSYNC.ovPacks = { L: cup(cx, cy, cz), R: null };
+  await wait(900);
+  const nrm = new T3.Vector3(0, 0.075, 0.06).normalize();                   // curl direction of the cup() hand
+  const pocket = new T3.Vector3(cx, cy, cz).addScaledVector(nrm, 0.16 + 0.015); // one radius out along it
+  const Lc = window.__lab.AVSYNC.packs.L; const cupHandMoved = +Math.abs(Lc[0].z - cz).toFixed(3);
+  const cupPull = { before: +s1.distanceTo(pocket).toFixed(3), after: +G.sphere.pos.distanceTo(pocket).toFixed(3), seek: G.seek, handMoved: cupHandMoved };
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(300);
   // ── RESISTANCE: an OPEN hand pressed into the ball is stopped at its surface ──
   const c0 = G.sphere.pos.clone();
   window.__lab.AVSYNC.ovPose = null;
@@ -88,7 +116,7 @@ const out = await page.evaluate(async () => {
   document.getElementById('slimeMorphBtn').click();
   await wait(3500);
   const reglass = { softness: +G.soft.softness.toFixed(3), sag: +G.metrics.sag.toFixed(4), state: G.state, verts: verts() };
-  return { glass, stats, resist, press, scale, early, slime, lens, reglass };
+  return { glass, stats, zBias, cupPull, resist, press, scale, early, slime, lens, reglass };
 });
 await browser.close();
 console.log(JSON.stringify(out, null, 1));
@@ -100,6 +128,9 @@ if (!g.envMap) fail.push('no live reflection env map');
 if (g.collider !== true) fail.push('conform collider not streaming (fingers cannot wrap the ball): ' + g.collider);
 if (!out.stats.hullJson || !(out.stats.mass > 0)) fail.push('no live shape/mass stats: ' + JSON.stringify(out.stats));
 if (out.stats.volErr > 0.15) fail.push('stats volume off from a sphere by ' + (out.stats.volErr * 100).toFixed(0) + '%');
+if (Math.abs(out.zBias.gapNow - 0.18) > 0.05) fail.push('Z-BIAS: ball should rest at contact distance (0.18) from the reaching hand, got ' + out.zBias.gapNow);
+if (out.zBias.handMoved > 0.01 || out.cupPull.handMoved > 0.01) fail.push('SEEK pushed the HAND instead of moving the ball: ' + out.zBias.handMoved + ' / ' + out.cupPull.handMoved);
+if (out.cupPull.after > 0.06) fail.push('CUP PULL: cupping hand did not draw the ball into the pocket: ' + JSON.stringify(out.cupPull));
 if (out.resist.minGap < -0.006) fail.push('RESISTANCE: open hand passed INTO the ball: minGap ' + out.resist.minGap);
 if (out.resist.grabbed) fail.push('an OPEN hand must not grab the ball');
 if (out.press.squash < 0.003) fail.push('rigid glass did not dent under a pressing finger: ' + out.press.squash);
