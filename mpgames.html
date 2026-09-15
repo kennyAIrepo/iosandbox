@@ -473,6 +473,7 @@ const YOLO = { on: false, ws: null, players: [], lastT: 0, lastSend: 0, cv: docu
 // normals via dFdx/dFdy) with a GROWTH front sweeping up the body (uGrow).
 const RIG3 = { on: false, topo: null, geo: null, mesh: null, ren: null, scn: null, cam: null,
                tPrev: 0, tCurr: 0, lastPkt: 0, grow0: 0 };
+window.__mpg = { get YOLO() { return YOLO; } };   // probe seam (tests/_mpcloudprobe.mjs)
 function b64u16(s) { const b = atob(s), a = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) a[i] = b.charCodeAt(i); return new Uint16Array(a.buffer); }
 function rigDequant(pkt) {
   const q = b64u16(pkt.q), n = pkt.nv, out = new Float32Array(n * 3);
@@ -1329,6 +1330,30 @@ function loop() {
   let frame, mpF = null, mpPrimary = null;
   if (S.mp && mt) {
     mpF = mt.detect(now);
+    // ── ID FUSION: when the cloud tracker is live, its BoT-SORT/ReID ids are
+    // the authority (stable through occlusion — they draw the skeletons).
+    // Re-key the LOCAL per-player hand pipelines onto those ids by bbox
+    // proximity (both lists are mirrored display space), so hands, bodies,
+    // rig slots and tap-to-lock all speak ONE id space. Before this, hands
+    // rode MoveNet ids while skeletons rode cloud ids — two id spaces that
+    // silently disagreed whenever players crossed. Unmatched locals get a
+    // high offset id so they can never collide with a cloud id.
+    if (YOLO.on && (now - YOLO.lastT < 1500) && (YOLO.players || []).length && mpF.players.length) {
+      const cloud = YOLO.players, pairs = [];
+      for (const lp of mpF.players) for (const cp of cloud) {
+        const dx = (lp.bbox.x + lp.bbox.w / 2) - (cp.bbox.x + cp.bbox.w / 2);
+        const dy = (lp.bbox.y + lp.bbox.h / 2) - (cp.bbox.y + cp.bbox.h / 2);
+        const d = Math.hypot(dx, dy) / Math.max(lp.bbox.h, cp.bbox.h, 1e-3);
+        if (d < 0.6) pairs.push({ lp, cp, d });
+      }
+      pairs.sort((a, b) => a.d - b.d);
+      const usedL = new Set(), usedC = new Set();
+      for (const lp of mpF.players) lp.id = 100000 + lp.id;
+      for (const { lp, cp } of pairs) {
+        if (usedL.has(lp) || usedC.has(cp.id)) continue;
+        usedL.add(lp); usedC.add(cp.id); lp.id = cp.id;
+      }
+    }
     // sticky primary: keep the same person while they're in frame, else largest
     if (mpPrimaryId !== null && !mpF.players.some(p => p.id === mpPrimaryId)) mpPrimaryId = null;
     if (mpPrimaryId === null && mpF.players.length) {
@@ -2264,6 +2289,19 @@ addEventListener('pointerdown', (e) => {
 function yoloMap(arr) {
   // server sends RAW normalized coords → mirror x to match MoveNet's convention
   return arr.map(p => {
+    // TWO wire schemas, one client: the tracking lane (:8765) sends
+    // {kpts:[[x,y,s]x17], box:[cx,cy,w,h]}; the SAM3/rig lane (:8766, and the
+    // Modal rig) sends {body2D:[{x,y,score}], bbox:{x,y,w,h} (left/top)}. Both
+    // are RAW (measured on one frame: nearest-box dist 0.000 raw vs 0.147
+    // mirrored), so both get the same x mirror. Pointing the page at the SAM3
+    // lane used to throw here on every frame (p.kpts undefined).
+    if (!p.kpts && p.body2D) {
+      const b = p.bbox || { x: 0, y: 0, w: 0, h: 0 };
+      return { id: p.id, body2D: p.body2D.map(k => ({ x: 1 - k.x, y: k.y, score: k.score ?? 0 })),
+               bbox: { x: 1 - (b.x + b.w), y: b.y, w: b.w, h: b.h },
+               team: p.team ?? null, col: p.col || null,
+               wrists: [null, null], hands: { left: null, right: null }, bodyImg: null, bodyWorld: null };
+    }
     const body2D = p.kpts.map(k => ({ x: 1 - k[0], y: k[1], score: k[2] }));
     const cx = p.box[0], cy = p.box[1], bw = p.box[2], bh = p.box[3];
     return { id: p.id, body2D, bbox: { x: 1 - (cx + bw / 2), y: cy - bh / 2, w: bw, h: bh },
