@@ -496,6 +496,10 @@
       <button class="opt" data-lens="magnifier" title="magnifies what is behind it">🔍 magnify</button>
       <button class="opt" data-lens="ball-lens" title="a solid glass ball flips the world upside-down">🔄 ball-lens</button>
     </div>
+    <div class="row" id="slimeSizeRow" style="margin-top:4px">
+      <button class="opt" id="slimeSizeDn" title="shrink the ball 20% — or pinch with BOTH hands and squeeze">➖ smaller</button>
+      <button class="opt" id="slimeSizeUp" title="grow the ball 25% — or pinch with BOTH hands and pull apart">➕ bigger</button>
+    </div>
     <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a see-through green glass ball with real refraction of the room behind it (the camera feed becomes a live backdrop + reflection map) · grip ✊ / pinch 🤏 to carry, throw, catch · every vertex is a mass point: soften it and it sags, pools and DRIPS THROUGH your fingers (collides with the same hand joints the cube uses) · vertex density = how smoothly it melts</div>
   </div>
   <div class="sec">
@@ -1013,6 +1017,9 @@ const arrowCollider = { type: 'box', center: new THREE.Vector3(), quat: new THRE
 // 🏹 nock/string conform: the drawing fingers HOOK around the string+fletching
 // junction instead of sliding through it (a 2mm string needs a graspable body)
 const nockCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.03, active: false };
+// 🟢 glass-slime conform collider: the ball's live sphere (scaled), so ghost
+// fingers WRAP it with depth-true occlusion — the same lane the cube and bow use
+const slimeCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.16, active: false };
 
 // Hand PHYSICS bodies — joint colliders + velocities + palm frame, fed the
 // SAME world packs the rigs render, so physics matches pixels exactly.
@@ -1222,12 +1229,15 @@ const SLIME_R = 0.16;
 const slimeLab = {
   on: false, mesh: null, mat: null, soft: null, backdrop: null, videoTex: null,
   sphere: new GrabbableSphere(SLIME_R, { gravity: -4.2, restitution: 0.42 }),
-  center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, metrics: { squash: 0, sag: 0 },
+  center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, hull: null, userS: 1, _scal: null, _hullTick: 0, density: 2500, metrics: { squash: 0, sag: 0 },
   init() {
     this.mat = makeGlass({ tint: 0x7df0a8, lens: this.lens, thickness: SLIME_R * 2 });
     this.mesh = new THREE.Mesh(this._geo(this.detail), this.mat);
     this.mesh.renderOrder = 30;
     this.soft = new SoftBody(this.mesh, SLIME_R);
+    // MESH-TRUE shape: a PropHull baked from the ball itself — the grab gate,
+    // hand resistance and stats() all read the real surface (rebuilt while soft)
+    this.hull = PropHull.fromObject(this.mesh, { bins: 10 });
     scene.add(this.mesh);
     const vid = els.vid && els.vid.readyState >= 2 ? els.vid : els.bgVid;
     this.videoTex = new THREE.VideoTexture(vid);
@@ -1269,6 +1279,33 @@ const slimeLab = {
     this.sphere.reset(this.center.clone().add(new THREE.Vector3(-0.35, 0.1, 0)));
   },
   setLens(mode) { this.lens = mode; if (this.mat) this.mat.setLens(mode); },
+  setScale(sc) {                             // UI ± buttons and the two-hand pinch share this
+    this.userS = Math.max(0.4, Math.min(3, sc));
+    if (!this.mesh) return;
+    this.mesh.scale.setScalar(this.userS);
+    this.sphere.radius = SLIME_R * this.userS;
+    slimeCollider.radius = SLIME_R * this.userS;
+    this.mesh.updateMatrixWorld(true);
+  },
+  /** live shape + mass, any moment: volume from the deformed mesh (divergence
+   *  theorem over the triangles), mass = glass density × volume */
+  stats() {
+    if (!this.mesh) return null;
+    const g = this.mesh.geometry, P = g.getAttribute('position'), I = g.index, sc = this.userS;
+    let vol = 0; const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    for (let t = 0; t < I.count; t += 3) {
+      a.fromBufferAttribute(P, I.getX(t)); b.fromBufferAttribute(P, I.getX(t + 1)); c.fromBufferAttribute(P, I.getX(t + 2));
+      vol += a.dot(b.clone().cross(c)) / 6;
+    }
+    vol = Math.abs(vol) * sc * sc * sc;
+    g.computeBoundingBox(); const bb = g.boundingBox.getSize(new THREE.Vector3()).multiplyScalar(sc);
+    return { state: this.state, softness: +this.soft.softness.toFixed(3), scale: sc, radius: SLIME_R * sc,
+             volume_m3: +vol.toFixed(5), mass_kg: +(vol * this.density).toFixed(3), verts: P.count,
+             bbox: bb.toArray().map(v => +v.toFixed(3)), pos: this.sphere.pos.toArray().map(v => +v.toFixed(3)),
+             vel: this.sphere.vel.toArray().map(v => +v.toFixed(2)), held: this.sphere.grabbed(),
+             squash: +this.metrics.squash.toFixed(4), sag: +this.metrics.sag.toFixed(4),
+             hull: this.hull ? { segs: this.hull.segs.length, json: this.hull.toJSON() } : null };
+  },
   toggle(on) {
     this.on = on;
     if (on && !this.mesh) { this.init(); this.setSoftness(0); }
@@ -1277,9 +1314,10 @@ const slimeLab = {
     if (on) { if (meshOnly()) applyDisplay('lab'); this.recenter(); toast('🟢 glass slime — grip or pinch it, squeeze it, throw it · soften it to melt', 4000); }
     if (this.mesh) this.mesh.visible = on;
     if (this.backdrop) this.backdrop.visible = false;
+    if (!on) slimeCollider.active = false;
   },
   floorY() { return S.mode === 'mirror' ? this.center.y - 1.05 : 0; },
-  update(dt) {
+  update(dt, pk) {
     if (!this.on || !this.mesh || S.mode === 'inspect') return;
     const mirror = S.mode === 'mirror';
     this.backdrop.visible = mirror;
@@ -1295,7 +1333,35 @@ const slimeLab = {
     if (Math.abs(cur - this.target) > 0.002) this.setSoftness(cur + (this.target - cur) * Math.min(1, dt / this.ramp * 2.2));
     else if (this.target === 0 && cur !== 0) this.setSoftness(0);
     if (this.target === 0 && this.soft.softness < 0.01 && this.detail === 'high' && this.metrics.sag < 0.004) this.setDetail('medium');
-    this.sphere.update(dt, ballColliders, this.floorY());
+    // ── two-hand PINCH = SCALE (the DEI basketball / cube gesture): pinch
+    // with both hands around the ball, pull apart / squeeze to resize ──
+    const HL = handBodies.left, HR = handBodies.right;
+    const twoPinch = HL.present && HR.present && HL.pinch > 0.7 && HR.pinch > 0.7;
+    let scaling = false;
+    if (twoPinch) {
+      const mid = HL.pinchPoint.clone().add(HR.pinchPoint).multiplyScalar(0.5);
+      const d = HL.pinchPoint.distanceTo(HR.pinchPoint);
+      if (this._scal || mid.distanceTo(this.sphere.pos) < SLIME_R * this.userS + 0.25) {
+        if (!this._scal) this._scal = { d0: Math.max(d, 1e-3), u0: this.userS };
+        this.setScale(this._scal.u0 * d / this._scal.d0);
+        this.sphere.pos.lerp(mid, 0.4); this.sphere.vel.set(0, 0, 0);   // held between the pinches
+        scaling = true;
+      }
+    }
+    if (!scaling) this._scal = null;
+    // ── HAND RESISTANCE (mesh-true, from the hull): an OPEN hand cannot push
+    // through the ball; a hand closing on it, or holding it, passes freely ──
+    if (this.hull && pk && !this.sphere.grabbed() && !scaling) {
+      this.mesh.updateMatrixWorld(true);
+      for (const pack of [pk.L, pk.R]) if (pack && pack[0] && _closure(pack) < 0.35) _handResist(this.hull, this.mesh, pack, 0.3);
+    }
+    if (!scaling) this.sphere.update(dt, ballColliders, this.floorY());
+    // ── conform collider: ghost fingers wrap the live ball, depth-true ──
+    slimeCollider.center.copy(this.sphere.pos);
+    slimeCollider.radius = SLIME_R * this.userS * (1 - 0.15 * this.soft.softness);
+    slimeCollider.active = true;
+    // hull tracks the deformed shape while soft (cheap: every 12th frame)
+    if (this.soft.softness > 0.05 && (++this._hullTick % 12) === 0) this.hull = PropHull.fromObject(this.mesh, { bins: 10 });
     if (!this.sphere.grabbed() && this.sphere.pos.distanceTo(this.center) > 3.4) this.sphere.reset();
     this.mesh.position.copy(this.sphere.pos);
     this.mesh.quaternion.copy(this.sphere.quat);
@@ -2681,8 +2747,8 @@ function loop() {
     const es = _engSdk();
     AVSYNC.packsAligned = !!(es && es.on && es.view === 'pov' && (packs.L || packs.R));
   }
-  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active)
-    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider] : null;
+  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active)
+    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
   if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
@@ -2989,7 +3055,7 @@ function loop() {
     else handBodies[slot].drop();
   }
   sandbox.update(dt);
-  slimeLab.update(dt);                       // 🟢 glass slime (see-through, soft body)
+  slimeLab.update(dt, AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs);                       // 🟢 glass slime (see-through, soft body)
   cubeLab.update(dt);
   // co-op: in multi mode every player's hands can punch the shared note stream
   const gameHands = (S.mp && mpF) ? [handBodies.left, handBodies.right, ...mpExtraHands] : handBodyArr;
@@ -4287,6 +4353,8 @@ document.getElementById('slimeMorphBtn').addEventListener('click', () => {
   slimeLab.morph(slimeLab.state === 'slime' ? 'glass' : 'slime');
   toast(slimeLab.state === 'slime' ? '💧 melting — the glass in your hand turns to slime, drips between your fingers' : '🧊 solidifying back into glass');
 });
+document.getElementById('slimeSizeDn').addEventListener('click', () => { slimeLab.setScale(slimeLab.userS / 1.25); toast('🟢 ball ×' + slimeLab.userS.toFixed(2)); });
+document.getElementById('slimeSizeUp').addEventListener('click', () => { slimeLab.setScale(slimeLab.userS * 1.25); toast('🟢 ball ×' + slimeLab.userS.toFixed(2)); });
 document.getElementById('slimeSoft').addEventListener('input', e => {
   slimeLab.target = e.target.value / 100;   // fine-tune: the ramp follows the slider
   if (slimeLab.target > 0.05 && slimeLab.detail !== 'high') slimeLab.setDetail('high');
@@ -4356,6 +4424,7 @@ window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs,
   get labBow() { return LABBOW; },
   get slime() { return slimeLab; }, get ballColliders() { return ballColliders; },
   get nockCol() { return nockCollider; },
+  get slimeCol() { return slimeCollider; },
   get arrowCol() { return arrowCollider; },
   labBowToggle, PropHull,
   REST_R42, setHandSkin, THREE, bodyPose, povFaceAway, weldHandsToBody,
