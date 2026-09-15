@@ -487,6 +487,18 @@
       the wrist to aim · hook 🤏 the string, pull back to draw, open your fingers to LOOSE</div>
   </div>
   <div class="sec">
+    <div class="lbl">GAME · GLASS SLIME</div>
+    <button id="slimeBtn">🟢 SPAWN GLASS SLIME</button>
+    <button id="slimeMorphBtn" style="margin-top:6px;width:100%;padding:8px;border-radius:8px;border:1px solid var(--cy-dim);background:rgba(28,64,86,.7);color:#fff;font-size:12px;letter-spacing:.1em;cursor:pointer">💧 MAKE IT SLIME</button>
+    <label class="sld" style="margin-top:4px"><span>softness</span><input id="slimeSoft" type="range" min="0" max="100" value="0"><span id="slimeSoftV">0</span></label>
+    <div class="row" id="slimeLensRow" style="margin-top:4px">
+      <button class="opt sel" data-lens="window" title="plain refraction — see the room through it">🪟 window</button>
+      <button class="opt" data-lens="magnifier" title="magnifies what is behind it">🔍 magnify</button>
+      <button class="opt" data-lens="ball-lens" title="a solid glass ball flips the world upside-down">🔄 ball-lens</button>
+    </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a see-through green glass ball with real refraction of the room behind it (the camera feed becomes a live backdrop + reflection map) · grip ✊ / pinch 🤏 to carry, throw, catch · every vertex is a mass point: soften it and it sags, pools and DRIPS THROUGH your fingers (collides with the same hand joints the cube uses) · vertex density = how smoothly it melts</div>
+  </div>
+  <div class="sec">
     <div class="lbl">GAME · BEAT RUSH</div>
     <div class="row" id="diffOpts">
       <button class="opt" data-d="chill">Chill</button>
@@ -567,6 +579,7 @@ import { HoloHandRig } from './sdk/core/hand-rig.js';
 import { HandViews } from './sdk/core/hand-views.js';
 import { REST_R42, REST_L42 } from './sdk/core/hands.js';
 import { HandBody, GrabbableSphere, GrabbableBox, BodyBody, JOINT_RADII } from './sdk/core/game-physics.js';
+import { makeGlass, updateLens, attachEnv, SoftBody, SOFT_DETAIL, SOFT_PRESETS } from './sdk/core/glass.js';
 import { PropHull } from './sdk/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdk/core/rubiks-cube.js';
 import { BeatGame } from './sdk/core/beat-game.js';
@@ -596,7 +609,7 @@ const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' 
 const BUILD = 'cs-21';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
-  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','trackName','hint']
+  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','slimeBtn','trackName','hint']
     .map(id => [id, document.getElementById(id)]));
 
 function toast(m, ms = 2200) {
@@ -1193,6 +1206,114 @@ const sandbox = {
     this.ball.material.uniforms.uGlow.value +=
       ((this.sphere.grabbed() ? 0.35 : 0) - this.ball.material.uniforms.uGlow.value) * 0.12;
     ballCollider.center.copy(this.sphere.pos);
+  },
+};
+
+
+// ─────────────── GLASS SLIME (see-through · refracting · soft body) ───────────────
+// A green glass ball built straight in three.js (sdk/core/glass.js): real
+// screen-space refraction of what is RENDERED behind it. In MIRROR mode the
+// webcam is not in the 3D scene, so the ball gets a live VideoTexture BACKDROP
+// plane behind the workspace (the room passes through and bends) and the same
+// frame as its reflection map. Grab/throw = the sandbox ball lane
+// (GrabbableSphere); the LOOK is a per-vertex soft body: glass → jelly →
+// slime → melt, colliding with every hand joint sphere already logged.
+const SLIME_R = 0.16;
+const slimeLab = {
+  on: false, mesh: null, mat: null, soft: null, backdrop: null, videoTex: null,
+  sphere: new GrabbableSphere(SLIME_R, { gravity: -4.2, restitution: 0.42 }),
+  center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, metrics: { squash: 0, sag: 0 },
+  init() {
+    this.mat = makeGlass({ tint: 0x7df0a8, lens: this.lens, thickness: SLIME_R * 2 });
+    this.mesh = new THREE.Mesh(this._geo(this.detail), this.mat);
+    this.mesh.renderOrder = 30;
+    this.soft = new SoftBody(this.mesh, SLIME_R);
+    scene.add(this.mesh);
+    const vid = els.vid && els.vid.readyState >= 2 ? els.vid : els.bgVid;
+    this.videoTex = new THREE.VideoTexture(vid);
+    this.videoTex.colorSpace = THREE.SRGBColorSpace;
+    this.backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: this.videoTex, depthWrite: false }));
+    this.backdrop.renderOrder = -20;
+    scene.add(this.backdrop);
+    attachEnv(this.mat, this.videoTex);
+    if (!cubeLab.lit) {   // glass needs light like the cube does
+      const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(1.4, 2.6, 2.2);
+      scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun); cubeLab.lit = true;
+    }
+    this.recenter();
+  },
+  _geo(detail) { const [a, b] = SOFT_DETAIL[detail] || SOFT_DETAIL.medium; return new THREE.SphereGeometry(SLIME_R, a, b); },
+  setDetail(d) {                             // vertex density — the Blender poly-count knob, live
+    this.detail = d; if (!this.mesh) return;
+    this.mesh.geometry.dispose(); this.mesh.geometry = this._geo(d); this.soft.rebind();
+  },
+  setSoftness(v) {                           // 0 glass … 1 melt (slider or preset)
+    if (this.soft) this.soft.setSoftness(v);
+    const sl = document.getElementById('slimeSoft'), sv = document.getElementById('slimeSoftV');
+    if (sl) sl.value = Math.round(v * 100); if (sv) sv.textContent = Math.round(v * 100);
+  },
+  morph(to) {                              // 'slime' | 'glass' — the trigger
+    this.state = to;
+    if (to === 'slime') {
+      // the "sudden vertex count change": bump density NOW while still rigid
+      // (a rigid sphere re-meshed is invisible), then let softness RAMP so the
+      // same mass, where it sits in your hand, sags into slime under gravity
+      if (this.detail !== 'high') this.setDetail('high');
+      this.target = SOFT_PRESETS.melt;
+    } else this.target = 0;                  // re-solidify: springs pull it back round
+    const b = document.getElementById('slimeMorphBtn');
+    if (b) { b.textContent = to === 'slime' ? '🧊 MAKE IT GLASS' : '💧 MAKE IT SLIME'; b.classList.toggle('on', to === 'slime'); }
+  },
+  recenter() {
+    views.workspaceCenter(camera, this.center);
+    this.sphere.reset(this.center.clone().add(new THREE.Vector3(-0.35, 0.1, 0)));
+  },
+  setLens(mode) { this.lens = mode; if (this.mat) this.mat.setLens(mode); },
+  toggle(on) {
+    this.on = on;
+    if (on && !this.mesh) { this.init(); this.setSoftness(0); }
+    els.slimeBtn.textContent = on ? '✕ REMOVE GLASS SLIME' : '🟢 SPAWN GLASS SLIME';
+    els.slimeBtn.classList.toggle('on', on);
+    if (on) { if (meshOnly()) applyDisplay('lab'); this.recenter(); toast('🟢 glass slime — grip or pinch it, squeeze it, throw it · soften it to melt', 4000); }
+    if (this.mesh) this.mesh.visible = on;
+    if (this.backdrop) this.backdrop.visible = false;
+  },
+  floorY() { return S.mode === 'mirror' ? this.center.y - 1.05 : 0; },
+  update(dt) {
+    if (!this.on || !this.mesh || S.mode === 'inspect') return;
+    const mirror = S.mode === 'mirror';
+    this.backdrop.visible = mirror;
+    if (mirror) {                            // camera frame on a plane behind the workspace
+      const z = this.center.z - 1.2, dist = Math.abs(camera.position.z - z) || 1;
+      const h = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), w = h * camera.aspect;
+      this.backdrop.position.set(camera.position.x, camera.position.y, z);
+      this.backdrop.scale.set(-w, h, 1);     // negative x = selfie mirror
+    }
+    // MORPH RAMP: softness eases toward the target (glass 0 … melt), so the
+    // transform reads as material change, not a cut; mass/position untouched
+    const cur = this.soft.softness;
+    if (Math.abs(cur - this.target) > 0.002) this.setSoftness(cur + (this.target - cur) * Math.min(1, dt / this.ramp * 2.2));
+    else if (this.target === 0 && cur !== 0) this.setSoftness(0);
+    if (this.target === 0 && this.soft.softness < 0.01 && this.detail === 'high' && this.metrics.sag < 0.004) this.setDetail('medium');
+    this.sphere.update(dt, ballColliders, this.floorY());
+    if (!this.sphere.grabbed() && this.sphere.pos.distanceTo(this.center) > 3.4) this.sphere.reset();
+    this.mesh.position.copy(this.sphere.pos);
+    this.mesh.quaternion.copy(this.sphere.quat);
+    this.mesh.updateMatrixWorld(true);
+    // every hand joint sphere near the blob presses it (and the blob cannot
+    // pass through them — melting slime drips BETWEEN the fingers)
+    const presses = [];
+    for (const hb of ballColliders) {
+      if (!hb.present || hb.slot === 'body') continue;
+      const pts = hb.points || hb.joints || [];
+      for (let k = 0; k < pts.length; k++) {
+        const q = pts[k]; if (!q) continue;
+        const r = (hb.radii && hb.radii[k]) || 0.012;
+        if (q.distanceTo(this.sphere.pos) < SLIME_R * 2.6 + r) presses.push({ p: q, r: r * 1.35 });
+      }
+    }
+    this.metrics = this.soft.update(dt, presses, this.floorY());
+    updateLens(this.mat, this.mesh, camera, SLIME_R);
   },
 };
 
@@ -2868,6 +2989,7 @@ function loop() {
     else handBodies[slot].drop();
   }
   sandbox.update(dt);
+  slimeLab.update(dt);                       // 🟢 glass slime (see-through, soft body)
   cubeLab.update(dt);
   // co-op: in multi mode every player's hands can punch the shared note stream
   const gameHands = (S.mp && mpF) ? [handBodies.left, handBodies.right, ...mpExtraHands] : handBodyArr;
@@ -4156,6 +4278,24 @@ els.bowBtn.addEventListener('click', () => {
   if (!LABBOW.on && !ENG.sdk.on && meshOnly()) applyDisplay('lab');
   labBowToggle().catch(e => { console.error(e); toast('🏹 bow failed: ' + (e.message || e), 6000); });
 });
+els.slimeBtn.addEventListener('click', () => {
+  try { slimeLab.toggle(!slimeLab.on); }
+  catch (e) { console.error(e); toast('🟢 slime failed: ' + (e.message || e), 6000); }
+});
+document.getElementById('slimeMorphBtn').addEventListener('click', () => {
+  if (!slimeLab.on) slimeLab.toggle(true);
+  slimeLab.morph(slimeLab.state === 'slime' ? 'glass' : 'slime');
+  toast(slimeLab.state === 'slime' ? '💧 melting — the glass in your hand turns to slime, drips between your fingers' : '🧊 solidifying back into glass');
+});
+document.getElementById('slimeSoft').addEventListener('input', e => {
+  slimeLab.target = e.target.value / 100;   // fine-tune: the ramp follows the slider
+  if (slimeLab.target > 0.05 && slimeLab.detail !== 'high') slimeLab.setDetail('high');
+});
+document.querySelectorAll('#slimeLensRow .opt').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#slimeLensRow .opt').forEach(x => x.classList.toggle('sel', x === b));
+  slimeLab.setLens(b.dataset.lens);
+  toast(b.dataset.lens === 'ball-lens' ? '🔄 ball-lens — the room shows upside-down through it' : b.dataset.lens === 'magnifier' ? '🔍 magnifier' : '🪟 window glass');
+}));
 // ± size buttons — same multiplier the two-hand pinch gesture drives (userS),
 // applied immediately even mid-hold
 function labBowScaleBy(f) {
@@ -4214,6 +4354,7 @@ window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs,
   get engBodyPts() { return engBodyPts; },
   get bowCol() { return bowGripCollider; },
   get labBow() { return LABBOW; },
+  get slime() { return slimeLab; }, get ballColliders() { return ballColliders; },
   get nockCol() { return nockCollider; },
   get arrowCol() { return arrowCollider; },
   labBowToggle, PropHull,
