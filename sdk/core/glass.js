@@ -30,22 +30,28 @@ import * as THREE from 'three';
 const LENS = { window: 0, magnifier: 1, 'ball-lens': 2 };
 
 export function makeGlass(opts = {}) {
-  const o = { tint: 0x8cf5b8, ior: 1.45, roughness: 0.02, thickness: 0.3, transmission: 1.0,
-              attenuationDistance: 0.35, lens: 'window', magnify: 1.6, ...opts };
+  const o = { tint: 0x8cf5b8, ior: 1.45, roughness: 0.05, thickness: 0.3, transmission: 1.0,
+              attenuationDistance: 0.35, lens: 'window', magnify: 1.6, rim: 0.32, ...opts };
   const mat = new THREE.MeshPhysicalMaterial({
     color: 0xffffff, metalness: 0, roughness: o.roughness, transmission: o.transmission,
     ior: o.ior, thickness: o.thickness, attenuationColor: new THREE.Color(o.tint),
     attenuationDistance: o.attenuationDistance, envMapIntensity: 1.0,
-    clearcoat: 0.6, clearcoatRoughness: 0.05, specularIntensity: 1.0, transparent: false,
+    clearcoat: 1.0, clearcoatRoughness: 0.04, specularIntensity: 1.0, transparent: false,
   });
   mat.userData.lens = { mode: new THREE.Uniform(LENS[o.lens] ?? 0), centre: new THREE.Uniform(new THREE.Vector2(0.5, 0.5)),
-                        radius: new THREE.Uniform(0.2), magnify: new THREE.Uniform(o.magnify) };
+                        radius: new THREE.Uniform(0.2), magnify: new THREE.Uniform(o.magnify), rim: new THREE.Uniform(o.rim) };
   mat.onBeforeCompile = (sh) => {
     const L = mat.userData.lens;
-    sh.uniforms.uLensMode = L.mode; sh.uniforms.uLensC = L.centre; sh.uniforms.uLensR = L.radius; sh.uniforms.uLensMag = L.magnify;
+    sh.uniforms.uLensMode = L.mode; sh.uniforms.uLensC = L.centre; sh.uniforms.uLensR = L.radius; sh.uniforms.uLensMag = L.magnify; sh.uniforms.uRim = L.rim;
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <transmission_pars_fragment>',
-        '#include <transmission_pars_fragment>\nuniform int uLensMode; uniform vec2 uLensC; uniform float uLensR; uniform float uLensMag;')
+        '#include <transmission_pars_fragment>\nuniform int uLensMode; uniform vec2 uLensC; uniform float uLensR; uniform float uLensMag; uniform float uRim;')
+      // FRESNEL RIM: glass edges catch the light — the silhouette reads as a
+      // solid volume instead of a flat tinted cut-out
+      .replace('#include <opaque_fragment>',
+        `float hopeRim = pow( 1.0 - saturate( dot( normalize( normal ), normalize( vViewPosition ) ) ), 3.0 );
+         outgoingLight += uRim * hopeRim * vec3( 0.85, 1.0, 0.9 );
+         #include <opaque_fragment>`)
       .replace('vec4 transmittedLight = getTransmissionSample( refractionCoords, roughness, ior );',
         `vec2 lensUv = refractionCoords;
          if (uLensMode > 0) {
