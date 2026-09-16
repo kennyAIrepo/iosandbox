@@ -15,7 +15,7 @@
  * exactly with what the user sees. Each transform re-syncs the Rapier collider
  * through WorldTemplate, so a grabbed/scaled object stays solid and walkable.
  *
- *   import { AssetManipulator } from './sdk/world/asset-grab.js';
+ *   import { AssetManipulator } from './sdkmp/world/asset-grab.js';
  *   const manip = new AssetManipulator(world, { onSay });
  *   // each frame, in PLAY mode, after embody.resolveHands():
  *   manip.update({ right, left }, dt);

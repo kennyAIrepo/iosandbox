@@ -115,6 +115,34 @@
   body.engine-view .engPanel.hopeos-panel-hidden,
   body.engine-view #engTop.hopeos-panel-hidden { display: none !important; }
   body.engine-view.eng-sdk.eng-mirror #engc  { display: none; }
+  /* 🐲 BECOME THE DRAGON — the dragon IS the user's figure: the lab's tracked
+     ghost / skeleton overlays hide so only the embodied dragon remains */
+  body.engine-view.eng-sdk.eng-dragon #c, body.engine-view.eng-sdk.eng-dragon #ov { display: none !important; }
+  /* Kinect-Adventures-style motion HUD: one big cue + a charging ring */
+  #engFlapHud { position: fixed; left: 50%; bottom: 7vh; transform: translateX(-50%); display: none; align-items: center; gap: 20px;
+    z-index: 30; pointer-events: none; padding: 14px 26px 14px 16px; border-radius: 22px;
+    background: rgba(6, 12, 24, 0.55); backdrop-filter: blur(10px); border: 1px solid rgba(120, 200, 255, 0.25); }
+  body.engine-view.eng-dragon #engFlapHud { display: flex; }
+  #engFlapHud .ring { position: relative; width: 96px; height: 96px; flex: 0 0 auto; }
+  #engFlapHud .ring svg { width: 96px; height: 96px; transform: rotate(-90deg); }
+  #engFlapHud .ring circle { fill: none; stroke-width: 9; }
+  #engFlapHud .ring .bg { stroke: rgba(255,255,255,0.16); }
+  #engFlapHud .ring .fg { stroke: #66e0ff; stroke-linecap: round; stroke-dasharray: 326.7; stroke-dashoffset: 326.7; filter: drop-shadow(0 0 6px rgba(102,224,255,0.8)); }
+  #engFlapHud .ring .ico { position: absolute; inset: 0; display: grid; place-items: center; font-size: 38px; }
+  #engFlapHud .big { font-size: 26px; font-weight: 800; letter-spacing: 0.06em; color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,0.6); white-space: nowrap; }
+  #engFlapHud .sub { font-size: 13px; color: #cfe6ff; margin-top: 4px; opacity: 0.9; white-space: nowrap; }
+  #engFlapHud.lift { border-color: rgba(255, 220, 120, 0.7); background: rgba(40, 24, 4, 0.6); }
+  #engFlapHud.lift .big { color: #ffe08a; animation: engLiftPop 0.6s ease-out; }
+  #engFlapHud.lift .ring .fg { stroke: #ffe08a; }
+  #engFlapHud.lost { border-color: rgba(255, 120, 120, 0.6); }
+  #engFlapHud.lost .big { color: #ffb3b3; }
+  /* 📹 tiny reference cam: the RAW feed, mirrored like a mirror, no tracking drawn on it */
+  #engCamPip { position: fixed; inset: auto 18px 18px auto; width: 224px; height: 168px; display: none; z-index: 31; pointer-events: none;
+    object-fit: cover; transform: scaleX(-1); border-radius: 14px; border: 2px solid rgba(120, 200, 255, 0.45);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55); background: #05080f; }
+  body.engine-view.eng-dragon #engCamPip { display: block; }
+  body.ext-source #engCamPip { transform: none; }
+  @keyframes engLiftPop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
   #engTop { left: 50%; transform: translateX(-50%); top: 12px; width: auto; align-items: center; gap: 12px; padding: 8px 12px; }
   #engTop .t { font-size: 12px; letter-spacing: .18em; color: var(--cy); white-space: nowrap; }
   #engL { left: 14px; top: 60px; width: 218px; }
@@ -156,6 +184,15 @@
      the lab underneath is merely hidden, never touched. Reachable any time (even from
      the entry screen — it needs no camera). ── -->
 <canvas id="engc"></canvas>
+<!-- 🐲 motion HUD — shown only while a dragon is embodied (body.eng-dragon) -->
+<div id="engFlapHud">
+  <div class="ring">
+    <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="engFlapRing" cx="60" cy="60" r="52"/></svg>
+    <div class="ico" id="engFlapIco">🐉</div>
+  </div>
+  <div class="txt"><div class="big" id="engFlapBig">FLAP YOUR WINGS TO TAKE OFF</div><div class="sub" id="engFlapSub">big fast strokes — like real wings</div></div>
+</div>
+<video id="engCamPip" autoplay playsinline muted title="your camera — reference only"></video>
 <button id="engBtn" title="engine view — clean editor space: endless grid floor, blue-sky dome, spawn & host objects">🧩 ENGINE</button>
 
 <div id="engTop" class="panel engPanel">
@@ -208,6 +245,7 @@
       <button class="opt" data-sp="cylinder">▮ Cyl</button>
       <button class="opt" data-sp="cone">▲ Cone</button>
       <button class="opt" data-sp="avatar" title="rigged avatar (riggedmale) with reusable animation packages — walk · run">🧍 Avatar</button>
+      <button class="opt" data-sp="dragon" title="rigged dragon — procedural head-look · walk · run · flapping flight (select it for the motion strip; W/S/A/D drive, Space = fly/land, R/F climb)">🐉 Dragon</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -264,6 +302,7 @@
     <div class="row" id="engMindRow" style="display:none"></div>
     <div class="sname" id="engMindInfo" style="display:none"></div>
     <div class="sname" id="engBowHint" style="display:none">🏹 HOLD SPACE = draw · release = shoot — draw <span id="engBowPct">0%</span></div>
+    <div class="sname" id="engDragonHint" style="display:none">🐉 W/S walk · hold ⇧ to run · A/D turn · SPACE fly ⇄ land · R/F climb/sink — any key takes over from 🔁 roam</div>
     <div class="sname">click = select · ⧉ duplicates the selection</div>
     <div class="row" style="margin-top:6px">
       <button class="opt" id="engDup">⧉ Duplicate</button>
@@ -487,6 +526,22 @@
       the wrist to aim · hook 🤏 the string, pull back to draw, open your fingers to LOOSE</div>
   </div>
   <div class="sec">
+    <div class="lbl">GAME · GLASS SLIME</div>
+    <button id="slimeBtn">🟢 SPAWN GLASS SLIME</button>
+    <button id="slimeMorphBtn" style="margin-top:6px;width:100%;padding:8px;border-radius:8px;border:1px solid var(--cy-dim);background:rgba(28,64,86,.7);color:#fff;font-size:12px;letter-spacing:.1em;cursor:pointer">💧 MAKE IT SLIME</button>
+    <label class="sld" style="margin-top:4px"><span>softness</span><input id="slimeSoft" type="range" min="0" max="100" value="0"><span id="slimeSoftV">0</span></label>
+    <div class="row" id="slimeLensRow" style="margin-top:4px">
+      <button class="opt sel" data-lens="window" title="plain refraction — see the room through it">🪟 window</button>
+      <button class="opt" data-lens="magnifier" title="magnifies what is behind it">🔍 magnify</button>
+      <button class="opt" data-lens="ball-lens" title="a solid glass ball flips the world upside-down">🔄 ball-lens</button>
+    </div>
+    <div class="row" id="slimeSizeRow" style="margin-top:4px">
+      <button class="opt" id="slimeSizeDn" title="shrink the ball 20% — or pinch with BOTH hands and squeeze">➖ smaller</button>
+      <button class="opt" id="slimeSizeUp" title="grow the ball 25% — or pinch with BOTH hands and pull apart">➕ bigger</button>
+    </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a see-through green glass ball with real refraction of the room behind it (the camera feed becomes a live backdrop + reflection map) · grip ✊ / pinch 🤏 to carry, throw, catch · MAKE IT SLIME: the same mass, where it sits, becomes a live particle cloud — it drapes over your fingers, lies flat on your palm, drips wherever nothing holds it, stretches between two hands (a fast yank lets go) · the surface is re-meshed from the cloud every frame</div>
+  </div>
+  <div class="sec">
     <div class="lbl">GAME · BEAT RUSH</div>
     <div class="row" id="diffOpts">
       <button class="opt" data-d="chill">Chill</button>
@@ -567,6 +622,9 @@ import { HoloHandRig } from './sdkmp/core/hand-rig.js';
 import { HandViews } from './sdkmp/core/hand-views.js';
 import { REST_R42, REST_L42 } from './sdkmp/core/hands.js';
 import { HandBody, GrabbableSphere, GrabbableBox, BodyBody, JOINT_RADII } from './sdkmp/core/game-physics.js';
+import { makeGlass, updateLens, attachEnv } from './sdkmp/core/glass.js';
+import { SlimeSim, SlimeSurface, CLOUD_R } from './sdkmp/core/slime-sim.js';
+import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { PropHull } from './sdkmp/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdkmp/core/rubiks-cube.js';
 import { BeatGame } from './sdkmp/core/beat-game.js';
@@ -596,7 +654,7 @@ const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' 
 const BUILD = 'cs-21';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
-  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','trackName','hint']
+  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','slimeBtn','trackName','hint']
     .map(id => [id, document.getElementById(id)]));
 
 function toast(m, ms = 2200) {
@@ -797,7 +855,7 @@ const dvid = document.getElementById('dvid'), dctx = dvid.getContext('2d');
 // ─────────────── MULTIPLAYER (opt-in; single = original stack) ───────────────
 // S.mp toggles between the ORIGINAL single-player pipeline (initTracking →
 // filters → views, untouched below) and the multiplayer stack (MoveNet ids +
-// per-player MediaPipe crops from sdkmp/core/multiplayer.js — same engine as
+// per-player MediaPipe crops from sdk/core/multiplayer.js — same engine as
 // handlab-mptest). In MP mode the LARGEST player is "primary": their hands +
 // body drive the existing games/physics unchanged (pipeline output is already
 // One-Euro filtered + predicted, so the single-player filter step is bypassed,
@@ -911,7 +969,7 @@ setTimeout(() => {
 // HoloHandRig + One-Euro stack — isolates mesh look from drive machinery.
 // The split halves are pre-aligned to REST_R42/L42, so geometryFit:false.
 // ── 🖐 FLESH HANDS — realistic avatar-grade hand pair on the SAME rig ─────────
-// sdkmp/assets/hands_flesh.glb: Blender-built meshes (HandR/HandL) authored
+// sdk/assets/hands_flesh.glb: Blender-built meshes (HandR/HandL) authored
 // DIRECTLY on the REST_R42/REST_L42 landmark skeleton, so { geometryFit:false }
 // rigging is exact by construction. Ghost (pale-blue holo) and flesh are two
 // LOOKS of one rig — same 21-landmark deformer, filters, colliders, physics.
@@ -1000,6 +1058,11 @@ const arrowCollider = { type: 'box', center: new THREE.Vector3(), quat: new THRE
 // 🏹 nock/string conform: the drawing fingers HOOK around the string+fletching
 // junction instead of sliding through it (a 2mm string needs a graspable body)
 const nockCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.03, active: false };
+// 🟢 glass-slime conform collider: the ball's live sphere (scaled), so ghost
+// fingers WRAP it with depth-true occlusion — the same lane the cube and bow use
+const slimeCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.16, active: false };
+const _sbTmpA = new THREE.Vector3(), _sbTmpB = new THREE.Vector3(), _sbTmpC = new THREE.Vector3();
+const _slP = new THREE.Vector3(), _slQ = new THREE.Quaternion(), _slQ2 = new THREE.Quaternion();
 
 // Hand PHYSICS bodies — joint colliders + velocities + palm frame, fed the
 // SAME world packs the rigs render, so physics matches pixels exactly.
@@ -1193,6 +1256,468 @@ const sandbox = {
     this.ball.material.uniforms.uGlow.value +=
       ((this.sphere.grabbed() ? 0.35 : 0) - this.ball.material.uniforms.uGlow.value) * 0.12;
     ballCollider.center.copy(this.sphere.pos);
+  },
+};
+
+
+// ─────────────── GLASS SLIME (see-through · refracting · LIVE POINT-CLOUD slime) ───────────────
+// A green glass ball built straight in three.js (sdkmp/core/glass.js): real
+// screen-space refraction of what is RENDERED behind it. In MIRROR mode the
+// webcam is not in the 3D scene, so the ball gets a live VideoTexture BACKDROP
+// plane behind the workspace (the room passes through and bends) and the same
+// frame as its reflection map.
+//   GLASS = a rigid sphere on the sandbox ball lane (GrabbableSphere): PropHull
+//           hand-stop, seek-the-hand, two-hand pinch scale, conform occlusion.
+//   SLIME = MAKE IT SLIME hands the SAME mass at the SAME spot to a particle
+//           fluid (sdkmp/core/slime-sim.js). Every particle is logged every frame
+//           — that cloud IS the shape (cloud()) — the hands are finger CAPSULES
+//           with an adhesion skin, and the surface is re-meshed from the cloud
+//           every frame (metaballs → marching cubes): it drapes over the
+//           fingers, lies on the palm, drips where nothing holds it, stretches
+//           between two hands. MAKE IT GLASS pulls the cloud back into the
+//           sphere and hands it back to the rigid lane.
+const SLIME_R = 0.16;
+const SLIME_DETAIL = { low: { n: 360, res: 28 }, medium: { n: 520, res: 32 }, high: { n: 760, res: 40 } };
+const slimeLab = {
+  on: false, mesh: null, mat: null, backdrop: null, videoTex: null, sim: null, surf: null,
+  sphere: new GrabbableSphere(SLIME_R, { gravity: -4.2, restitution: 0.42 }),
+  center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, hull: null, userS: 1, _scal: null, _hullTick: 0, density: 2500, seek: null, seekHand: null, metrics: null, ms: null,
+  _hb: { L: null, R: null },
+  hold: null, _velHist: [],                    // { slot, type:'wrap'|'clip', posOff, quatOff } — carried by the fingers
+  cradle: null,                                // slot of the HOLDING-POSE hand it rests in (palm up, cupped)
+  _cen: new THREE.Vector3(),
+  _pose: { left: { pose: false, pc: new THREE.Vector3(), n: new THREE.Vector3(), pocket: new THREE.Vector3(), closure: 0, evi: 0, sign: 0 },
+           right: { pose: false, pc: new THREE.Vector3(), n: new THREE.Vector3(), pocket: new THREE.Vector3(), closure: 0, evi: 0, sign: 0 } },
+  _gT: new Uint8Array(21), _gN: new Array(21).fill(0).map(() => new THREE.Vector3()),
+  get softness() { return this.sim && this.sim.n ? 1 - this.sim.rigid : 0; },   // 0 glass … 1 free slime (live)
+  get phase() { return this.sim && this.sim.n ? 'cloud' : 'sphere'; },           // which representation is live
+  init() {
+    this.mat = makeGlass({ tint: 0x7df0a8, lens: this.lens, thickness: SLIME_R * 1.6 });
+    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(SLIME_R, 96, 48), this.mat);
+    this.mesh.renderOrder = 30;
+    // MESH-TRUE shape of the rigid ball: a PropHull baked from it — the grab
+    // gate, hand resistance and stats() read the real surface
+    this.hull = PropHull.sphere(SLIME_R);      // EXACT: a capsule chain baked from a sphere over-reaches
+    scene.add(this.mesh);
+    // the slime: particle cloud + a surface re-meshed from it every frame,
+    // rendered with the SAME glass (it keeps the see-through look)
+    const D = SLIME_DETAIL[this.detail];
+    this.sim = new SlimeSim({ n: D.n });
+    this.surf = new SlimeSurface(MarchingCubes, this.mat, D.res);
+    this.surf.mc.renderOrder = 30; this.surf.mc.visible = false;
+    scene.add(this.surf.mc);
+    const vid = els.vid && els.vid.readyState >= 2 ? els.vid : els.bgVid;
+    this.videoTex = new THREE.VideoTexture(vid);
+    this.videoTex.colorSpace = THREE.SRGBColorSpace;
+    this.backdrop = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: this.videoTex, depthWrite: false }));
+    this.backdrop.renderOrder = -20;
+    scene.add(this.backdrop);
+    attachEnv(this.mat, this.videoTex);
+    if (!cubeLab.lit) {   // glass needs light like the cube does
+      const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(1.4, 2.6, 2.2);
+      scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun); cubeLab.lit = true;
+    }
+    this.recenter();
+  },
+  setDetail(d) {                             // particle count + surface resolution — the poly-count knob, live
+    this.detail = d; if (!this.sim) return;
+    const D = SLIME_DETAIL[d] || SLIME_DETAIL.medium;
+    this.sim.o.n = D.n; this.surf.setResolution(D.res);
+    if (this.sim.n) { const c = this.sim.centroid(new THREE.Vector3()), w = this.sim.rigid; this.sim.spawn(c, SLIME_R * this.userS * CLOUD_R); this.sim.rigid = w; }
+  },
+  setSoftness(v) {                           // 0 glass … 1 melt — the TARGET; update() ramps the cloud's rigidity to it
+    this.target = Math.min(1, Math.max(0, v));
+    const sl = document.getElementById('slimeSoft'), sv = document.getElementById('slimeSoftV');
+    if (sl) sl.value = Math.round(this.target * 100); if (sv) sv.textContent = Math.round(this.target * 100);
+  },
+  morph(to) {                              // 'slime' | 'glass' — the trigger
+    this.state = to;
+    this.setSoftness(to === 'slime' ? 1 : 0);
+    const b = document.getElementById('slimeMorphBtn');
+    if (b) { b.textContent = to === 'slime' ? '🧊 MAKE IT GLASS' : '💧 MAKE IT SLIME'; b.classList.toggle('on', to === 'slime'); }
+  },
+  _melt() {                                // sphere → cloud: same mass, same spot, same motion
+    const R = SLIME_R * this.userS;
+    this.sim.spawn(this.sphere.pos, R * CLOUD_R, this.sphere.vel);
+    this.sim.rigid = 1; this._rampT = performance.now();   // still a ball this frame; update() ramps it down
+    this.sphere.held = null; this.hold = null; this.cradle = null; this._velHist.length = 0;
+    this.mesh.visible = false; this.surf.mc.visible = true;
+    slimeCollider.active = false;
+    if (this._hb.L) this._hb.L.present = false; if (this._hb.R) this._hb.R.present = false;
+  },
+  _freeze() {                              // cloud → sphere, at the cloud's centroid
+    const c = this.sim.centroid(new THREE.Vector3());
+    this.sphere.reset(c); this.sim.n = 0; this.hold = null; this.cradle = null; this._velHist.length = 0;
+    this.surf.mc.visible = false; this.surf.mc.geometry.setDrawRange(0, 0);
+    this.mesh.visible = this.on;
+    this.mesh.position.copy(c); this.mesh.updateMatrixWorld(true);
+  },
+  recenter() {
+    views.workspaceCenter(camera, this.center);
+    if (this.sim && this.sim.n) { this.sim.n = 0; this.surf.mc.visible = false; this.mesh.visible = this.on; }
+    this.sphere.reset(this.center.clone().add(new THREE.Vector3(-0.35, 0.1, 0)));
+    this.hold = null; this.cradle = null; this._velHist.length = 0;
+  },
+  setLens(mode) { this.lens = mode; if (this.mat) this.mat.setLens(mode); },
+  setScale(sc) {                             // UI ± buttons and the two-hand pinch share this
+    this.userS = Math.max(0.4, Math.min(3, sc));
+    if (!this.mesh) return;
+    this.mesh.scale.setScalar(this.userS);
+    this.sphere.radius = SLIME_R * this.userS;
+    slimeCollider.radius = SLIME_R * this.userS;
+    this.mat.thickness = SLIME_R * this.userS * 1.6;
+    this.mesh.updateMatrixWorld(true);
+    if (this.sim && this.sim.n) { const c = this.sim.centroid(new THREE.Vector3()), w = this.sim.rigid; this.sim.spawn(c, SLIME_R * this.userS * CLOUD_R); this.sim.rigid = w; }
+  },
+  /** The HOLDING POSE, measured per hand: palm facing UP (inner-palm normal
+   *  MEASURED the HandBody way — thumb column volar of the knuckle plane +
+   *  fingertip curl, decay-latched; never a handedness label), fingers out and
+   *  slightly curled. pocket = where a ball sits in that hand (one radius up the
+   *  inner normal from the palm centre). Updates this._pose[slot]. */
+  _holdPose(slot, pack, R) {
+    const P = this._pose[slot]; P.pose = false;
+    if (!pack || !pack[0] || !pack[9] || !pack[5] || !pack[17]) return P;
+    P.pc.set(0, 0, 0); for (const i of [0, 5, 9, 13, 17]) { const q = pack[i] || pack[0]; P.pc.x += q.x * 0.2; P.pc.y += q.y * 0.2; P.pc.z += q.z * 0.2; }
+    _sbTmpA.set(pack[9].x - pack[0].x, pack[9].y - pack[0].y, pack[9].z - pack[0].z);
+    const span = _sbTmpA.length(); if (span < 1e-4) return P;
+    _sbTmpA.normalize();
+    _sbTmpB.set(pack[5].x - pack[17].x, pack[5].y - pack[17].y, pack[5].z - pack[17].z);
+    _sbTmpC.crossVectors(_sbTmpA, _sbTmpB); if (_sbTmpC.lengthSq() < 1e-10) return P;
+    _sbTmpC.normalize();
+    let volar = 0;
+    for (const i of [1, 2]) if (pack[i]) volar += (pack[i].x - pack[0].x) * _sbTmpC.x + (pack[i].y - pack[0].y) * _sbTmpC.y + (pack[i].z - pack[0].z) * _sbTmpC.z;
+    for (const i of [8, 12, 16, 20]) if (pack[i]) volar += ((pack[i].x - P.pc.x) * _sbTmpC.x + (pack[i].y - P.pc.y) * _sbTmpC.y + (pack[i].z - P.pc.z) * _sbTmpC.z) * 0.5;
+    volar /= span;
+    P.evi = P.sign === 0 ? volar : P.evi * 0.85 + volar * 0.15;
+    if (P.sign === 0 || Math.abs(P.evi) > 0.04) P.sign = P.evi >= 0 ? 1 : (P.evi < 0 ? -1 : 0);
+    if (P.sign === 0) return P;
+    P.n.copy(_sbTmpC).multiplyScalar(P.sign);
+    P.closure = _closure(pack);
+    P.pocket.copy(P.pc).addScaledVector(P.n, R + 0.04);
+    P.pose = P.n.y > 0.4 && P.closure > 0.02 && P.closure < 0.8;
+    return P;
+  },
+  /** MESH-TRUE grab gate (the bow's doctrine). Every joint sphere is tested
+   *  against the hull (gap ≤ skin = touching) and its contact NORMAL kept:
+   *    wrap — a palm-region joint touches AND ≥2 finger joints touch with normals
+   *           opposing the palm contact: the ball sits BETWEEN palm and fingers
+   *    clip — a thumb joint touches AND an index/middle joint touches on the
+   *           opposite side (normals opposing)
+   *  Anything else — beside it, over it, under it, the back of the hand, fingers
+   *  curled away — is NOT a grab. Returns { type } or null. */
+  _wrapGrab(pack, skin, slot) {
+    if (!this.hull || !pack || !pack[0]) return null;
+    // the ball must sit on the INNER side of the palm (measured normal) — the
+    // back of the hand has the same joint spheres and must never grip
+    const PS = slot ? this._pose[slot] : null;
+    if (PS && PS.sign !== 0) {
+      _sbTmpC.set(this.sphere.pos.x - PS.pc.x, this.sphere.pos.y - PS.pc.y, this.sphere.pos.z - PS.pc.z);
+      if (_sbTmpC.dot(PS.n) < 0) return null;
+    }
+    const H = this.hull.begin(this.mesh), rad = _packRadii(pack), T = this._gT, N = this._gN;
+    for (let i = 0; i < 21; i++) {
+      const q = pack[i]; T[i] = 0; if (!q) continue;
+      const g = H.closest(_sbTmpA.set(q.x, q.y, q.z), null, N[i]) - rad[i];
+      if (g <= skin && g > -0.03) T[i] = 1;    // touching — a joint sunk deeper is interpenetration, not a grip
+    }
+    // palm-side contact normal (average of touching palm-region joints; a true palm joint required)
+    _sbTmpB.set(0, 0, 0); let np = 0, palm = 0;
+    for (const i of [0, 1, 5, 9, 13, 17]) if (T[i]) { _sbTmpB.add(N[i]); np++; if (i !== 1) palm++; }
+    if (np && palm) {
+      // CLAW / WRAP: finger joints touching round the SIDE or far side (contact
+      // normal > ~72° from the palm contact), from at least two fingers — a
+      // flat hand pressed on it (normals within ~70°) is not a grip
+      _sbTmpB.normalize(); let opp = 0, fingers = 0;
+      for (const i of [6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20]) if (T[i] && N[i].dot(_sbTmpB) < 0.3) { opp++; fingers |= 1 << ((i - 5) / 4 | 0); }
+      if (opp >= 2 && (fingers & (fingers - 1)) !== 0) return { type: 'wrap' };
+    }
+    for (const t of [3, 4]) if (T[t]) for (const f of [7, 8, 11, 12]) if (T[f] && N[f].dot(N[t]) < -0.2) return { type: 'clip' };
+    return null;
+  },
+  /** THE live point cloud (Float32Array n×3, world metres) — null while rigid glass. */
+  cloud() { return this.sim && this.sim.n ? this.sim.x : null; },
+  /** live shape + mass, any moment. Glass: volume from the sphere mesh
+   *  (divergence theorem); slime: from the re-meshed surface, mass conserved. */
+  stats() {
+    if (!this.mesh) return null;
+    const sc = this.userS, R = SLIME_R * sc, vol0 = 4 / 3 * Math.PI * R ** 3;
+    if (this.sim && this.sim.n) {
+      const s = this.sim.stats();
+      return { state: this.state, phase: 'cloud', softness: +this.softness.toFixed(3), scale: sc, radius: R,
+               volume_m3: +this.surf.volume().toFixed(5), mass_kg: +(vol0 * this.density).toFixed(3),
+               particles: s.n, cloud: this.sim.x.length / 3, tris: this.surf.tris, verts: this.surf.tris * 3,
+               pos: s.centroid, bbox: s.bbox, stretch: s.stretch, lowest: s.lowest, stuck: s.stuck, dripping: s.dripping,
+               bonds: s.bonds, maxSpeed: s.maxSpeed, held: s.stuck > 0, hull: null, ms: this.ms };
+    }
+    const g = this.mesh.geometry, P = g.getAttribute('position'), I = g.index;
+    let vol = 0; const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+    for (let t = 0; t < I.count; t += 3) {
+      a.fromBufferAttribute(P, I.getX(t)); b.fromBufferAttribute(P, I.getX(t + 1)); c.fromBufferAttribute(P, I.getX(t + 2));
+      vol += a.dot(b.clone().cross(c)) / 6;
+    }
+    vol = Math.abs(vol) * sc * sc * sc;
+    g.computeBoundingBox(); const bb = g.boundingBox.getSize(new THREE.Vector3()).multiplyScalar(sc);
+    return { state: this.state, phase: 'sphere', softness: 0, scale: sc, radius: R,
+             volume_m3: +vol.toFixed(5), mass_kg: +(vol * this.density).toFixed(3), verts: P.count,
+             bbox: bb.toArray().map(v => +v.toFixed(3)), pos: this.sphere.pos.toArray().map(v => +v.toFixed(3)),
+             vel: this.sphere.vel.toArray().map(v => +v.toFixed(2)), held: !!this.hold, hold: this.hold ? { slot: this.hold.slot, type: this.hold.type } : null, cradle: this.cradle,
+             hull: this.hull ? { segs: this.hull.segs.length, json: this.hull.toJSON() } : null };
+  },
+  toggle(on) {
+    this.on = on;
+    if (on && !this.mesh) { this.init(); this.setSoftness(0); }
+    els.slimeBtn.textContent = on ? '✕ REMOVE GLASS SLIME' : '🟢 SPAWN GLASS SLIME';
+    els.slimeBtn.classList.toggle('on', on);
+    if (on) { if (meshOnly()) applyDisplay('lab'); this.recenter(); toast('🟢 glass slime — grip or pinch it, squeeze it, throw it · MAKE IT SLIME to melt it in your hand', 4000); }
+    if (this.mesh) this.mesh.visible = on;
+    if (this.surf) this.surf.mc.visible = on && this.sim.n > 0;
+    if (this.backdrop) this.backdrop.visible = false;
+    if (!on) { slimeCollider.active = false; this.hold = null; this._velHist.length = 0; }
+  },
+  floorY() { return S.mode === 'mirror' ? this.center.y - 1.05 : 0; },
+  /** the hands as the sim wants them: 21 joints, live radii, per-joint velocity
+   *  (from the packs — the same seam the probes drive) */
+  _hands(pk, dt) {
+    const out = [], idt = 1 / Math.max(dt, 1e-3);
+    for (const slot of ['L', 'R']) {
+      const pack = pk && pk[slot];
+      let hb = this._hb[slot];
+      if (!pack || !pack[0] || !pack[9]) { if (hb) hb.present = false; continue; }
+      if (!hb) {
+        hb = this._hb[slot] = { joints: [], vel: [], radii: new Float64Array(21), present: false };
+        for (let i = 0; i < 21; i++) { hb.joints.push(new THREE.Vector3()); hb.vel.push(new THREE.Vector3()); }
+      }
+      const rad = _packRadii(pack);
+      for (let i = 0; i < 21; i++) {
+        const p = pack[i] || pack[0], J = hb.joints[i];
+        if (hb.present) { _sbTmpC.set((p.x - J.x) * idt, (p.y - J.y) * idt, (p.z - J.z) * idt).clampLength(0, 3); hb.vel[i].lerp(_sbTmpC, 0.5); }
+        else hb.vel[i].set(0, 0, 0);
+        J.set(p.x, p.y, p.z); hb.radii[i] = rad[i];
+      }
+      hb.present = true; out.push(hb);
+    }
+    return out;
+  },
+  update(dt, pk) {
+    if (!this.on || !this.mesh || S.mode === 'inspect') return;
+    const mirror = S.mode === 'mirror';
+    this.backdrop.visible = mirror;
+    if (mirror) {                            // camera frame on a plane behind the workspace
+      const z = this.center.z - 1.2, dist = Math.abs(camera.position.z - z) || 1;
+      const h = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)), w = h * camera.aspect;
+      this.backdrop.position.set(camera.position.x, camera.position.y, z);
+      this.backdrop.scale.set(-w, h, 1);     // negative x = selfie mirror
+    }
+    const R = SLIME_R * this.userS;
+    if (this.target > 0.02 && !this.sim.n) this._melt();
+    if (this.sim.n) {
+      // ══ SLIME (cloud) lane ══
+      // rigidity ramps to the target: the transform reads as a material
+      // change (the ball sags, then flows), not a cut; mass/position untouched
+      const rt = 1 - this.target, cur = this.sim.rigid, now = performance.now();
+      const dtr = Math.min(0.1, (now - (this._rampT || now)) / 1000); this._rampT = now;   // wall-clock: same melt at any fps
+      const stepR = dtr / this.ramp;
+      this.sim.rigid = Math.abs(cur - rt) <= stepR ? rt : cur + Math.sign(rt - cur) * stepR;
+      const hands = this._hands(pk, dt);
+      this.seek = null; this.seekHand = null;
+      const c = this.sim.centroid(this._cen);
+      // HOLDING POSE → the slime comes ACROSS to the palm pocket (x/z; gravity
+      // drops it onto the hand), then adhesion keeps it there
+      for (const slot of ['L', 'R']) {
+        const pack = pk && pk[slot]; if (!pack || !pack[0]) continue;
+        const P = this._holdPose(slot === 'L' ? 'left' : 'right', pack, R); if (!P.pose) continue;
+        const dx = P.pocket.x - c.x, dy = P.pocket.y - c.y, dz = P.pocket.z - c.z;
+        if (Math.hypot(dx, dz) > R * 2.5 || dy > R * 0.8 || Math.abs(dy) > 0.9) continue;
+        const k = Math.min(1, dt * 2.5), x = this.sim.x, xp = this.sim.xp;
+        for (let i = 0; i < x.length; i += 3) { x[i] += dx * k; xp[i] += dx * k; x[i + 2] += dz * k; xp[i + 2] += dz * k; }
+        c.x += dx * k; c.z += dz * k;
+        this.seek = 'pocket'; break;
+      }
+      // Z-BIAS (cube doctrine): a FREE cloud — nothing stuck to a hand — comes
+      // to the reaching hand's contact depth, so a hand can always meet it
+      if (!this.seek && hands.length && !(this.metrics && this.metrics.stuck > 0)) {
+        let best = null, bd = Infinity;
+        for (const hb of hands) {
+          const pc = _sbTmpB.copy(hb.joints[0]).lerp(hb.joints[9], 0.5);
+          const dxy = Math.hypot(pc.x - c.x, pc.y - c.y);
+          if (dxy < bd) { bd = dxy; best = pc.clone(); }
+        }
+        if (best && bd < R * 3.2 && Math.abs(best.z - c.z) > R + 0.03) {   // only when it would miss in depth
+          const side = Math.sign(c.z - best.z) || -1;
+          const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, best.z + side * (R + 0.02)));
+          const dz = (zt - c.z) * Math.min(1, dt * 6);
+          const x = this.sim.x, xp = this.sim.xp;
+          for (let i = 2; i < x.length; i += 3) { x[i] += dz; xp[i] += dz; }
+          this.seek = 'z';
+        }
+      }
+      const tS = performance.now();
+      this.sim.step(dt, hands, this.floorY());
+      const tM = performance.now();
+      this.surf.update(this.sim);
+      this.metrics = this.sim.stats();
+      this.ms = { sim: +(tM - tS).toFixed(1), mesh: +(performance.now() - tM).toFixed(1) };
+      updateLens(this.mat, this.surf.mc, camera, R);
+      if (Math.hypot(this.metrics.centroid[0] - this.center.x, this.metrics.centroid[1] - this.center.y, this.metrics.centroid[2] - this.center.z) > 3.4) {
+        const w = this.sim.rigid; this.sim.spawn(this.center.clone().add(new THREE.Vector3(-0.35, 0.1, 0)), R * CLOUD_R); this.sim.rigid = w;
+      }
+      if (this.target < 0.02 && this.sim.rigid >= 1) this._freeze();      // MAKE IT GLASS completed
+      return;
+    }
+    // ══ GLASS (rigid sphere) lane — BALL DOCTRINE (the bow's lane, never the cube's):
+    //   · CARRIED only when fingers WRAP it (palm-side contact + finger contacts on
+    //     the far side) or CLIP it (thumb + fingertip on opposite sides) — mesh-true,
+    //     from the hull; fingers opened = released THAT frame (falls, keeps velocity)
+    //   · CRADLED in the HOLDING POSE (palm up, fingers out and slightly curled):
+    //     it comes to the palm pocket, sits there and rides the hand while the palm
+    //     stays up; tilt the palm away and it rolls off
+    //   · SUPPORTED by any hand: it is pushed out of the joint spheres (the ball
+    //     yields, the tracked hand is the anchor) — it never passes through a hand,
+    //     a hand never passes into it (residual hand-stop) — and gravity is always on
+    //   · the back of a hand, a hand beside it, over it: nothing. It never floats.
+    const HL = handBodies.left, HR = handBodies.right;
+    const twoPinch = HL.present && HR.present && HL.pinch > 0.7 && HR.pinch > 0.7;
+    let scaling = false;
+    if (twoPinch && !this.hold) {                     // two-hand PINCH = SCALE gesture (resizes, never moves it)
+      const mid = HL.pinchPoint.clone().add(HR.pinchPoint).multiplyScalar(0.5);
+      const d = HL.pinchPoint.distanceTo(HR.pinchPoint);
+      if (this._scal || Math.hypot(mid.x - this.sphere.pos.x, mid.y - this.sphere.pos.y) < R + 0.15) {
+        if (!this._scal) this._scal = { d0: Math.max(d, 1e-3), u0: this.userS };
+        this.setScale(this._scal.u0 * d / this._scal.d0);
+        scaling = true;
+      }
+    }
+    if (!scaling) this._scal = null;
+    this.mesh.updateWorldMatrix(true, false);
+    const hands = pk ? [['left', pk.L], ['right', pk.R]].filter(e => e[1] && e[1][0] && e[1][9]) : [];
+    for (const [slot, pack] of hands) this._holdPose(slot, pack, R);
+    this.seek = null; this.seekHand = null;
+    // ── HOLD (wrap/clip): re-checked EVERY frame (looser skin = hysteresis);
+    //    the moment it is gone — fingers opened, hand gone — the ball is released ──
+    if (this.hold) {
+      const e = hands.find(h => h[0] === this.hold.slot);
+      const g = e ? this._wrapGrab(e[1], 0.03, this.hold.slot) : null;
+      if (!g) {
+        _sbTmpC.set(0, 0, 0); for (const v of this._velHist) _sbTmpC.add(v);
+        if (this._velHist.length) _sbTmpC.divideScalar(this._velHist.length);
+        this.sphere.vel.copy(_sbTmpC);                // thrown / dropped with the hand's velocity
+        this.hold = null; this._velHist.length = 0;
+      } else {
+        _palmPose(e[1], _slP, _slQ);                  // ride the palm frame (translate + rotate with the hand)
+        _sbTmpB.copy(this.hold.posOff).applyQuaternion(_slQ).add(_slP);
+        _sbTmpC.copy(this.sphere.pos);
+        this.sphere.pos.lerp(_sbTmpB, 0.6);
+        _slQ2.copy(_slQ).multiply(this.hold.quatOff); this.sphere.quat.slerp(_slQ2, 0.5);
+        _sbTmpC.subVectors(this.sphere.pos, _sbTmpC).divideScalar(Math.max(dt, 1e-3));
+        this._velHist.push(_sbTmpC.clone()); if (this._velHist.length > 6) this._velHist.shift();
+        this.sphere.vel.copy(_sbTmpC);
+        this.hold.type = g.type;
+      }
+    }
+    // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (4mm skin) ──
+    if (!this.hold && !scaling) for (const [slot, pack] of hands) {
+      const g = this._wrapGrab(pack, 0.006, slot);
+      if (!g) continue;
+      _palmPose(pack, _slP, _slQ);
+      this.hold = { slot, type: g.type,
+                    posOff: _sbTmpB.copy(this.sphere.pos).sub(_slP).applyQuaternion(_slQ2.copy(_slQ).invert()).clone(),
+                    quatOff: _slQ2.copy(_slQ).invert().multiply(this.sphere.quat).clone() };
+      this._velHist.length = 0; this.sphere.vel.set(0, 0, 0); this.cradle = null;
+      break;
+    }
+    // ── CRADLE / POCKET ATTRACTION (the holding pose): a free ball near a palm
+    //    held up comes ACROSS to the pocket (x/z — gravity does the falling; it
+    //    is never lifted) and, once in it, rides the hand while the palm stays up ──
+    let cradleP = null;
+    if (!this.hold && !scaling) {
+      if (this.cradle) {
+        const P = this._pose[this.cradle], e = hands.find(h => h[0] === this.cradle);
+        if (e && P.pose && P.n.y > 0.3 && this.sphere.pos.distanceTo(P.pocket) < R * 1.1) cradleP = P;
+        else this.cradle = null;                      // palm tilted / hand gone → it rolls off, keeps its velocity
+      }
+      if (!this.cradle) for (const [slot] of hands) {
+        const P = this._pose[slot]; if (!P.pose) continue;
+        const dx = P.pocket.x - this.sphere.pos.x, dy = P.pocket.y - this.sphere.pos.y, dz = P.pocket.z - this.sphere.pos.z;
+        if (Math.hypot(dx, dz) > R * 2.5 || dy > R * 0.8 || Math.abs(dy) > 0.9) continue;   // in reach, not above the ball
+        const k = Math.min(1, dt * 3);
+        this.sphere.pos.x += dx * k; this.sphere.pos.z += dz * k;
+        this.sphere.vel.x *= 0.8; this.sphere.vel.z *= 0.8;
+        this.seek = 'pocket'; this.seekHand = hands.find(h => h[0] === slot)[1];
+        if (Math.hypot(dx, dy, dz) < R * 0.6) { this.cradle = slot; cradleP = P; }
+        break;
+      }
+    }
+    // ── DEPTH BIAS (the cube doctrine): the camera cannot place a hand in
+    //    depth, so a hand over the ball on screen has the ball's z come to
+    //    CONTACT depth on the hand's INNER (palm) side — z only, gravity
+    //    untouched, never lifted, never moved on screen. From there the joint
+    //    spheres meet it: it is pushed, stopped, cradled, gripped ──
+    if (!this.hold && !this.cradle && !scaling && !this.seek) for (const [slot, pack] of hands) {
+      let near = false;
+      for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.2) { near = true; break; } }
+      if (!near) continue;
+      // contact depth on the side the ball is ALREADY on (never through the hand);
+      // a palm facing the camera keeps the full offset, a palm facing down (fingers
+      // coming round it) brings the ball almost to the hand depth itself
+      const P = this._pose[slot], pc = _sbTmpA.copy(pack[0]).lerp(pack[9], 0.5);
+      const side = Math.sign(this.sphere.pos.z - pc.z) || -1;
+      const off = (R + 0.03) * (P.sign !== 0 ? Math.max(0.15, Math.abs(P.n.z)) : 1);
+      const zt0 = pc.z + side * off;
+      if (Math.abs(zt0 - this.sphere.pos.z) < 0.01) continue;
+      const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, zt0));
+      this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 6);
+      this.seek = 'z'; this.seekHand = pack;
+      break;
+    }
+    // ── free flight: gravity ALWAYS on; the sandbox lane only integrates + floor
+    //    (its own grab logic — the cube's anchor-radius grab — is never given a hand) ──
+    if (!this.hold && !scaling && !cradleP) this.sphere.update(dt, [], this.floorY());
+    // ── SUPPORT: a free ball is pushed OUT of every hand's joint spheres — it
+    //    rests on a palm, is batted by a hand, never passes through one ──
+    if (!this.hold && !scaling && this.hull) {
+      this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
+      const H = this.hull.begin(this.mesh);
+      for (const [slot, pack] of hands) {
+        _sbTmpB.set(0, 0, 0);
+        if (!H.pushOut(pack, _packRadii(pack), _sbTmpB)) continue;
+        const m = _sbTmpB.length(); if (m < 1e-6) continue;
+        if (m > 0.02) _sbTmpB.multiplyScalar(0.02 / m);       // gentle: never flung — the residual stops the hand instead
+        this.sphere.pos.add(_sbTmpB);
+        _sbTmpB.normalize();
+        const vn = this.sphere.vel.dot(_sbTmpB);
+        if (vn < 0) this.sphere.vel.addScaledVector(_sbTmpB, -vn);   // no bounce into the hand
+        this.sphere.vel.multiplyScalar(0.85);                         // contact friction: it settles, does not skate off
+        this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false); H.begin(this.mesh);
+      }
+    }
+    // ── CRADLE follow (after physics, so it stays in the pocket) ──
+    if (cradleP && !this.hold) {
+      _sbTmpC.copy(this.sphere.pos);
+      this.sphere.pos.lerp(cradleP.pocket, 0.6);
+      _sbTmpC.subVectors(this.sphere.pos, _sbTmpC).divideScalar(Math.max(dt, 1e-3));
+      this.sphere.vel.copy(_sbTmpC);               // leaves the palm with the palm's velocity when tilted off
+    }
+    // ── HAND-STOP residual (mesh-true): whatever penetration is left after the
+    //    ball yielded (it is on the floor, or held rigid) stops the HAND — the
+    //    holohand never passes into the glass. The carrying hand is exempt ──
+    if (this.hull && pk && !scaling) {
+      this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
+      const holder = this.hold ? this.hold.slot : null;
+      for (const [slot, pack] of hands) {
+        if (slot === holder || slot === this.cradle) continue;   // the carrying palm is the anchor: the ball yields to it
+        _handResist(this.hull, this.mesh, pack, 1.0);
+      }
+    }
+    // ── conform collider: ghost fingers wrap the live ball, depth-true ──
+    slimeCollider.center.copy(this.sphere.pos);
+    slimeCollider.radius = SLIME_R * this.userS;
+    slimeCollider.active = true;
+    if (!this.hold && this.sphere.pos.distanceTo(this.center) > 3.4) { this.sphere.reset(); this.hold = null; this.cradle = null; }
+    this.mesh.position.copy(this.sphere.pos);
+    this.mesh.quaternion.copy(this.sphere.quat);
+    this.mesh.updateMatrixWorld(true);
+    this.metrics = null;
+    updateLens(this.mat, this.mesh, camera, R);
   },
 };
 
@@ -2560,8 +3085,8 @@ function loop() {
     const es = _engSdk();
     AVSYNC.packsAligned = !!(es && es.on && es.view === 'pov' && (packs.L || packs.R));
   }
-  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active)
-    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider] : null;
+  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active)
+    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
   if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
@@ -2868,6 +3393,7 @@ function loop() {
     else handBodies[slot].drop();
   }
   sandbox.update(dt);
+  slimeLab.update(dt, AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs);                       // 🟢 glass slime (see-through, soft body)
   cubeLab.update(dt);
   // co-op: in multi mode every player's hands can punch the shared note stream
   const gameHands = (S.mp && mpF) ? [handBodies.left, handBodies.right, ...mpExtraHands] : handBodyArr;
@@ -4156,6 +4682,25 @@ els.bowBtn.addEventListener('click', () => {
   if (!LABBOW.on && !ENG.sdk.on && meshOnly()) applyDisplay('lab');
   labBowToggle().catch(e => { console.error(e); toast('🏹 bow failed: ' + (e.message || e), 6000); });
 });
+els.slimeBtn.addEventListener('click', () => {
+  try { slimeLab.toggle(!slimeLab.on); }
+  catch (e) { console.error(e); toast('🟢 slime failed: ' + (e.message || e), 6000); }
+});
+document.getElementById('slimeMorphBtn').addEventListener('click', () => {
+  if (!slimeLab.on) slimeLab.toggle(true);
+  slimeLab.morph(slimeLab.state === 'slime' ? 'glass' : 'slime');
+  toast(slimeLab.state === 'slime' ? '💧 melting — the same mass, where it sits, turns to slime: it drapes over your fingers, drips where nothing holds it, stretches between two hands' : '🧊 pulling the slime back into a glass ball');
+});
+document.getElementById('slimeSizeDn').addEventListener('click', () => { slimeLab.setScale(slimeLab.userS / 1.25); toast('🟢 ball ×' + slimeLab.userS.toFixed(2)); });
+document.getElementById('slimeSizeUp').addEventListener('click', () => { slimeLab.setScale(slimeLab.userS * 1.25); toast('🟢 ball ×' + slimeLab.userS.toFixed(2)); });
+document.getElementById('slimeSoft').addEventListener('input', e => {
+  slimeLab.setSoftness(e.target.value / 100);   // fine-tune: the cloud's rigidity ramps to the slider
+});
+document.querySelectorAll('#slimeLensRow .opt').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#slimeLensRow .opt').forEach(x => x.classList.toggle('sel', x === b));
+  slimeLab.setLens(b.dataset.lens);
+  toast(b.dataset.lens === 'ball-lens' ? '🔄 ball-lens — the room shows upside-down through it' : b.dataset.lens === 'magnifier' ? '🔍 magnifier' : '🪟 window glass');
+}));
 // ± size buttons — same multiplier the two-hand pinch gesture drives (userS),
 // applied immediately even mid-hold
 function labBowScaleBy(f) {
@@ -4214,7 +4759,9 @@ window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs,
   get engBodyPts() { return engBodyPts; },
   get bowCol() { return bowGripCollider; },
   get labBow() { return LABBOW; },
+  get slime() { return slimeLab; }, get ballColliders() { return ballColliders; },
   get nockCol() { return nockCollider; },
+  get slimeCol() { return slimeCollider; },
   get arrowCol() { return arrowCollider; },
   labBowToggle, PropHull,
   REST_R42, setHandSkin, THREE, bodyPose, povFaceAway, weldHandsToBody,
@@ -4243,15 +4790,20 @@ async function engInit() {
     new THREE.SphereGeometry(1600, 32, 24),
     new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { sunDir: { value: sunDir } },
+      uniforms: { sunDir: { value: sunDir }, uHigh: { value: 0 } },
       vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `varying vec3 vP; uniform vec3 sunDir;
+      // uHigh (0 ground … 1 high altitude): the zenith deepens, the horizon
+      // whitens and everything below it becomes a cloud deck — the ascent
+      // environment for an embodied dragon climbing out of the editor grid
+      fragmentShader: `varying vec3 vP; uniform vec3 sunDir; uniform float uHigh;
         void main() {
           vec3 d = normalize(vP);
-          vec3 zen = vec3(0.180, 0.420, 0.745);
-          vec3 mid = vec3(0.475, 0.665, 0.875);
-          vec3 hor = vec3(0.865, 0.915, 0.960);
+          vec3 zen = mix(vec3(0.180, 0.420, 0.745), vec3(0.075, 0.215, 0.560), uHigh);
+          vec3 mid = mix(vec3(0.475, 0.665, 0.875), vec3(0.400, 0.610, 0.860), uHigh);
+          vec3 hor = mix(vec3(0.865, 0.915, 0.960), vec3(0.935, 0.955, 0.985), uHigh);
           vec3 c = mix(hor, mix(mid, zen, smoothstep(0.04, 0.65, d.y)), smoothstep(-0.06, 0.12, d.y));
+          float deck = smoothstep(0.03, -0.24, d.y) * uHigh;
+          c = mix(c, vec3(0.945, 0.960, 0.990), deck * 0.96);
           float s = max(dot(d, sunDir), 0.0);
           c += vec3(1.0, 0.96, 0.88) * (pow(s, 1400.0) * 0.9 + pow(s, 40.0) * 0.10);
           gl_FragColor = vec4(c, 1.0);
@@ -4264,8 +4816,9 @@ async function engInit() {
   ENG.grid = new THREE.Mesh(
     new THREE.PlaneGeometry(3000, 3000, 1, 1).rotateX(-Math.PI / 2),
     new THREE.ShaderMaterial({
+      uniforms: { uAlt: { value: 0 } },
       vertexShader: 'varying vec3 vW; void main(){ vW = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `varying vec3 vW;
+      fragmentShader: `varying vec3 vW; uniform float uAlt;
         float gridLine(vec2 p, float sc) {
           vec2 g = abs(fract(p / sc - 0.5) - 0.5) / (fwidth(p / sc) + 1e-4);
           return 1.0 - min(min(g.x, g.y), 1.0);
@@ -4277,6 +4830,7 @@ async function engInit() {
           vec3 c = mix(base, line, l);
           float dist = length(vW.xz);
           c = mix(c, vec3(0.865, 0.915, 0.960), smoothstep(70.0, 320.0, dist));   // dissolve into the haze
+          c = mix(c, vec3(0.945, 0.960, 0.990), uAlt);                   // seen from altitude: the ground sinks under cloud
           gl_FragColor = vec4(c, 1.0);
         }`,
     }));
@@ -4446,6 +5000,8 @@ function engLoop() {
       engRestoreHands(rec);                    // demoted → stumps return, rigs hide
     }
   }
+  engDragonTick(avDt);                         // procedural dragons: gait / flight / look
+  engEnvTick(avDt);                            // altitude → sky / grid / cloud layer
   engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
   engGestureTick(avDt);                        // hand gestures: grab bow, draw string
@@ -4740,19 +5296,41 @@ function engAvCtlRefresh() {
   const lbl = document.getElementById('engAvCtlLbl'), host = document.getElementById('engAvCtl');
   const d = ENG.sel && ENG.sel.userData.eng;
   const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
-  const show = !!rec;
+  const drec = d && d.type === 'dragon' ? DRAGONS.get(d.id) : null;
+  const show = !!rec || !!drec;
   lbl.style.display = show ? 'block' : 'none';
+  lbl.textContent = drec ? 'DRAGON · motion' : 'AVATAR · animation';
   host.style.display = show ? 'flex' : 'none';
   engMindRows(rec);                            // MIND section rides the selection too
   const bh = document.getElementById('engBowHint');
   if (bh) bh.style.display = ENG.sel && BOWS.has(ENG.sel.userData.eng.id) ? 'block' : 'none';
+  const dh = document.getElementById('engDragonHint');
+  if (dh) dh.style.display = drec ? 'block' : 'none';
   if (!show) return;
   host.innerHTML = '';
-  const mk = (txt, sel, fn) => {
+  const mk = (txt, sel, fn, title) => {
     const b = document.createElement('button');
     b.className = 'opt' + (sel ? ' sel' : ''); b.textContent = txt;
+    if (title) b.title = title;
     b.addEventListener('click', fn); host.appendChild(b);
   };
+  if (drec) {                                  // DRAGON strip: motion modes · look · roam
+    const D = drec.driver, sel = ENG.sel;
+    mk('⏹ idle', D.mode === 'idle', () => engDragonSetMode(sel, 'idle'), 'stand still (lands first if flying)');
+    mk('🚶 walk', D.mode === 'walk', () => engDragonSetMode(sel, 'walk'), 'lateral-sequence walk');
+    mk('🏃 run', D.mode === 'run', () => engDragonSetMode(sel, 'run'), 'trot — diagonal pairs');
+    mk('🪽 fly', D.mode === 'fly', () => engDragonSetMode(sel, 'fly'), 'take off — flapping flight');
+    mk('🕊 glide', D.mode === 'glide', () => engDragonSetMode(sel, 'glide'), 'wings out, slow strokes');
+    mk('👀 ahead', drec.lookMode === 'ahead', () => engDragonSetLook(sel, 'ahead'), 'head follows the body');
+    mk('👀 camera', drec.lookMode === 'camera', () => engDragonSetLook(sel, 'camera'), 'head tracks the engine camera');
+    mk('👀 scan', drec.lookMode === 'scan', () => engDragonSetLook(sel, 'scan'), 'head sweeps side to side');
+    mk('🔁 roam', D.auto, () => { D.auto = !D.auto; D.input.fwd = D.input.turn = D.input.climb = 0; engAvCtlRefresh(); toast(D.auto ? '🔁 roam — it steers itself in a loop' : '🎮 manual — W/S/A/D · SPACE fly/land · R/F climb'); }, 'self-steer in a wide loop, or drive it with the keys');
+    mk('📷 follow', drec.follow, () => { drec.follow = !drec.follow; engAvCtlRefresh(); }, 'orbit camera rides along with this dragon');
+    mk(drec.user ? '🐲 you are the dragon' : '🐲 become dragon', !!drec.user, () => {
+      engDragonSetUser(sel, !drec.user).catch(err => toast('⚠ ' + (err.message || err), 5000));
+    }, 'full-body tracking: your arms are its wings, your head turns its head — flap fast to take off; in the air turn your body to steer, bend forward to dive (Kinect-style)');
+    return;
+  }
   mk('⏹', rec.clipIdx < 0, () => engAvatarSetClip(ENG.sel, -1));
   rec.clips.forEach((c, i) => mk('▶ ' + c.name, i === rec.clipIdx, () => engAvatarSetClip(ENG.sel, i)));
   if (rec.driver) mk(rec.role === 'user' ? '🎮 user' : '🎮 make user', rec.driveOn, () => {
@@ -4787,6 +5365,293 @@ function engAvCtlRefresh() {
 ENG.spawnAvatar = engSpawnAvatar; ENG.avatarSetClip = engAvatarSetClip; ENG.avatars = AVREG;
 ENG.mindSet = engMindSet;                       // hoisted fns — safe here
 ENG.spawnBow = engSpawnBow; ENG.bowSetDraw = engBowSetDraw;
+ENG.spawnDragon = (...a) => engSpawnDragon(...a); ENG.dragonSetMode = (...a) => engDragonSetMode(...a);
+ENG.dragonSetUser = (...a) => engDragonSetUser(...a);
+Object.defineProperty(ENG, 'env', { get: () => ENG_ENV });
+Object.defineProperty(ENG, 'dragons', { get: () => DRAGONS });
+
+// ═══ DRAGON — a self-propelled rigged game object (procedural motion) ═════
+// The dragon.glb is a UniRig auto-rig (69 generic Bone_NNN, no clips) — the
+// DragonDriver (sdkmp/interaction/dragon-driver.js) carries the AUTHORED bone
+// contract and generates head-look, walk (lateral sequence), run (trot) and
+// flapping flight from gait parameters, measuring every rotation sign against
+// the rig at bind. It also moves the host group (heading / speed / altitude),
+// so the dragon walks and flies around the scene by itself (🔁 roam) or under
+// the keys (W/S/A/D · SPACE fly⇄land · R/F climb) while selected.
+const DRAGONS = new Map();                     // eng.id → { driver, grp, lookMode }
+const ENG_DRAGON_URL = 'sdkmp/assets/avatars/dragon.glb';
+const ENG_DRAGON_HEIGHT = 1.6;                 // standing height in the engine (m)
+async function engSpawnDragon(meta = {}) {
+  const [{ GLTFLoader }, { DragonDriver, dragonContractMatches }] = await Promise.all([
+    import('three/addons/loaders/GLTFLoader.js'),
+    import('./sdkmp/interaction/dragon-driver.js'),
+  ]);
+  const gltf = await new Promise((res, rej) => new GLTFLoader().load(meta.url || ENG_DRAGON_URL, res, null, rej));
+  const chk = dragonContractMatches(gltf.scene);
+  if (!chk.ok) throw new Error('not the dragon rig — missing ' + chk.missing.slice(0, 4).join(','));
+  const grp = new THREE.Group();
+  grp.add(gltf.scene);
+  let sm0 = null;
+  gltf.scene.traverse(o => { if (o.isSkinnedMesh) { o.frustumCulled = false; if (!sm0) sm0 = o; } });
+  // bind BEFORE any pose runs (the driver captures rest + measures signs here)
+  const driver = new DragonDriver().bind(gltf.scene);
+  const box = sm0 ? _skinnedBox(sm0, gltf.scene) : new THREE.Box3().setFromObject(gltf.scene);
+  const h = Math.max(box.max.y - box.min.y, 1e-6);
+  const f = ENG_DRAGON_HEIGHT / h;
+  gltf.scene.scale.setScalar(f);
+  gltf.scene.position.y = -box.min.y * f;
+  gltf.scene.position.x = -(box.min.x + box.max.x) / 2 * f;
+  // pick proxy: the body core (not the full wingspan) so the gizmo box stays honest
+  const sz = box.getSize(new THREE.Vector3()).multiplyScalar(f);
+  const proxy = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.min(sz.x, 1.3), sz.y, Math.max(sz.z, 0.6)),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+  proxy.position.set(0, sz.y / 2, (box.min.z + box.max.z) / 2 * f);
+  grp.add(proxy);
+  grp.userData.pickProxy = proxy;
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.5);
+  grp.position.set(p.x, 0, p.z);
+  // spawn facing the camera so the head-look reads immediately
+  grp.rotation.y = Math.atan2(-fwd.x, -fwd.z);
+  driver.heading = grp.rotation.y;
+  engAdopt(grp, { type: 'dragon', url: meta.url || ENG_DRAGON_URL, label: meta.label || 'dragon ' + ENG.seq });
+  const rec = { driver, grp, lookMode: 'camera', follow: meta.follow !== undefined ? !!meta.follow : true, user: null, dolly: false };
+  DRAGONS.set(grp.userData.eng.id, rec);
+  driver.auto = meta.auto !== undefined ? !!meta.auto : true;
+  engDragonSetLook(grp, meta.look || 'camera');
+  engDragonSetMode(grp, meta.mode || 'idle');
+  return grp;
+}
+function engDragonSetMode(obj, mode) {
+  const rec = DRAGONS.get(obj.userData.eng.id);
+  if (!rec) return;
+  rec.driver.setMode(mode);
+  engAvCtlRefresh();
+}
+function engDragonSetLook(obj, look) {
+  const rec = DRAGONS.get(obj.userData.eng.id);
+  if (!rec) return;
+  rec.lookMode = look;
+  if (look === 'scan') rec.driver.lookScan(); else if (look === 'ahead') rec.driver.lookAhead();
+  engAvCtlRefresh();
+}
+const DRAGON_KEYS = new Set();
+function engDragonKey(e, down) {
+  const code = e.code;
+  if (!/^(KeyW|KeyS|KeyA|KeyD|KeyR|KeyF|Space|ShiftLeft|ShiftRight)$/.test(code)) return;
+  if (down) {
+    e.preventDefault();
+    if (DRAGON_KEYS.has(code)) return;         // auto-repeat
+    DRAGON_KEYS.add(code);
+    const rec = ENG.sel && DRAGONS.get(ENG.sel.userData.eng.id);
+    if (rec && code === 'Space') {             // take off ⇄ land
+      const D = rec.driver;
+      engDragonSetMode(ENG.sel, (D.mode === 'fly' || D.mode === 'glide') ? 'idle' : 'fly');
+    }
+    if (rec && rec.driver.auto && code !== 'Space') { rec.driver.auto = false; engAvCtlRefresh(); }
+  } else DRAGON_KEYS.delete(code);
+}
+function engDragonTick(dt) {
+  if (!DRAGONS.size) return;
+  const sel = ENG.sel && DRAGONS.get(ENG.sel.userData.eng.id);
+  for (const rec of DRAGONS.values()) {
+    const D = rec.driver;
+    if (rec === sel && !D.auto) {
+      const K = DRAGON_KEYS;
+      D.input.fwd = K.has('KeyW') ? 1 : K.has('KeyS') ? -0.5 : 0;
+      D.input.turn = K.has('KeyA') ? 1 : K.has('KeyD') ? -1 : 0;
+      D.input.climb = K.has('KeyR') ? 1 : K.has('KeyF') ? -1 : 0;
+      const run = K.has('ShiftLeft') || K.has('ShiftRight');
+      // ground modes follow the keys: forward = walk (⇧ run); airborne keeps flying
+      if (D.mode === 'idle' && D.input.fwd) { D.setMode(run ? 'run' : 'walk'); engAvCtlRefresh(); }
+      else if ((D.mode === 'walk' && run) || (D.mode === 'run' && !run)) { D.setMode(run ? 'run' : 'walk'); engAvCtlRefresh(); }
+    } else if (rec !== sel && !rec.user) D.input.fwd = D.input.turn = D.input.climb = 0;
+    if (rec.lookMode === 'camera') D.lookAt(ENG.camera.position);
+    if (rec.user) engDragonUserTick(rec, dt);    // 🐲 embodied: arms → wings, flap → flight
+    D.update(dt, rec.grp);
+    // 📷 follow: the orbit pivot rides the selected dragon (camera carried along,
+    // so orbit / zoom still work around it) — a roaming dragon never leaves frame
+    if (rec === sel && rec.follow && !rec.dolly && !ENG.tc.dragging) {
+      const s = rec.grp.scale.x || 1;
+      _dF.set(rec.grp.position.x, rec.grp.position.y + 0.7 * s, rec.grp.position.z).sub(ENG.orbit.target).multiplyScalar(0.12);
+      ENG.orbit.target.add(_dF); ENG.camera.position.add(_dF);
+    }
+    // 🎬 dolly: the POV shot for an embodied dragon — behind and above it, on
+    // its heading, lifting with it; the lift-off kicks the camera back a beat
+    if (rec.dolly) {
+      const s = rec.grp.scale.x || 1, h = D.heading, U = rec.user;
+      const pull = U ? U.pull : 0;
+      _dF.set(rec.grp.position.x - Math.sin(h) * (4.8 + pull * 2.2) * s, rec.grp.position.y + (2.0 + pull * 0.8) * s, rec.grp.position.z - Math.cos(h) * (4.8 + pull * 2.2) * s);
+      ENG.camera.position.lerp(_dF, 1 - Math.exp(-dt * 4));
+      _dF.set(rec.grp.position.x, rec.grp.position.y + 0.85 * s, rec.grp.position.z);
+      ENG.orbit.target.lerp(_dF, 1 - Math.exp(-dt * 6));
+      ENG.camera.lookAt(ENG.orbit.target);
+      if (U) U.pull = Math.max(0, U.pull - dt * 0.5);
+    }
+  }
+}
+const _dF = new THREE.Vector3();
+
+// ═══ 🐲 BECOME THE DRAGON — full-body embodiment (Kinect-Adventures grammar) ═══
+// The lab's BlazePose-33 world landmarks (AVSYNC.poseWorld — hands NOT needed)
+// feed WingDrive: shoulders = wing roots, upper arm = wing drum, forearm = wing
+// flat, head = dragon head. DragonFlightControl turns sustained FAST flapping
+// into LIFT OFF, then flap = climb · arms out = glide · lean = steer · arms
+// down = land. The dolly rides the shot and the environment climbs with it
+// (grid sinks under a cloud deck, sky deepens, cloud layer drifts past).
+const ENG_DRAGON_MAX_ALT = 42;                  // model units ≈ metres
+async function engDragonSetUser(obj, on, opts = {}) {
+  const rec = DRAGONS.get(obj.userData.eng.id);
+  if (!rec) return;
+  if (on) {
+    if (rec.user) return;
+    for (const r of DRAGONS.values()) if (r !== rec && r.user) await engDragonSetUser(r.grp, false);   // one embodied dragon
+    if (!ENG.sdk.on && opts.sdk !== false) {   // needs the tracking SDK: boot it on the full-3D body suite
+      engEls.engSdkChk.checked = true;
+      try { await engSdkOn(); } catch (e) { engSdkOff(); throw new Error('tracking failed: ' + (e.message || e)); }
+      const b = document.querySelector('#engBodySuite [data-bs="body3d"]'); if (b) b.click();
+    }
+    const { WingDrive, DragonFlightControl } = await import('./sdkmp/interaction/wing-drive.js');
+    rec.user = { wings: new WingDrive(), ctl: new DragonFlightControl(), flash: 0, pull: 0, lostFor: 0 };
+    const D = rec.driver;
+    D.auto = false; D.input.fwd = D.input.turn = D.input.climb = 0;
+    D.setMode('idle'); D.lookUser(); D.climbMul = 1.6; D.cruiseAlt = D.c.gait.fly.alt;
+    rec.lookMode = 'user'; rec.dolly = true; rec.follow = false;
+    ENG.orbit.enabled = false;
+    document.body.classList.add('eng-dragon');
+    engCamPipSync();                           // 📹 raw camera reference in the corner
+    engEnvInit();
+    engSelect(obj);
+    toast('🐲 YOU ARE THE DRAGON — spread your arms: they are its wings. Flap them fast to take off!', 7000);
+  } else {
+    if (!rec.user) return;
+    rec.user = null; rec.dolly = false; rec.follow = true;
+    const D = rec.driver;
+    D.setUserWings(null); D.climbMul = 1; D.dive = 0; D.bank = 0; D.input.fwd = D.input.turn = D.input.climb = 0;
+    D.cruiseAlt = D.c.gait.fly.alt;
+    if (D.mode === 'fly' || D.mode === 'glide') D.setMode('idle');   // comes down and lands
+    rec.lookMode = 'camera'; D.lookAhead();
+    ENG.orbit.enabled = true;
+    if (![...DRAGONS.values()].some(r => r.user)) { document.body.classList.remove('eng-dragon'); engCamPipSync(false); }
+  }
+  engAvCtlRefresh(); engRefreshList();
+}
+// the PiP plays the SAME stream the tracker reads (els.vid) — never a second
+// camera open, never a tracking overlay; it follows source swaps (camera ↔ file)
+function engCamPipSync(on = true) {
+  const pip = document.getElementById('engCamPip'); if (!pip) return;
+  if (!on) { pip.srcObject = null; pip.removeAttribute('src'); return; }
+  const src = els.vid && els.vid.srcObject;
+  if (src) { if (pip.srcObject !== src) { pip.srcObject = src; pip.play().catch(() => {}); } }
+  else if (els.vid && els.vid.src && pip.src !== els.vid.src) { pip.src = els.vid.src; pip.play().catch(() => {}); }
+}
+function engDragonUserTick(rec, dt) {
+  const U = rec.user, D = rec.driver;
+  const T = window.__lab && window.__lab.AVSYNC;
+  const pose = T ? (T.ovPose !== undefined ? T.ovPose : T.poseWorld) : null;   // probe seam honoured
+  const st = U.wings.update(pose, dt);
+  D.setUserWings(st);
+  engCamPipSync();                             // camera may have come up after the chip
+  const c = U.ctl.update(st, dt, D.altitude);
+  U.lostFor = st.valid ? 0 : U.lostFor + dt;
+  if (c.event === 'liftoff') {
+    D.setMode('fly'); D.cruiseAlt = 3.5; U.flash = 2.4; U.pull = 1;
+    toast('🪽 LIFT OFF!', 2500);
+  }
+  if (c.phase === 'flying') {
+    D.input.fwd = 1; D.input.turn = c.turn; D.dive = c.dive; D.bank = c.bank;   // face = steer · bend = dive · lean = bank
+    D.cruiseAlt = Math.max(0, Math.min(ENG_DRAGON_MAX_ALT, D.cruiseAlt + c.climb * 2.4 * dt));
+  } else { D.input.fwd = 0; D.input.turn = 0; D.dive = 0; D.bank = 0; }
+  if (c.event === 'landed') {
+    D.setMode('idle'); D.cruiseAlt = D.c.gait.fly.alt;
+    toast('🐉 landed — flap fast to take off again', 3000);
+  }
+  engFlapHudTick(rec, c, st, dt);
+}
+function engFlapHudTick(rec, c, st, dt) {
+  const U = rec.user; U.flash = Math.max(0, U.flash - dt);
+  const hud = document.getElementById('engFlapHud'), ring = document.getElementById('engFlapRing');
+  const big = document.getElementById('engFlapBig'), sub = document.getElementById('engFlapSub'), ico = document.getElementById('engFlapIco');
+  if (!hud) return;
+  const CIRC = 2 * Math.PI * 52;
+  const meter = c.phase === 'ground' ? c.meter : 1;
+  ring.style.strokeDashoffset = (CIRC * (1 - meter)).toFixed(1);
+  hud.classList.toggle('lift', U.flash > 0);
+  hud.classList.toggle('lost', !st.valid && U.lostFor > 0.4);
+  const alt = rec.grp.position.y.toFixed(1);
+  let B, S, I;
+  if (!st.valid && U.lostFor > 0.4) { B = 'SPREAD YOUR ARMS'; S = 'head + both arms in view is all it needs (one arm still works) — no need for the whole body'; I = '🙌'; }
+  else if (U.flash > 0) { B = 'LIFT OFF!'; S = 'keep flapping to climb · arms out to glide · turn your body to steer · bend forward to dive'; I = '🪽'; }
+  else if (c.phase === 'ground') {
+    B = c.meter > 0.05 ? 'KEEP FLAPPING!' : 'FLAP YOUR WINGS TO TAKE OFF';
+    S = c.meter > 0.05 ? Math.round(c.meter * 100) + '% · faster, bigger strokes' : 'big fast strokes, like real wings · turn your head — the dragon looks';
+    I = c.meter > 0.05 ? '🔥' : '🐉';
+  } else {
+    B = c.dive > 0.25 ? 'DIVING' : c.climb > 0.2 ? 'CLIMBING' : c.climb < -0.6 ? 'DESCENDING' : 'GLIDING';
+    S = alt + ' m · flap = climb · arms out = glide · turn your body = steer · bend forward = dive · arms down = land';
+    I = c.dive > 0.25 ? '🔻' : c.climb > 0.2 ? '⬆' : c.climb < -0.6 ? '⬇' : '🕊';
+  }
+  if (big.textContent !== B) big.textContent = B;
+  if (sub.textContent !== S) sub.textContent = S;
+  if (ico.textContent !== I) ico.textContent = I;
+}
+// ── ascent environment: altitude-driven sky/grid uniforms + a drifting cloud layer ──
+const ENG_ENV = { alt: 0, clouds: null, high: 0 };
+function engCloudTexture() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  const paint = (x, y, r, a) => {
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, `rgba(255,255,255,${a})`); rg.addColorStop(0.55, `rgba(255,255,255,${a * 0.55})`); rg.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, 256, 256);
+  };
+  paint(128, 150, 120, 0.85); paint(90, 120, 80, 0.7); paint(170, 115, 85, 0.7); paint(128, 100, 60, 0.6);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function engEnvInit() {
+  if (ENG_ENV.clouds || !ENG.scene) return;
+  const tex = engCloudTexture();
+  const grp = new THREE.Group(); grp.name = 'clouds';
+  for (let i = 0; i < 44; i++) {
+    const m = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, fog: false });
+    const sp = new THREE.Sprite(m);
+    const a = Math.random() * Math.PI * 2, r = 14 + Math.random() * 90;
+    const w = 16 + Math.random() * 22;
+    sp.scale.set(w, w * 0.42, 1);
+    sp.position.set(Math.cos(a) * r, 8 + Math.random() * 36, Math.sin(a) * r);
+    sp.userData = { drift: 0.25 + Math.random() * 0.5, k: 0.7 + Math.random() * 0.3 };
+    grp.add(sp);
+  }
+  ENG.scene.add(grp);
+  ENG_ENV.clouds = grp;
+}
+function engEnvTick(dt) {
+  // the reference altitude: the embodied dragon, else the selected/followed one
+  let ref = null;
+  for (const r of DRAGONS.values()) if (r.user) ref = r;
+  if (!ref && ENG.sel) ref = DRAGONS.get(ENG.sel.userData.eng.id) || null;
+  const target = ref ? ref.grp.position.y : 0;
+  ENG_ENV.alt += (target - ENG_ENV.alt) * (1 - Math.exp(-dt * 1.5));
+  const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  ENG_ENV.high = sm(5, 28, ENG_ENV.alt);
+  if (ENG.sky) ENG.sky.material.uniforms.uHigh.value = ENG_ENV.high;
+  if (ENG.grid) ENG.grid.material.uniforms.uAlt.value = sm(7, 26, ENG_ENV.alt) * 0.97;
+  if (ENG_ENV.alt > 2.5 && !ENG_ENV.clouds) engEnvInit();
+  const C = ENG_ENV.clouds; if (!C) return;
+  const vis = sm(3, 11, ENG_ENV.alt);
+  C.visible = vis > 0.001;
+  if (!C.visible) return;
+  const cx = ref ? ref.grp.position.x : 0, cz = ref ? ref.grp.position.z : 0;
+  for (const sp of C.children) {
+    sp.material.opacity = vis * 0.92 * sp.userData.k;
+    sp.position.x += sp.userData.drift * dt;
+    // keep the layer centred on the flyer: wrap clouds that fall too far behind
+    if (sp.position.x - cx > 120) sp.position.x -= 240; else if (sp.position.x - cx < -120) sp.position.x += 240;
+    if (sp.position.z - cz > 120) sp.position.z -= 240; else if (sp.position.z - cz < -120) sp.position.z += 240;
+  }
+}
 Object.defineProperty(ENG, 'minds', { get: () => ENG_MINDS });   // consts live later
 Object.defineProperty(ENG, 'world', { get: () => ENG_WORLD });   // in the file (TDZ)
 Object.defineProperty(ENG, 'bows', { get: () => BOWS });
@@ -5646,7 +6511,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -5661,6 +6526,8 @@ function engDelete(o) {
     if (T) Object.assign(T[d.sub], { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 });
   }
   AVREG.delete(o.userData.eng.id);
+  if (DRAGONS.get(o.userData.eng.id)?.user) engDragonSetUser(o, false);   // embodied → release the HUD/dolly
+  DRAGONS.delete(o.userData.eng.id);
   const bw = BOWS.get(o.userData.eng.id);
   if (bw) {
     if (bw.nocked) ENG.scene.remove(bw.nocked);
@@ -5677,9 +6544,10 @@ function engDelete(o) {
 function engSnapshot() {
   return { v: 1, objects: ENG.objects.filter(o => o.userData.eng.type !== 'tracker')
     .map(o => {
-      const rec = AVREG.get(o.userData.eng.id);
+      const rec = AVREG.get(o.userData.eng.id), dr = DRAGONS.get(o.userData.eng.id);
       return { ...o.userData.eng, clip: rec ? rec.clipIdx : undefined, role: rec ? rec.role : undefined,
                mind: rec && rec.mind ? { key: rec.mind.key, stats: { ...rec.mind.stats } } : undefined,
+               dragon: dr ? { mode: dr.driver.mode, look: dr.lookMode, auto: dr.driver.auto, follow: dr.follow } : undefined,
                p: o.position.toArray(), r: o.rotation.toArray().slice(0, 3), s: o.scale.toArray() };
     }) };
 }
@@ -5695,6 +6563,12 @@ async function engRestore(snap) {
           const rr = AVREG.get(g.userData.eng.id);
           if (rr && rr.mind) rr.mind.stats = { ...rec.mind.stats };
         }
+      } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'dragon') {
+      try {
+        const g = await engSpawnDragon({ label: rec.label, ...(rec.dragon || {}) });
+        g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
     }
     else if (rec.type === 'bow') {
@@ -5972,6 +6846,12 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
       .catch(err => toast('⚠ avatar failed: ' + (err.message || err), 5000));
     return;
   }
+  if (b.dataset.sp === 'dragon') {
+    toast('loading dragon…', 6000);
+    engSpawnDragon().then(() => toast('🐉 dragon — select it for the motion strip: walk · run · fly · look'))
+      .catch(err => toast('⚠ dragon failed: ' + (err.message || err), 6000));
+    return;
+  }
   if (b.dataset.sp === 'bow') {
     if (ENG.sdk.on) {   // tracking live (POV or mirror) → the ON-HANDS lane:
       // the bow renders IN the lab scene, on the blue holo hands themselves
@@ -6064,10 +6944,12 @@ addEventListener('keydown', e => {
     e.preventDefault();                        // draw the selected bow, not scroll
     BOWS.get(ENG.sel.userData.eng.id).drawing = true;
   }
+  if (ENG.sel && DRAGONS.has(ENG.sel.userData.eng.id)) engDragonKey(e, true);
 });
 addEventListener('keyup', e => {
-  if (e.code !== 'Space' || !ENG.on) return;
-  for (const b of BOWS.values()) b.drawing = false;   // release → engBowTick looses
+  if (!ENG.on) return;
+  if (e.code === 'Space') for (const b of BOWS.values()) b.drawing = false;   // release → engBowTick looses
+  engDragonKey(e, false);
 });
 </script>
 <script src="./sdkmp/ui/panel-toggle.js" defer></script>

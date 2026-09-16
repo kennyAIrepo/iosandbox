@@ -4,7 +4,7 @@
  * THE DEFAULT for every hopeOS page. Drop this one line into any page
  * (classic, deferred — no import map, no module graph needed):
  *
- *   <script src="./sdk/ui/panel-toggle.js" defer></script>
+ *   <script src="./sdkmp/ui/panel-toggle.js" defer></script>
  *
  * It adds ONE always-visible top-right button that hides/shows every
  * floating panel on the page, so there's always a way to reclaim a full

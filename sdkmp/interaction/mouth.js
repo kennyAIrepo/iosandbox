@@ -30,7 +30,7 @@
  *
  * Both signals pass through hysteresis (separate on/off thresholds) so
  * triggers don't chatter at the boundary, and One-Euro smoothing
- * (sdk/core/filters.js) so slow jitter dies without adding strike lag.
+ * (sdkmp/core/filters.js) so slow jitter dies without adding strike lag.
  *
  * Game integration (generic script, no Three.js dependency):
  *   import { initCamera, initTracking } from '../core/tracking.js';

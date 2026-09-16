@@ -3,7 +3,7 @@
  * Wires all modules together. Exposes window.hopeOS as the public API.
  *
  * Usage:
- *   import { HopeOS } from './sdk/hopeos.js';
+ *   import { HopeOS } from './sdkmp/hopeos.js';
  *   const hope = await HopeOS.init({
  *     canvas: document.getElementById('c'),
  *     bgVideo: document.getElementById('bgVid'),
