@@ -67,32 +67,120 @@ const out = await page.evaluate(async () => {
   const r = 0.16, vIdeal = 4 / 3 * Math.PI * r ** 3;
   const stats = { mass: st.mass_kg, volume: st.volume_m3, volErr: +Math.abs(st.volume_m3 - vIdeal) / vIdeal, hullSegs: st.hull && st.hull.segs,
                   hullJson: !!(st.hull && st.hull.json && st.hull.json.segs && st.hull.json.segs.length), bbox: st.bbox };
-  // ── SEEK: z-bias + cup pull, the hand never moved ──
+  // ── BALL DOCTRINE ── let it come to rest on the floor first (gravity is always on)
+  await wait(1400);
   const s0 = G.sphere.pos.clone();
+  const rest = { onFloor: +Math.abs(s0.y - (G.floorY() + 0.16)).toFixed(3), held: !!G.hold };
   window.__lab.AVSYNC.ovPose = null;
+  // (a) an OPEN hand over the ball on screen, 0.35 m nearer: no float, no grab, no depth pull (it is not closing)
   window.__lab.AVSYNC.ovPacks = { L: open(s0.x + 0.02, s0.y, s0.z + 0.35), R: null };
+  await wait(700);
+  const openHover = { rose: +(G.sphere.pos.y - s0.y).toFixed(3), held: !!G.hold, dz: +Math.abs(G.sphere.pos.z - s0.z).toFixed(3), seek: G.seek };
+  // (b) a CLOSING hand over it, 0.35 m nearer: depth (z only) comes to contact distance; the hand never moved; still no grab, no lift
+  window.__lab.AVSYNC.ovPacks = { L: cup(s0.x + 0.02, s0.y, s0.z + 0.35), R: null };
   await wait(900);
   const Lz = window.__lab.AVSYNC.packs.L;
-  const zBias = { gapNow: +Math.abs(G.sphere.pos.z - (s0.z + 0.35)).toFixed(3), seek: G.seek, handMoved: +Math.abs(Lz[0].z - (s0.z + 0.35)).toFixed(3) };
+  const zBias = { gapNow: +Math.abs(G.sphere.pos.z - (s0.z + 0.35)).toFixed(3), seek: G.seek, handMoved: +Math.abs(Lz[0].z - (s0.z + 0.35)).toFixed(3),
+                  rose: +(G.sphere.pos.y - s0.y).toFixed(3), held: !!G.hold };
   window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(300);
-  const s1 = G.sphere.pos.clone();
-  const cx = s1.x + 0.18, cy = s1.y + 0.05, cz = s1.z;                    // cupping hand beside the ball
-  window.__lab.AVSYNC.ovPacks = { L: cup(cx, cy, cz), R: null };
-  await wait(900);
-  const nrm = new T3.Vector3(0, 0.075, 0.06).normalize();
-  const pocket = new T3.Vector3(cx, cy, cz).addScaledVector(nrm, 0.16 + 0.015);
-  const Lc = window.__lab.AVSYNC.packs.L;
-  const cupPull = { before: +s1.distanceTo(pocket).toFixed(3), after: +G.sphere.pos.distanceTo(pocket).toFixed(3), seek: G.seek, handMoved: +Math.abs(Lc[0].z - cz).toFixed(3) };
-  window.__lab.AVSYNC.ovPacks = { L: null, R: null };
+  // (c) BACK OF HAND / fingers curled AWAY: palm-region joints touch one side, fingertips curl off the other way → nothing
+  const B = G.sphere.pos.clone();                              // r = 0.16 from the stats block above
+  const around = (side, fingersOn) => {                        // palm joints on +z of the ball; fingers on −z (wrapping) or curled away
+    const p = mk(V(B.x, B.y - 0.3, B.z + 0.5));
+    p[9] = V(B.x, B.y, B.z + r + 0.022 * side); p[0] = V(B.x, B.y - 0.204, B.z + r + 0.022 * side);
+    p[5] = V(B.x + 0.04, B.y, B.z + r + 0.022 * side); p[13] = V(B.x - 0.04, B.y, B.z + r + 0.022 * side); p[17] = V(B.x - 0.08, B.y, B.z + r + 0.022 * side);
+    const fz = fingersOn ? -(r + 0.013) : (r + 0.013) * side + 0.12;
+    p[8] = V(B.x + 0.04, B.y, B.z + fz); p[12] = V(B.x, B.y, B.z + fz); p[16] = V(B.x - 0.04, B.y, B.z + fz);
+    p[7] = V(B.x + 0.04, B.y + 0.03, B.z + (fingersOn ? -(r + 0.015) : fz)); p[11] = V(B.x, B.y + 0.03, B.z + (fingersOn ? -(r + 0.015) : fz));
+    for (const i of [6, 10, 14]) p[i] = V(B.x, B.y + r + 0.05, B.z);
+    for (const i of [1, 2, 3, 4]) p[i] = V(B.x + r + 0.08, B.y - 0.05, B.z + 0.02);
+    return p;
+  };
+  window.__lab.AVSYNC.ovPacks = { L: around(1, false), R: null };
+  await wait(500);
+  const backHand = { held: !!G.hold, hold: G.hold ? G.hold.type : null, moved: +G.sphere.pos.distanceTo(B).toFixed(3) };
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(200);
+  // (d) WRAP: palm on one side, fingers closed round the far side → held; lift the hand → it comes; open the fingers → released, falls
+  const B2 = G.sphere.pos.clone(); B.copy(B2);
+  let wrapPack = around(1, true);
+  window.__lab.AVSYNC.ovPacks = { L: wrapPack, R: null };
+  await wait(300);
+  const wrapGrab = { held: !!G.hold, type: G.hold ? G.hold.type : null };
+  for (let k = 1; k <= 15; k++) { window.__lab.AVSYNC.ovPacks = { L: shift(wrapPack, 0, 0.18 * k / 15, 0), R: null }; await wait(33); }
+  wrapPack = shift(wrapPack, 0, 0.18, 0);
   await wait(400);
-  // ── RESISTANCE: an OPEN hand pressed into the ball is stopped at its surface ──
+  const wrapLift = { rose: +(G.sphere.pos.y - B2.y).toFixed(3), held: !!G.hold };
+  // open: the finger joints leave the far side (palm joints STAY touching)
+  const opened = wrapPack.map((q, i) => ([6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20].includes(i) ? V(q.x, q.y, q.z - 0.15) : q));
+  window.__lab.AVSYNC.ovPacks = { L: opened, R: null };
+  await wait(120);
+  const yOpen = G.sphere.pos.y, heldAfterOpen = !!G.hold;
+  await wait(500);
+  const release = { heldAfterOpen, fell: +(yOpen - G.sphere.pos.y).toFixed(3), heldLater: !!G.hold };
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(900);
+  // (e) HOLDING POSE → CRADLE: a palm held UP beside the ball (fingers out, slightly curled,
+  //     thumb up) draws it across into the pocket; it rides the hand up; tilt the palm
+  //     sideways and move off → it falls
+  const cupHand = (x, y, z, upAxis) => {                       // palm-up hand: fingers forward (−z), 'up' = the inner-palm side
+    const p = mk(V(x, y, z + 0.1));
+    const U = (dx, dz, up) => upAxis === 'y' ? V(x + dx, y + up, z + dz) : V(x - up, y + dx, z + dz);   // 'x': rolled 90° — palm faces −x
+    p[0] = U(0, 0.1, 0); p[9] = U(0, -0.1, 0); p[5] = U(0.045, -0.09, 0); p[13] = U(-0.02, -0.095, 0); p[17] = U(-0.06, -0.085, 0);
+    const cols = { 6: 0.045, 10: 0, 14: -0.02, 18: -0.06 };
+    for (const [pip, dx] of Object.entries(cols)) { const b = +pip; p[b] = U(dx, -0.13, 0.03); p[b + 1] = U(dx, -0.16, 0.06); p[b + 2] = U(dx, -0.18, 0.09); }
+    p[1] = U(0.05, 0.06, 0.01); p[2] = U(0.08, 0.02, 0.03); p[3] = U(0.1, -0.02, 0.05); p[4] = U(0.11, -0.05, 0.07);
+    return p;
+  };
+  const F = G.floorY(), Bc = G.sphere.pos.clone();
+  const hx = Bc.x + 0.28, hy = F + 0.03, hz = Bc.z - 0.06;
+  let cupPack = cupHand(hx, hy, hz, 'y');
+  window.__lab.AVSYNC.ovPacks = { L: cupPack, R: null };
+  await wait(1200);
+  const pocket = G._pose.left.pocket.clone();
+  const cradle = { pose: G._pose.left.pose, ny: +G._pose.left.n.y.toFixed(2), closure: +G._pose.left.closure.toFixed(2),
+                   dxz: +Math.hypot(G.sphere.pos.x - pocket.x, G.sphere.pos.z - pocket.z).toFixed(3), dy: +(G.sphere.pos.y - pocket.y).toFixed(3),
+                   cradle: G.cradle, held: !!G.hold, seek: G.seek, y0: +G.sphere.pos.y.toFixed(3) };
+  const liftTrace = [];
+  for (let k = 1; k <= 15; k++) { window.__lab.AVSYNC.ovPacks = { L: shift(cupPack, 0, 0.2 * k / 15, 0), R: null }; await wait(33); if (k % 3 === 0) liftTrace.push({ k, pocketY: +G._pose.left.pocket.y.toFixed(3), ballY: +G.sphere.pos.y.toFixed(3), cradle: G.cradle, seek: G.seek, held: !!G.hold }); }
+  cupPack = shift(cupPack, 0, 0.2, 0);
+  await wait(400);
+  const cradleLift = { rose: +(G.sphere.pos.y - cradle.y0).toFixed(3), cradle: G.cradle, held: !!G.hold, pocketY: +G._pose.left.pocket.y.toFixed(3), ballY: +G.sphere.pos.y.toFixed(3), liftTrace };
+  // tilt the palm sideways (inner side now +x) and move the hand off
+  let sidePack = cupHand(hx, hy + 0.2, hz, 'x');
+  window.__lab.AVSYNC.ovPacks = { L: sidePack, R: null };
+  await wait(100);
+  const cradleAfterTilt = G.cradle, yTiltStart = G.sphere.pos.y;
+  for (let k = 1; k <= 10; k++) { window.__lab.AVSYNC.ovPacks = { L: shift(sidePack, 0.35 * k / 10, 0, 0), R: null }; await wait(33); }
+  await wait(600);
+  const cradleRelease = { cradleAfterTilt, fell: +(cradleLift.ballY - G.sphere.pos.y).toFixed(3), yTiltStart: +yTiltStart.toFixed(3), cradleLater: G.cradle, held: !!G.hold, yEnd: +G.sphere.pos.y.toFixed(3), floor: +G.floorY().toFixed(3) };
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(900);
+  // (f) CLIP: shrink it, thumb tip and index tip on opposite sides → held; open the thumb → released
+  document.getElementById('slimeSizeDn').click(); document.getElementById('slimeSizeDn').click();
+  await wait(600);
+  const rc = 0.16 * G.userS, C = G.sphere.pos.clone();
+  const clipPack = (() => {
+    const p = mk(V(C.x, C.y - 0.3, C.z + 0.4));
+    p[0] = V(C.x, C.y - rc - 0.25, C.z); p[9] = V(C.x, C.y - rc - 0.05, C.z);      // palm BELOW the ball (outside it)
+    p[4] = V(C.x + rc + 0.015, C.y, C.z); p[3] = V(C.x + rc + 0.05, C.y - 0.01, C.z);
+    p[8] = V(C.x - rc - 0.013, C.y, C.z); p[7] = V(C.x - rc - 0.045, C.y + 0.01, C.z);
+    return p;
+  })();
+  window.__lab.AVSYNC.ovPacks = { L: clipPack, R: null };
+  await wait(300);
+  const clipGrab = { held: !!G.hold, type: G.hold ? G.hold.type : null, userS: +G.userS.toFixed(2) };
+  window.__lab.AVSYNC.ovPacks = { L: clipPack.map((q, i) => (i === 3 || i === 4 ? V(q.x + 0.08, q.y, q.z) : q)), R: null };
+  await wait(120);
+  const clipRelease = { held: !!G.hold };
+  window.__lab.AVSYNC.ovPacks = { L: null, R: null }; await wait(300);
+  document.getElementById('slimeSizeUp').click(); document.getElementById('slimeSizeUp').click();
+  await wait(900);
+  // ── RESISTANCE: an OPEN hand pressed into the ball is stopped at its surface (and pushes it, never enters it) ──
   const c0 = G.sphere.pos.clone();
   window.__lab.AVSYNC.ovPacks = { L: open(c0.x, c0.y, c0.z), R: null };     // palm centre AT the ball centre
   await wait(600);
   G.mesh.updateWorldMatrix(true, false); G.hull.begin(G.mesh);
   const Lp = window.__lab.AVSYNC.packs.L; let minGap = 9;
   for (let i = 0; i < 21; i++) { const g = G.hull.surfaceDistance(new T3.Vector3(Lp[i].x, Lp[i].y, Lp[i].z)); if (g < minGap) minGap = g; }
-  const resist = { minGap: +minGap.toFixed(3), grabbed: G.sphere.grabbed() };
+  const resist = { minGap: +minGap.toFixed(3), grabbed: !!G.hold };
   window.__lab.AVSYNC.ovPacks = { L: null, R: null };
   await wait(300);
   // ── SCALE by UI ──
@@ -115,10 +203,11 @@ const out = await page.evaluate(async () => {
   window.__lab.AVSYNC.ovPacks = { L: shelf, R: null };
   G.sphere.vel.set(0, 0, 0); G.sphere.pos.copy(p1);            // at rest, so "moved" measures the hand-over itself
   document.getElementById('slimeMorphBtn').click();
-  await wait(150);
+  const meltTrace = [];
+  for (let k = 0; k < 5; k++) { await wait(30); const st = G.stats(); meltTrace.push({ t: k, d: +Math.hypot(st.pos[0] - p1.x, st.pos[1] - p1.y, st.pos[2] - p1.z).toFixed(3), seek: G.seek, pose: G._pose.left.pose, rigid: +(1 - G.softness).toFixed(2) }); }
   const e = G.stats();
   const early = { phase: G.phase, state: G.state, softness: +G.softness.toFixed(2), particles: e.particles, cloud: e.cloud, tris: e.tris,
-                  moved: +Math.hypot(e.pos[0] - p1.x, e.pos[1] - p1.y, e.pos[2] - p1.z).toFixed(3), sphereHidden: !G.mesh.visible, surfVisible: G.surf.mc.visible };
+                  moved: +Math.hypot(e.pos[0] - p1.x, e.pos[1] - p1.y, e.pos[2] - p1.z).toFixed(3), sphereHidden: !G.mesh.visible, surfVisible: G.surf.mc.visible, meltTrace };
   await wait(2600);
   const m = G.stats();
   window.__probeShot = 'slime-on-hand';
@@ -148,7 +237,7 @@ const out = await page.evaluate(async () => {
   await wait(3500);
   const reglass = { phase: G.phase, state: G.state, softness: +G.softness.toFixed(3), sphereVisible: G.mesh.visible, surfVisible: G.surf.mc.visible, cloud: G.cloud() };
   window.__probeShot = 'done';
-  return { glass, stats, zBias, cupPull, resist, scale, early, slime, lift, fall, lens, reglass };
+  return { glass, stats, rest, openHover, zBias, backHand, wrapGrab, wrapLift, release, cradle, cradleLift, cradleRelease, clipGrab, clipRelease, resist, scale, early, slime, lift, fall, lens, reglass };
 });
 await shots;
 await browser.close();
@@ -161,16 +250,28 @@ if (!g.envMap) fail.push('no live reflection env map');
 if (g.collider !== true) fail.push('conform collider not streaming (fingers cannot wrap the ball): ' + g.collider);
 if (!out.stats.hullJson || !(out.stats.mass > 0)) fail.push('no live shape/mass stats: ' + JSON.stringify(out.stats));
 if (out.stats.volErr > 0.15) fail.push('stats volume off from a sphere by ' + (out.stats.volErr * 100).toFixed(0) + '%');
-if (Math.abs(out.zBias.gapNow - 0.18) > 0.05) fail.push('Z-BIAS: ball should rest at contact distance (0.18) from the reaching hand, got ' + out.zBias.gapNow);
-if (out.zBias.handMoved > 0.01 || out.cupPull.handMoved > 0.01) fail.push('SEEK pushed the HAND instead of moving the ball: ' + out.zBias.handMoved + ' / ' + out.cupPull.handMoved);
-if (out.cupPull.after > 0.06) fail.push('CUP PULL: cupping hand did not draw the ball into the pocket: ' + JSON.stringify(out.cupPull));
+if (out.rest.onFloor > 0.02 || out.rest.held) fail.push('ball did not come to rest on the floor under gravity: ' + JSON.stringify(out.rest));
+if (out.openHover.rose > 0.01 || out.openHover.held || out.openHover.dz > 0.02) fail.push('an OPEN hand over the ball floated / grabbed / pulled it: ' + JSON.stringify(out.openHover));
+if (Math.abs(out.zBias.gapNow - 0.18) > 0.05) fail.push('DEPTH BIAS: a closing hand should bring the ball to contact depth (0.18), got ' + out.zBias.gapNow);
+if (out.zBias.handMoved > 0.01) fail.push('DEPTH BIAS pushed the HAND instead: ' + out.zBias.handMoved);
+if (out.zBias.rose > 0.01 || out.zBias.held) fail.push('DEPTH BIAS lifted or grabbed the ball (must be z only): ' + JSON.stringify(out.zBias));
+if (out.backHand.held || out.backHand.moved > 0.02) fail.push('BACK OF HAND / fingers curled away must not grab or carry: ' + JSON.stringify(out.backHand));
+if (!out.wrapGrab.held || out.wrapGrab.type !== 'wrap') fail.push('fingers WRAPPED round the ball did not pick it up: ' + JSON.stringify(out.wrapGrab));
+if (out.wrapLift.rose < 0.1 || !out.wrapLift.held) fail.push('a wrapped ball did not come with the lifting hand: ' + JSON.stringify(out.wrapLift));
+if (out.release.heldAfterOpen || out.release.heldLater || out.release.fell < 0.08) fail.push('OPENING the fingers did not release the ball (must drop): ' + JSON.stringify(out.release));
+if (!out.cradle.pose) fail.push('HOLDING POSE not recognised (palm up, fingers out): ' + JSON.stringify(out.cradle));
+if (out.cradle.dxz > 0.05 || out.cradle.cradle !== 'left') fail.push('ball did not come across into the held-up palm pocket: ' + JSON.stringify(out.cradle));
+if (out.cradleLift.rose < 0.12 || out.cradleLift.cradle !== 'left') fail.push('cradled ball did not ride the hand up: ' + JSON.stringify(out.cradleLift));
+if (out.cradleRelease.cradleAfterTilt || (out.cradleRelease.fell < 0.08 && out.cradleRelease.yEnd - (out.cradleRelease.floor + 0.16) > 0.02)) fail.push('tilting the palm away did not let the ball roll off / fall: ' + JSON.stringify(out.cradleRelease));
+if (!out.clipGrab.held || out.clipGrab.type !== 'clip') fail.push('thumb+finger CLIP did not pick it up: ' + JSON.stringify(out.clipGrab));
+if (out.clipRelease.held) fail.push('opening the clip did not release the ball');
 if (out.resist.minGap < -0.006) fail.push('RESISTANCE: open hand passed INTO the ball: minGap ' + out.resist.minGap);
 if (out.resist.grabbed) fail.push('an OPEN hand must not grab the ball');
 if (Math.abs(out.scale.userS - 1.25) > 0.01 || Math.abs(out.scale.mesh - 1.25) > 0.01) fail.push('UI scale did not apply: ' + JSON.stringify(out.scale));
 if (Math.abs(out.scale.physR - 0.2) > 0.002 || (out.scale.colR !== null && Math.abs(out.scale.colR - 0.2) > 0.002)) fail.push('scale did not reach physics/conform radius: ' + JSON.stringify(out.scale));
 if (Math.abs(out.scale.massRatio - 1.953) > 0.05) fail.push('mass did not scale with volume (expected ×1.953): ' + out.scale.massRatio);
 if (out.early.phase !== 'cloud' || !out.early.sphereHidden || !out.early.surfVisible) fail.push('MAKE IT SLIME did not hand over to the cloud: ' + JSON.stringify(out.early));
-if (out.early.moved > 0.05) fail.push('the mass jumped on melt (must start where the ball was): moved ' + out.early.moved);
+if (out.early.meltTrace[0].d > 0.02) fail.push('the mass jumped on melt (must start where the ball was): first frame ' + out.early.meltTrace[0].d);
 if (out.early.softness > 0.6) fail.push('rigidity CUT instead of ramping (' + out.early.softness + ' at 150ms)');
 if (out.early.cloud !== out.early.particles || out.early.particles < 300) fail.push('cloud() is not the full particle set: ' + JSON.stringify(out.early));
 if (out.slime.softness < 0.9 || out.slime.state !== 'slime') fail.push('did not reach slime: ' + JSON.stringify(out.slime));

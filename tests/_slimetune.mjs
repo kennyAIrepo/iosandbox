@@ -41,15 +41,13 @@ function run(opts) {
   const gaps = bins.filter(b => b === 0).length, thin = Math.min(...bins);
   return { onHand, low, stuck: s.stuck, hLow: s.lowest, h0: s1.bbox[1], h1: s2.bbox[1], gaps, thin, bonds2: s2.bonds, low2: s2.lowest, ms: +ms.toFixed(1) };
 }
-const base = { n: 520, gravity: 2.5, alpha: 5, gamma: 0.15, kSpring: 0.8, visc: 0.85, band: 0.03, adhesion: 0.85, friction: 0.9, stickDrag: 0.7, maxSub: 1 / 60, breakAt: 2.0, k: 0, kNear: 40 };
+const base = { n: 520, gravity: 2.5, alpha: 5, gamma: 0.15, kSpring: 0.8, visc: 0.85, maxSub: 1 / 60, breakAt: 2.0, k: 0, kNear: 40, friction: 0.92, band: 0.04, stickDrag: 0.85 };
 const sets = [
-  { name: 'base', ...base },
-  { name: 'a1', ...base, alpha: 1 },
-  { name: 'a2', ...base, alpha: 2 },
-  { name: 'a12', ...base, alpha: 12 },
-  { name: 'gam.05', ...base, gamma: 0.05 },
-  { name: 'gam.3', ...base, gamma: 0.3 },
-  { name: 'g4', ...base, gravity: 4 },
-  { name: 'form1.1', ...base, formAt: 1.1 },
+  { name: 'a85m80', ...base, adhesion: 0.85, maxPull: 0.8 },
+  { name: 'a50m80', ...base, adhesion: 0.5, maxPull: 0.8 },
+  { name: 'a25m80', ...base, adhesion: 0.25, maxPull: 0.8 },
+  { name: 'a25m40', ...base, adhesion: 0.25, maxPull: 0.4 },
+  { name: 'a40m40', ...base, adhesion: 0.4, maxPull: 0.4 },
+  { name: 'a40m40s95', ...base, adhesion: 0.4, maxPull: 0.4, stickDrag: 0.95 },
 ];
 for (const s of sets) { const r = run(s); console.log(s.name.padEnd(10), JSON.stringify(r)); }

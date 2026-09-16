@@ -1023,6 +1023,7 @@ const nockCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.03
 // fingers WRAP it with depth-true occlusion — the same lane the cube and bow use
 const slimeCollider = { type: 'sphere', center: new THREE.Vector3(), radius: 0.16, active: false };
 const _sbTmpA = new THREE.Vector3(), _sbTmpB = new THREE.Vector3(), _sbTmpC = new THREE.Vector3();
+const _slP = new THREE.Vector3(), _slQ = new THREE.Quaternion(), _slQ2 = new THREE.Quaternion();
 
 // Hand PHYSICS bodies — joint colliders + velocities + palm frame, fed the
 // SAME world packs the rigs render, so physics matches pixels exactly.
@@ -1243,6 +1244,12 @@ const slimeLab = {
   sphere: new GrabbableSphere(SLIME_R, { gravity: -4.2, restitution: 0.42 }),
   center: new THREE.Vector3(0, 0, -2), lens: 'window', detail: 'medium', state: 'glass', target: 0, ramp: 1.4, hull: null, userS: 1, _scal: null, _hullTick: 0, density: 2500, seek: null, seekHand: null, metrics: null, ms: null,
   _hb: { L: null, R: null },
+  hold: null, _velHist: [],                    // { slot, type:'wrap'|'clip', posOff, quatOff } — carried by the fingers
+  cradle: null,                                // slot of the HOLDING-POSE hand it rests in (palm up, cupped)
+  _cen: new THREE.Vector3(),
+  _pose: { left: { pose: false, pc: new THREE.Vector3(), n: new THREE.Vector3(), pocket: new THREE.Vector3(), closure: 0, evi: 0, sign: 0 },
+           right: { pose: false, pc: new THREE.Vector3(), n: new THREE.Vector3(), pocket: new THREE.Vector3(), closure: 0, evi: 0, sign: 0 } },
+  _gT: new Uint8Array(21), _gN: new Array(21).fill(0).map(() => new THREE.Vector3()),
   get softness() { return this.sim && this.sim.n ? 1 - this.sim.rigid : 0; },   // 0 glass … 1 free slime (live)
   get phase() { return this.sim && this.sim.n ? 'cloud' : 'sphere'; },           // which representation is live
   init() {
@@ -1251,7 +1258,7 @@ const slimeLab = {
     this.mesh.renderOrder = 30;
     // MESH-TRUE shape of the rigid ball: a PropHull baked from it — the grab
     // gate, hand resistance and stats() read the real surface
-    this.hull = PropHull.fromObject(this.mesh, { bins: 10 });
+    this.hull = PropHull.sphere(SLIME_R);      // EXACT: a capsule chain baked from a sphere over-reaches
     scene.add(this.mesh);
     // the slime: particle cloud + a surface re-meshed from it every frame,
     // rendered with the SAME glass (it keeps the see-through look)
@@ -1294,14 +1301,14 @@ const slimeLab = {
     const R = SLIME_R * this.userS;
     this.sim.spawn(this.sphere.pos, R * CLOUD_R, this.sphere.vel);
     this.sim.rigid = 1; this._rampT = performance.now();   // still a ball this frame; update() ramps it down
-    this.sphere.held = null;
+    this.sphere.held = null; this.hold = null; this.cradle = null; this._velHist.length = 0;
     this.mesh.visible = false; this.surf.mc.visible = true;
     slimeCollider.active = false;
     if (this._hb.L) this._hb.L.present = false; if (this._hb.R) this._hb.R.present = false;
   },
   _freeze() {                              // cloud → sphere, at the cloud's centroid
     const c = this.sim.centroid(new THREE.Vector3());
-    this.sphere.reset(c); this.sim.n = 0;
+    this.sphere.reset(c); this.sim.n = 0; this.hold = null; this.cradle = null; this._velHist.length = 0;
     this.surf.mc.visible = false; this.surf.mc.geometry.setDrawRange(0, 0);
     this.mesh.visible = this.on;
     this.mesh.position.copy(c); this.mesh.updateMatrixWorld(true);
@@ -1310,6 +1317,7 @@ const slimeLab = {
     views.workspaceCenter(camera, this.center);
     if (this.sim && this.sim.n) { this.sim.n = 0; this.surf.mc.visible = false; this.mesh.visible = this.on; }
     this.sphere.reset(this.center.clone().add(new THREE.Vector3(-0.35, 0.1, 0)));
+    this.hold = null; this.cradle = null; this._velHist.length = 0;
   },
   setLens(mode) { this.lens = mode; if (this.mat) this.mat.setLens(mode); },
   setScale(sc) {                             // UI ± buttons and the two-hand pinch share this
@@ -1321,6 +1329,61 @@ const slimeLab = {
     this.mat.thickness = SLIME_R * this.userS * 1.6;
     this.mesh.updateMatrixWorld(true);
     if (this.sim && this.sim.n) { const c = this.sim.centroid(new THREE.Vector3()), w = this.sim.rigid; this.sim.spawn(c, SLIME_R * this.userS * CLOUD_R); this.sim.rigid = w; }
+  },
+  /** The HOLDING POSE, measured per hand: palm facing UP (inner-palm normal
+   *  MEASURED the HandBody way — thumb column volar of the knuckle plane +
+   *  fingertip curl, decay-latched; never a handedness label), fingers out and
+   *  slightly curled. pocket = where a ball sits in that hand (one radius up the
+   *  inner normal from the palm centre). Updates this._pose[slot]. */
+  _holdPose(slot, pack, R) {
+    const P = this._pose[slot]; P.pose = false;
+    if (!pack || !pack[0] || !pack[9] || !pack[5] || !pack[17]) return P;
+    P.pc.set(0, 0, 0); for (const i of [0, 5, 9, 13, 17]) { const q = pack[i] || pack[0]; P.pc.x += q.x * 0.2; P.pc.y += q.y * 0.2; P.pc.z += q.z * 0.2; }
+    _sbTmpA.set(pack[9].x - pack[0].x, pack[9].y - pack[0].y, pack[9].z - pack[0].z);
+    const span = _sbTmpA.length(); if (span < 1e-4) return P;
+    _sbTmpA.normalize();
+    _sbTmpB.set(pack[5].x - pack[17].x, pack[5].y - pack[17].y, pack[5].z - pack[17].z);
+    _sbTmpC.crossVectors(_sbTmpA, _sbTmpB); if (_sbTmpC.lengthSq() < 1e-10) return P;
+    _sbTmpC.normalize();
+    let volar = 0;
+    for (const i of [1, 2]) if (pack[i]) volar += (pack[i].x - pack[0].x) * _sbTmpC.x + (pack[i].y - pack[0].y) * _sbTmpC.y + (pack[i].z - pack[0].z) * _sbTmpC.z;
+    for (const i of [8, 12, 16, 20]) if (pack[i]) volar += ((pack[i].x - P.pc.x) * _sbTmpC.x + (pack[i].y - P.pc.y) * _sbTmpC.y + (pack[i].z - P.pc.z) * _sbTmpC.z) * 0.5;
+    volar /= span;
+    P.evi = P.sign === 0 ? volar : P.evi * 0.85 + volar * 0.15;
+    if (P.sign === 0 || Math.abs(P.evi) > 0.04) P.sign = P.evi >= 0 ? 1 : (P.evi < 0 ? -1 : 0);
+    if (P.sign === 0) return P;
+    P.n.copy(_sbTmpC).multiplyScalar(P.sign);
+    P.closure = _closure(pack);
+    P.pocket.copy(P.pc).addScaledVector(P.n, R + 0.04);
+    P.pose = P.n.y > 0.4 && P.closure > 0.02 && P.closure < 0.8;
+    return P;
+  },
+  /** MESH-TRUE grab gate (the bow's doctrine). Every joint sphere is tested
+   *  against the hull (gap ≤ skin = touching) and its contact NORMAL kept:
+   *    wrap — a palm-region joint touches AND ≥2 finger joints touch with normals
+   *           opposing the palm contact: the ball sits BETWEEN palm and fingers
+   *    clip — a thumb joint touches AND an index/middle joint touches on the
+   *           opposite side (normals opposing)
+   *  Anything else — beside it, over it, under it, the back of the hand, fingers
+   *  curled away — is NOT a grab. Returns { type } or null. */
+  _wrapGrab(pack, skin) {
+    if (!this.hull || !pack || !pack[0]) return null;
+    const H = this.hull.begin(this.mesh), rad = _packRadii(pack), T = this._gT, N = this._gN;
+    for (let i = 0; i < 21; i++) {
+      const q = pack[i]; T[i] = 0; if (!q) continue;
+      const g = H.closest(_sbTmpA.set(q.x, q.y, q.z), null, N[i]) - rad[i];
+      if (g <= skin && g > -0.03) T[i] = 1;    // touching — a joint sunk deeper is interpenetration, not a grip
+    }
+    // palm-side contact normal (average of touching palm-region joints; a true palm joint required)
+    _sbTmpB.set(0, 0, 0); let np = 0, palm = 0;
+    for (const i of [0, 1, 5, 9, 13, 17]) if (T[i]) { _sbTmpB.add(N[i]); np++; if (i !== 1) palm++; }
+    if (np && palm) {
+      _sbTmpB.normalize(); let opp = 0;
+      for (const i of [6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20]) if (T[i] && N[i].dot(_sbTmpB) < -0.2) opp++;
+      if (opp >= 2) return { type: 'wrap' };
+    }
+    for (const t of [3, 4]) if (T[t]) for (const f of [7, 8, 11, 12]) if (T[f] && N[f].dot(N[t]) < -0.2) return { type: 'clip' };
+    return null;
   },
   /** THE live point cloud (Float32Array n×3, world metres) — null while rigid glass. */
   cloud() { return this.sim && this.sim.n ? this.sim.x : null; },
@@ -1348,7 +1411,7 @@ const slimeLab = {
     return { state: this.state, phase: 'sphere', softness: 0, scale: sc, radius: R,
              volume_m3: +vol.toFixed(5), mass_kg: +(vol * this.density).toFixed(3), verts: P.count,
              bbox: bb.toArray().map(v => +v.toFixed(3)), pos: this.sphere.pos.toArray().map(v => +v.toFixed(3)),
-             vel: this.sphere.vel.toArray().map(v => +v.toFixed(2)), held: this.sphere.grabbed(),
+             vel: this.sphere.vel.toArray().map(v => +v.toFixed(2)), held: !!this.hold, hold: this.hold ? { slot: this.hold.slot, type: this.hold.type } : null, cradle: this.cradle,
              hull: this.hull ? { segs: this.hull.segs.length, json: this.hull.toJSON() } : null };
   },
   toggle(on) {
@@ -1360,7 +1423,7 @@ const slimeLab = {
     if (this.mesh) this.mesh.visible = on;
     if (this.surf) this.surf.mc.visible = on && this.sim.n > 0;
     if (this.backdrop) this.backdrop.visible = false;
-    if (!on) slimeCollider.active = false;
+    if (!on) { slimeCollider.active = false; this.hold = null; this._velHist.length = 0; }
   },
   floorY() { return S.mode === 'mirror' ? this.center.y - 1.05 : 0; },
   /** the hands as the sim wants them: 21 joints, live radii, per-joint velocity
@@ -1407,11 +1470,23 @@ const slimeLab = {
       const stepR = dtr / this.ramp;
       this.sim.rigid = Math.abs(cur - rt) <= stepR ? rt : cur + Math.sign(rt - cur) * stepR;
       const hands = this._hands(pk, dt);
+      this.seek = null; this.seekHand = null;
+      const c = this.sim.centroid(this._cen);
+      // HOLDING POSE → the slime comes ACROSS to the palm pocket (x/z; gravity
+      // drops it onto the hand), then adhesion keeps it there
+      for (const slot of ['L', 'R']) {
+        const pack = pk && pk[slot]; if (!pack || !pack[0]) continue;
+        const P = this._holdPose(slot === 'L' ? 'left' : 'right', pack, R); if (!P.pose) continue;
+        const dx = P.pocket.x - c.x, dy = P.pocket.y - c.y, dz = P.pocket.z - c.z;
+        if (Math.hypot(dx, dz) > R * 2.5 || dy > R * 0.8 || Math.abs(dy) > 0.9) continue;
+        const k = Math.min(1, dt * 2.5), x = this.sim.x, xp = this.sim.xp;
+        for (let i = 0; i < x.length; i += 3) { x[i] += dx * k; xp[i] += dx * k; x[i + 2] += dz * k; xp[i + 2] += dz * k; }
+        c.x += dx * k; c.z += dz * k;
+        this.seek = 'pocket'; break;
+      }
       // Z-BIAS (cube doctrine): a FREE cloud — nothing stuck to a hand — comes
       // to the reaching hand's contact depth, so a hand can always meet it
-      this.seek = null; this.seekHand = null;
-      const c = this.sim.centroid(_sbTmpA);
-      if (hands.length && !(this.metrics && this.metrics.stuck > 0)) {
+      if (!this.seek && hands.length && !(this.metrics && this.metrics.stuck > 0)) {
         let best = null, bd = Infinity;
         for (const hb of hands) {
           const pc = _sbTmpB.copy(hb.joints[0]).lerp(hb.joints[9], 0.5);
@@ -1440,85 +1515,147 @@ const slimeLab = {
       if (this.target < 0.02 && this.sim.rigid >= 1) this._freeze();      // MAKE IT GLASS completed
       return;
     }
-    // ══ GLASS (rigid sphere) lane ══
-    // ── two-hand PINCH = SCALE (the DEI basketball / cube gesture): pinch
-    // with both hands around the ball, pull apart / squeeze to resize ──
+    // ══ GLASS (rigid sphere) lane — BALL DOCTRINE (the bow's lane, never the cube's):
+    //   · CARRIED only when fingers WRAP it (palm-side contact + finger contacts on
+    //     the far side) or CLIP it (thumb + fingertip on opposite sides) — mesh-true,
+    //     from the hull; fingers opened = released THAT frame (falls, keeps velocity)
+    //   · CRADLED in the HOLDING POSE (palm up, fingers out and slightly curled):
+    //     it comes to the palm pocket, sits there and rides the hand while the palm
+    //     stays up; tilt the palm away and it rolls off
+    //   · SUPPORTED by any hand: it is pushed out of the joint spheres (the ball
+    //     yields, the tracked hand is the anchor) — it never passes through a hand,
+    //     a hand never passes into it (residual hand-stop) — and gravity is always on
+    //   · the back of a hand, a hand beside it, over it: nothing. It never floats.
     const HL = handBodies.left, HR = handBodies.right;
     const twoPinch = HL.present && HR.present && HL.pinch > 0.7 && HR.pinch > 0.7;
     let scaling = false;
-    if (twoPinch) {
+    if (twoPinch && !this.hold) {                     // two-hand PINCH = SCALE gesture (resizes, never moves it)
       const mid = HL.pinchPoint.clone().add(HR.pinchPoint).multiplyScalar(0.5);
       const d = HL.pinchPoint.distanceTo(HR.pinchPoint);
-      if (this._scal || mid.distanceTo(this.sphere.pos) < SLIME_R * this.userS + 0.25) {
+      if (this._scal || mid.distanceTo(this.sphere.pos) < R + 0.12) {
         if (!this._scal) this._scal = { d0: Math.max(d, 1e-3), u0: this.userS };
         this.setScale(this._scal.u0 * d / this._scal.d0);
-        this.sphere.pos.lerp(mid, 0.4); this.sphere.vel.set(0, 0, 0);   // held between the pinches
         scaling = true;
       }
     }
     if (!scaling) this._scal = null;
-    // ── SEEK THE HAND (the cube's Z-BIAS doctrine, plus the grab gesture):
-    //  · z-bias — a free ball's depth eases to CONTACT distance from the
-    //    nearest palm over it on screen, so a reaching hand can ALWAYS touch it
-    //  · cup pull — fingers curling to wrap (closure 0.25…0.85) draw the ball
-    //    into the pocket along the inner-palm normal ──
-    const hands = pk ? [pk.L, pk.R].filter(h => h && h[0] && h[9]) : [];
+    this.mesh.updateWorldMatrix(true, false);
+    const hands = pk ? [['left', pk.L], ['right', pk.R]].filter(e => e[1] && e[1][0] && e[1][9]) : [];
+    for (const [slot, pack] of hands) this._holdPose(slot, pack, R);
     this.seek = null; this.seekHand = null;
-    if (!this.sphere.grabbed() && !scaling && hands.length) {
-      let best = null, bd = Infinity;
-      for (const h of hands) {
-        const pc = _sbTmpA.copy(h[0]).lerp(h[9], 0.5);
-        const dxy = Math.hypot(pc.x - this.sphere.pos.x, pc.y - this.sphere.pos.y);
-        if (dxy < bd) { bd = dxy; best = h; }
+    // ── HOLD (wrap/clip): re-checked EVERY frame (looser skin = hysteresis);
+    //    the moment it is gone — fingers opened, hand gone — the ball is released ──
+    if (this.hold) {
+      const e = hands.find(h => h[0] === this.hold.slot);
+      const g = e ? this._wrapGrab(e[1], 0.03) : null;
+      if (!g) {
+        _sbTmpC.set(0, 0, 0); for (const v of this._velHist) _sbTmpC.add(v);
+        if (this._velHist.length) _sbTmpC.divideScalar(this._velHist.length);
+        this.sphere.vel.copy(_sbTmpC);                // thrown / dropped with the hand's velocity
+        this.hold = null; this._velHist.length = 0;
+      } else {
+        _palmPose(e[1], _slP, _slQ);                  // ride the palm frame (translate + rotate with the hand)
+        _sbTmpB.copy(this.hold.posOff).applyQuaternion(_slQ).add(_slP);
+        _sbTmpC.copy(this.sphere.pos);
+        this.sphere.pos.lerp(_sbTmpB, 0.6);
+        _slQ2.copy(_slQ).multiply(this.hold.quatOff); this.sphere.quat.slerp(_slQ2, 0.5);
+        _sbTmpC.subVectors(this.sphere.pos, _sbTmpC).divideScalar(Math.max(dt, 1e-3));
+        this._velHist.push(_sbTmpC.clone()); if (this._velHist.length > 6) this._velHist.shift();
+        this.sphere.vel.copy(_sbTmpC);
+        this.hold.type = g.type;
       }
-      if (best && bd < R * 3.2) {
-        this.seekHand = best;
-        const pc = _sbTmpA.copy(best[0]).lerp(best[9], 0.5);
-        const cl = _closure(best);
-        // inner-palm normal: MEASURED (HandBody.palmOut, chirality-latched) when
-        // that hand is live, else the curl direction (fingertips − palm)
-        const hb = handBodies[best === pk.L ? 'left' : 'right'];
-        _sbTmpB.set(0, 0, 0); for (const t of [8, 12, 16, 20]) _sbTmpB.add(_sbTmpC.copy(best[t]));
-        _sbTmpB.multiplyScalar(0.25).sub(pc);
-        if (hb && hb.present && hb.palmSign !== 0) _sbTmpB.copy(hb.palmOut);
-        if (_sbTmpB.lengthSq() < 1e-8) _sbTmpB.set(0, 0, 1);
+    }
+    // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (4mm skin) ──
+    if (!this.hold && !scaling) for (const [slot, pack] of hands) {
+      const g = this._wrapGrab(pack, 0.006);
+      if (!g) continue;
+      _palmPose(pack, _slP, _slQ);
+      this.hold = { slot, type: g.type,
+                    posOff: _sbTmpB.copy(this.sphere.pos).sub(_slP).applyQuaternion(_slQ2.copy(_slQ).invert()).clone(),
+                    quatOff: _slQ2.copy(_slQ).invert().multiply(this.sphere.quat).clone() };
+      this._velHist.length = 0; this.sphere.vel.set(0, 0, 0); this.cradle = null;
+      break;
+    }
+    // ── CRADLE / POCKET ATTRACTION (the holding pose): a free ball near a palm
+    //    held up comes ACROSS to the pocket (x/z — gravity does the falling; it
+    //    is never lifted) and, once in it, rides the hand while the palm stays up ──
+    let cradleP = null;
+    if (!this.hold && !scaling) {
+      if (this.cradle) {
+        const P = this._pose[this.cradle], e = hands.find(h => h[0] === this.cradle);
+        if (e && P.pose && P.n.y > 0.3 && this.sphere.pos.distanceTo(P.pocket) < R * 1.1) cradleP = P;
+        else this.cradle = null;                      // palm tilted / hand gone → it rolls off, keeps its velocity
+      }
+      if (!this.cradle) for (const [slot] of hands) {
+        const P = this._pose[slot]; if (!P.pose) continue;
+        const dx = P.pocket.x - this.sphere.pos.x, dy = P.pocket.y - this.sphere.pos.y, dz = P.pocket.z - this.sphere.pos.z;
+        if (Math.hypot(dx, dz) > R * 2.5 || dy > R * 0.8 || Math.abs(dy) > 0.9) continue;   // in reach, not above the ball
+        const k = Math.min(1, dt * 3);
+        this.sphere.pos.x += dx * k; this.sphere.pos.z += dz * k;
+        this.sphere.vel.x *= 0.8; this.sphere.vel.z *= 0.8;
+        this.seek = 'pocket'; this.seekHand = hands.find(h => h[0] === slot)[1];
+        if (Math.hypot(dx, dy, dz) < R * 0.6) { this.cradle = slot; cradleP = P; }
+        break;
+      }
+    }
+    // ── DEPTH BIAS: a hand CLOSING over the ball on screen but at another depth
+    //    (the camera cannot place it) has the ball's z come to contact distance —
+    //    z only, gravity untouched, never for an open hand ──
+    if (!this.hold && !scaling && !this.seek) for (const [slot, pack] of hands) {
+      if (_closure(pack) < 0.2) continue;
+      const pc = _sbTmpA.copy(pack[0]).lerp(pack[9], 0.5);
+      if (Math.hypot(pc.x - this.sphere.pos.x, pc.y - this.sphere.pos.y) > R * 1.5) continue;
+      if (Math.abs(pc.z - this.sphere.pos.z) <= R + 0.03) continue;     // already within reach in depth
+      const side = Math.sign(this.sphere.pos.z - pc.z) || -1;
+      const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, pc.z + side * (R + 0.02)));
+      this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 4);
+      this.seek = 'z'; this.seekHand = pack;
+      break;
+    }
+    // ── free flight: gravity ALWAYS on; the sandbox lane only integrates + floor
+    //    (its own grab logic — the cube's anchor-radius grab — is never given a hand) ──
+    if (!this.hold && !scaling && !cradleP) this.sphere.update(dt, [], this.floorY());
+    // ── SUPPORT: a free ball is pushed OUT of every hand's joint spheres — it
+    //    rests on a palm, is batted by a hand, never passes through one ──
+    if (!this.hold && !scaling && this.hull) {
+      this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
+      const H = this.hull.begin(this.mesh);
+      for (const [slot, pack] of hands) {
+        _sbTmpB.set(0, 0, 0);
+        if (!H.pushOut(pack, _packRadii(pack), _sbTmpB)) continue;
+        const m = _sbTmpB.length(); if (m < 1e-6) continue;
+        if (m > 0.02) _sbTmpB.multiplyScalar(0.02 / m);       // gentle: never flung — the residual stops the hand instead
+        this.sphere.pos.add(_sbTmpB);
         _sbTmpB.normalize();
-        if (cl > 0.25 && cl < 0.85) {
-          _sbTmpB.multiplyScalar(R + 0.015).add(pc);
-          this.sphere.pos.lerp(_sbTmpB, Math.min(1, dt * 5));
-          this.sphere.vel.multiplyScalar(0.7);
-          this.seek = 'cup';
-        } else if (Math.abs(pc.z - this.sphere.pos.z) > R + 0.03) {         // only when it would miss in depth
-          const side = Math.sign(this.sphere.pos.z - pc.z) || -1;
-          const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, pc.z + side * (R + 0.02)));
-          this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 6);
-          this.seek = 'z';
-        }
+        const vn = this.sphere.vel.dot(_sbTmpB);
+        if (vn < 0) this.sphere.vel.addScaledVector(_sbTmpB, -vn);   // no bounce into the hand
+        this.sphere.vel.multiplyScalar(0.85);                         // contact friction: it settles, does not skate off
+        this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false); H.begin(this.mesh);
       }
     }
-    // ── HAND-STOP (mesh-true, from the hull): a hand meeting the ball's surface
-    // STOPS there — the holohand never passes into the glass. The holder is
-    // exempt (it wraps via the conform collider); a free ball never pushes back
-    // the hand it is coming to ──
-    if (this.hull && pk && !scaling) {
-      this.mesh.updateWorldMatrix(true, false);
-      const holder = this.sphere.held ? this.sphere.held.slot : null;
-      const share = this.sphere.grabbed() ? 1.0 : 0.6;
-      if (pk.L && pk.L[0] && holder !== 'left' && !(this.seek && this.seekHand === pk.L)) _handResist(this.hull, this.mesh, pk.L, share);
-      if (pk.R && pk.R[0] && holder !== 'right' && !(this.seek && this.seekHand === pk.R)) _handResist(this.hull, this.mesh, pk.R, share);
+    // ── CRADLE follow (after physics, so it stays in the pocket) ──
+    if (cradleP && !this.hold) {
+      _sbTmpC.copy(this.sphere.pos);
+      this.sphere.pos.lerp(cradleP.pocket, 0.6);
+      _sbTmpC.subVectors(this.sphere.pos, _sbTmpC).divideScalar(Math.max(dt, 1e-3));
+      this.sphere.vel.copy(_sbTmpC);               // leaves the palm with the palm's velocity when tilted off
     }
-    // while a hand is being SOUGHT, gravity yields: the ball floats to the hand
-    if (!scaling) {
-      const g0 = this.sphere.gravity;
-      if (this.seek) { this.sphere.gravity = 0; this.sphere.vel.multiplyScalar(0.5); }
-      this.sphere.update(dt, ballColliders, this.floorY());
-      this.sphere.gravity = g0;
+    // ── HAND-STOP residual (mesh-true): whatever penetration is left after the
+    //    ball yielded (it is on the floor, or held rigid) stops the HAND — the
+    //    holohand never passes into the glass. The carrying hand is exempt ──
+    if (this.hull && pk && !scaling) {
+      this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
+      const holder = this.hold ? this.hold.slot : null;
+      for (const [slot, pack] of hands) {
+        if (slot === holder || slot === this.cradle) continue;   // the carrying palm is the anchor: the ball yields to it
+        _handResist(this.hull, this.mesh, pack, 1.0);
+      }
     }
     // ── conform collider: ghost fingers wrap the live ball, depth-true ──
     slimeCollider.center.copy(this.sphere.pos);
     slimeCollider.radius = SLIME_R * this.userS;
     slimeCollider.active = true;
-    if (!this.sphere.grabbed() && this.sphere.pos.distanceTo(this.center) > 3.4) this.sphere.reset();
+    if (!this.hold && this.sphere.pos.distanceTo(this.center) > 3.4) { this.sphere.reset(); this.hold = null; this.cradle = null; }
     this.mesh.position.copy(this.sphere.pos);
     this.mesh.quaternion.copy(this.sphere.quat);
     this.mesh.updateMatrixWorld(true);

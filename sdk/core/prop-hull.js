@@ -112,6 +112,9 @@ export class PropHull {
   toJSON() {
     return { v: 1, segs: this.segs.map(s => ({ a: s.a.toArray(), b: s.b.toArray(), ra: s.ra, rb: s.rb })) };
   }
+  /** An EXACT sphere (one zero-length capsule) — for props that are true spheres;
+   *  a capsule chain baked from a sphere mesh over-reaches along its primary axis. */
+  static sphere(r) { return new PropHull([{ a: new THREE.Vector3(), b: new THREE.Vector3(), ra: r, rb: r }]); }
   static fromJSON(j) {
     return new PropHull(j.segs.map(s => ({
       a: new THREE.Vector3().fromArray(s.a), b: new THREE.Vector3().fromArray(s.b), ra: s.ra, rb: s.rb })));

@@ -60,11 +60,11 @@ export class SlimeSim {
       visc: 0.85,       // XSPH velocity blend per substep (0 water … 0.9 goo)
       maxSub: 1 / 60,   // substep cap
       skin: 0.006,      // contact skin over the finger capsule (m)
-      band: 0.03,       // adhesion band beyond the skin (m): slime this close clings
-      adhesion: 0.85,   // pull toward the skin per substep inside the band
-      friction: 0.9,    // tangential slip removed on contact (positional)
-      stickDrag: 0.7,   // slip/velocity taken from the hand inside the band
-      maxPull: 0.5,     // adhesion pull cap per substep, in particle spacings (a fast yank detaches)
+      band: 0.04,       // adhesion band beyond the skin (m): slime this close clings
+      adhesion: 0.5,    // pull toward the skin per substep inside the band (scaled by how melted it is)
+      friction: 0.92,   // tangential slip removed on contact (positional)
+      stickDrag: 0.85,  // slip/velocity taken from the hand inside the band
+      maxPull: 0.4,     // adhesion pull cap per substep, in particle spacings (a fast yank detaches)
       breakAt: 2.0,     // a bond stretched past breakAt·h snaps
       formAt: 1.35,     // new bonds only form within formAt·spacing (close contact)
       maxSpeed: 4.0,    // m/s clamp (stability)
@@ -320,7 +320,9 @@ export class SlimeSim {
       }
     }
     // collisions: finger capsules (with adhesion), extra spheres, floor
-    const skin = o.skin, band = o.band, adh = o.adhesion, fr = o.friction, sd = o.stickDrag, stuck = this.stuck;
+    const skin = o.skin, band = o.band, fr = o.friction, stuck = this.stuck;
+    // stickiness is a SLIME property: none while it is glass, full once it has melted
+    const soft = 1 - this.rigid, adh = o.adhesion * soft, sd = o.stickDrag * soft;
     stuck.fill(0);
     for (let i = 0; i < n; i++) {
       const j = i * 3;
