@@ -1366,8 +1366,15 @@ const slimeLab = {
    *           opposite side (normals opposing)
    *  Anything else — beside it, over it, under it, the back of the hand, fingers
    *  curled away — is NOT a grab. Returns { type } or null. */
-  _wrapGrab(pack, skin) {
+  _wrapGrab(pack, skin, slot) {
     if (!this.hull || !pack || !pack[0]) return null;
+    // the ball must sit on the INNER side of the palm (measured normal) — the
+    // back of the hand has the same joint spheres and must never grip
+    const PS = slot ? this._pose[slot] : null;
+    if (PS && PS.sign !== 0) {
+      _sbTmpC.set(this.sphere.pos.x - PS.pc.x, this.sphere.pos.y - PS.pc.y, this.sphere.pos.z - PS.pc.z);
+      if (_sbTmpC.dot(PS.n) < 0) return null;
+    }
     const H = this.hull.begin(this.mesh), rad = _packRadii(pack), T = this._gT, N = this._gN;
     for (let i = 0; i < 21; i++) {
       const q = pack[i]; T[i] = 0; if (!q) continue;
@@ -1378,9 +1385,12 @@ const slimeLab = {
     _sbTmpB.set(0, 0, 0); let np = 0, palm = 0;
     for (const i of [0, 1, 5, 9, 13, 17]) if (T[i]) { _sbTmpB.add(N[i]); np++; if (i !== 1) palm++; }
     if (np && palm) {
-      _sbTmpB.normalize(); let opp = 0;
-      for (const i of [6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20]) if (T[i] && N[i].dot(_sbTmpB) < -0.2) opp++;
-      if (opp >= 2) return { type: 'wrap' };
+      // CLAW / WRAP: finger joints touching round the SIDE or far side (contact
+      // normal > ~72° from the palm contact), from at least two fingers — a
+      // flat hand pressed on it (normals within ~70°) is not a grip
+      _sbTmpB.normalize(); let opp = 0, fingers = 0;
+      for (const i of [6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20]) if (T[i] && N[i].dot(_sbTmpB) < 0.3) { opp++; fingers |= 1 << ((i - 5) / 4 | 0); }
+      if (opp >= 2 && (fingers & (fingers - 1)) !== 0) return { type: 'wrap' };
     }
     for (const t of [3, 4]) if (T[t]) for (const f of [7, 8, 11, 12]) if (T[f] && N[f].dot(N[t]) < -0.2) return { type: 'clip' };
     return null;
@@ -1532,7 +1542,7 @@ const slimeLab = {
     if (twoPinch && !this.hold) {                     // two-hand PINCH = SCALE gesture (resizes, never moves it)
       const mid = HL.pinchPoint.clone().add(HR.pinchPoint).multiplyScalar(0.5);
       const d = HL.pinchPoint.distanceTo(HR.pinchPoint);
-      if (this._scal || mid.distanceTo(this.sphere.pos) < R + 0.12) {
+      if (this._scal || Math.hypot(mid.x - this.sphere.pos.x, mid.y - this.sphere.pos.y) < R + 0.15) {
         if (!this._scal) this._scal = { d0: Math.max(d, 1e-3), u0: this.userS };
         this.setScale(this._scal.u0 * d / this._scal.d0);
         scaling = true;
@@ -1547,7 +1557,7 @@ const slimeLab = {
     //    the moment it is gone — fingers opened, hand gone — the ball is released ──
     if (this.hold) {
       const e = hands.find(h => h[0] === this.hold.slot);
-      const g = e ? this._wrapGrab(e[1], 0.03) : null;
+      const g = e ? this._wrapGrab(e[1], 0.03, this.hold.slot) : null;
       if (!g) {
         _sbTmpC.set(0, 0, 0); for (const v of this._velHist) _sbTmpC.add(v);
         if (this._velHist.length) _sbTmpC.divideScalar(this._velHist.length);
@@ -1567,7 +1577,7 @@ const slimeLab = {
     }
     // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (4mm skin) ──
     if (!this.hold && !scaling) for (const [slot, pack] of hands) {
-      const g = this._wrapGrab(pack, 0.006);
+      const g = this._wrapGrab(pack, 0.006, slot);
       if (!g) continue;
       _palmPose(pack, _slP, _slQ);
       this.hold = { slot, type: g.type,
@@ -1598,17 +1608,25 @@ const slimeLab = {
         break;
       }
     }
-    // ── DEPTH BIAS: a hand CLOSING over the ball on screen but at another depth
-    //    (the camera cannot place it) has the ball's z come to contact distance —
-    //    z only, gravity untouched, never for an open hand ──
-    if (!this.hold && !scaling && !this.seek) for (const [slot, pack] of hands) {
-      if (_closure(pack) < 0.2) continue;
-      const pc = _sbTmpA.copy(pack[0]).lerp(pack[9], 0.5);
-      if (Math.hypot(pc.x - this.sphere.pos.x, pc.y - this.sphere.pos.y) > R * 1.5) continue;
-      if (Math.abs(pc.z - this.sphere.pos.z) <= R + 0.03) continue;     // already within reach in depth
+    // ── DEPTH BIAS (the cube doctrine): the camera cannot place a hand in
+    //    depth, so a hand over the ball on screen has the ball's z come to
+    //    CONTACT depth on the hand's INNER (palm) side — z only, gravity
+    //    untouched, never lifted, never moved on screen. From there the joint
+    //    spheres meet it: it is pushed, stopped, cradled, gripped ──
+    if (!this.hold && !this.cradle && !scaling && !this.seek) for (const [slot, pack] of hands) {
+      let near = false;
+      for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.2) { near = true; break; } }
+      if (!near) continue;
+      // contact depth on the side the ball is ALREADY on (never through the hand);
+      // a palm facing the camera keeps the full offset, a palm facing down (fingers
+      // coming round it) brings the ball almost to the hand depth itself
+      const P = this._pose[slot], pc = _sbTmpA.copy(pack[0]).lerp(pack[9], 0.5);
       const side = Math.sign(this.sphere.pos.z - pc.z) || -1;
-      const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, pc.z + side * (R + 0.02)));
-      this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 4);
+      const off = (R + 0.03) * (P.sign !== 0 ? Math.max(0.15, Math.abs(P.n.z)) : 1);
+      const zt0 = pc.z + side * off;
+      if (Math.abs(zt0 - this.sphere.pos.z) < 0.01) continue;
+      const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, zt0));
+      this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 6);
       this.seek = 'z'; this.seekHand = pack;
       break;
     }

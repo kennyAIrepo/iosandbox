@@ -75,7 +75,8 @@ const out = await page.evaluate(async () => {
   // (a) an OPEN hand over the ball on screen, 0.35 m nearer: no float, no grab, no depth pull (it is not closing)
   window.__lab.AVSYNC.ovPacks = { L: open(s0.x + 0.02, s0.y, s0.z + 0.35), R: null };
   await wait(700);
-  const openHover = { rose: +(G.sphere.pos.y - s0.y).toFixed(3), held: !!G.hold, dz: +Math.abs(G.sphere.pos.z - s0.z).toFixed(3), seek: G.seek };
+  const openHover = { rose: +(G.sphere.pos.y - s0.y).toFixed(3), held: !!G.hold, dz: +Math.abs(G.sphere.pos.z - s0.z).toFixed(3), gapToHand: +Math.abs(G.sphere.pos.z - (s0.z + 0.35)).toFixed(3), seek: G.seek,
+                      xyMoved: +Math.hypot(G.sphere.pos.x - s0.x, G.sphere.pos.y - s0.y).toFixed(3) };
   // (b) a CLOSING hand over it, 0.35 m nearer: depth (z only) comes to contact distance; the hand never moved; still no grab, no lift
   window.__lab.AVSYNC.ovPacks = { L: cup(s0.x + 0.02, s0.y, s0.z + 0.35), R: null };
   await wait(900);
@@ -251,7 +252,8 @@ if (g.collider !== true) fail.push('conform collider not streaming (fingers cann
 if (!out.stats.hullJson || !(out.stats.mass > 0)) fail.push('no live shape/mass stats: ' + JSON.stringify(out.stats));
 if (out.stats.volErr > 0.15) fail.push('stats volume off from a sphere by ' + (out.stats.volErr * 100).toFixed(0) + '%');
 if (out.rest.onFloor > 0.02 || out.rest.held) fail.push('ball did not come to rest on the floor under gravity: ' + JSON.stringify(out.rest));
-if (out.openHover.rose > 0.01 || out.openHover.held || out.openHover.dz > 0.02) fail.push('an OPEN hand over the ball floated / grabbed / pulled it: ' + JSON.stringify(out.openHover));
+if (out.openHover.rose > 0.01 || out.openHover.held || out.openHover.xyMoved > 0.02) fail.push('an OPEN hand over the ball floated / grabbed / pulled it on screen: ' + JSON.stringify(out.openHover));
+if (out.openHover.gapToHand > 0.26 || out.openHover.gapToHand < 0.1) fail.push('REACH: a hand over the ball must have it come to contact depth on its own side (~0.19): gap ' + out.openHover.gapToHand);
 if (Math.abs(out.zBias.gapNow - 0.18) > 0.05) fail.push('DEPTH BIAS: a closing hand should bring the ball to contact depth (0.18), got ' + out.zBias.gapNow);
 if (out.zBias.handMoved > 0.01) fail.push('DEPTH BIAS pushed the HAND instead: ' + out.zBias.handMoved);
 if (out.zBias.rose > 0.01 || out.zBias.held) fail.push('DEPTH BIAS lifted or grabbed the ball (must be z only): ' + JSON.stringify(out.zBias));
