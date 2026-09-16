@@ -115,6 +115,34 @@
   body.engine-view .engPanel.hopeos-panel-hidden,
   body.engine-view #engTop.hopeos-panel-hidden { display: none !important; }
   body.engine-view.eng-sdk.eng-mirror #engc  { display: none; }
+  /* 🐲 BECOME THE DRAGON — the dragon IS the user's figure: the lab's tracked
+     ghost / skeleton overlays hide so only the embodied dragon remains */
+  body.engine-view.eng-sdk.eng-dragon #c, body.engine-view.eng-sdk.eng-dragon #ov { display: none !important; }
+  /* Kinect-Adventures-style motion HUD: one big cue + a charging ring */
+  #engFlapHud { position: fixed; left: 50%; bottom: 7vh; transform: translateX(-50%); display: none; align-items: center; gap: 20px;
+    z-index: 30; pointer-events: none; padding: 14px 26px 14px 16px; border-radius: 22px;
+    background: rgba(6, 12, 24, 0.55); backdrop-filter: blur(10px); border: 1px solid rgba(120, 200, 255, 0.25); }
+  body.engine-view.eng-dragon #engFlapHud { display: flex; }
+  #engFlapHud .ring { position: relative; width: 96px; height: 96px; flex: 0 0 auto; }
+  #engFlapHud .ring svg { width: 96px; height: 96px; transform: rotate(-90deg); }
+  #engFlapHud .ring circle { fill: none; stroke-width: 9; }
+  #engFlapHud .ring .bg { stroke: rgba(255,255,255,0.16); }
+  #engFlapHud .ring .fg { stroke: #66e0ff; stroke-linecap: round; stroke-dasharray: 326.7; stroke-dashoffset: 326.7; filter: drop-shadow(0 0 6px rgba(102,224,255,0.8)); }
+  #engFlapHud .ring .ico { position: absolute; inset: 0; display: grid; place-items: center; font-size: 38px; }
+  #engFlapHud .big { font-size: 26px; font-weight: 800; letter-spacing: 0.06em; color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,0.6); white-space: nowrap; }
+  #engFlapHud .sub { font-size: 13px; color: #cfe6ff; margin-top: 4px; opacity: 0.9; white-space: nowrap; }
+  #engFlapHud.lift { border-color: rgba(255, 220, 120, 0.7); background: rgba(40, 24, 4, 0.6); }
+  #engFlapHud.lift .big { color: #ffe08a; animation: engLiftPop 0.6s ease-out; }
+  #engFlapHud.lift .ring .fg { stroke: #ffe08a; }
+  #engFlapHud.lost { border-color: rgba(255, 120, 120, 0.6); }
+  #engFlapHud.lost .big { color: #ffb3b3; }
+  /* 📹 tiny reference cam: the RAW feed, mirrored like a mirror, no tracking drawn on it */
+  #engCamPip { position: fixed; inset: auto 18px 18px auto; width: 224px; height: 168px; display: none; z-index: 31; pointer-events: none;
+    object-fit: cover; transform: scaleX(-1); border-radius: 14px; border: 2px solid rgba(120, 200, 255, 0.45);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55); background: #05080f; }
+  body.engine-view.eng-dragon #engCamPip { display: block; }
+  body.ext-source #engCamPip { transform: none; }
+  @keyframes engLiftPop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
   #engTop { left: 50%; transform: translateX(-50%); top: 12px; width: auto; align-items: center; gap: 12px; padding: 8px 12px; }
   #engTop .t { font-size: 12px; letter-spacing: .18em; color: var(--cy); white-space: nowrap; }
   #engL { left: 14px; top: 60px; width: 218px; }
@@ -156,6 +184,15 @@
      the lab underneath is merely hidden, never touched. Reachable any time (even from
      the entry screen — it needs no camera). ── -->
 <canvas id="engc"></canvas>
+<!-- 🐲 motion HUD — shown only while a dragon is embodied (body.eng-dragon) -->
+<div id="engFlapHud">
+  <div class="ring">
+    <svg viewBox="0 0 120 120"><circle class="bg" cx="60" cy="60" r="52"/><circle class="fg" id="engFlapRing" cx="60" cy="60" r="52"/></svg>
+    <div class="ico" id="engFlapIco">🐉</div>
+  </div>
+  <div class="txt"><div class="big" id="engFlapBig">FLAP YOUR WINGS TO TAKE OFF</div><div class="sub" id="engFlapSub">big fast strokes — like real wings</div></div>
+</div>
+<video id="engCamPip" autoplay playsinline muted title="your camera — reference only"></video>
 <button id="engBtn" title="engine view — clean editor space: endless grid floor, blue-sky dome, spawn & host objects">🧩 ENGINE</button>
 
 <div id="engTop" class="panel engPanel">
@@ -208,6 +245,7 @@
       <button class="opt" data-sp="cylinder">▮ Cyl</button>
       <button class="opt" data-sp="cone">▲ Cone</button>
       <button class="opt" data-sp="avatar" title="rigged avatar (riggedmale) with reusable animation packages — walk · run">🧍 Avatar</button>
+      <button class="opt" data-sp="dragon" title="rigged dragon — procedural head-look · walk · run · flapping flight (select it for the motion strip; W/S/A/D drive, Space = fly/land, R/F climb)">🐉 Dragon</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -264,6 +302,7 @@
     <div class="row" id="engMindRow" style="display:none"></div>
     <div class="sname" id="engMindInfo" style="display:none"></div>
     <div class="sname" id="engBowHint" style="display:none">🏹 HOLD SPACE = draw · release = shoot — draw <span id="engBowPct">0%</span></div>
+    <div class="sname" id="engDragonHint" style="display:none">🐉 W/S walk · hold ⇧ to run · A/D turn · SPACE fly ⇄ land · R/F climb/sink — any key takes over from 🔁 roam</div>
     <div class="sname">click = select · ⧉ duplicates the selection</div>
     <div class="row" style="margin-top:6px">
       <button class="opt" id="engDup">⧉ Duplicate</button>
@@ -4751,15 +4790,20 @@ async function engInit() {
     new THREE.SphereGeometry(1600, 32, 24),
     new THREE.ShaderMaterial({
       side: THREE.BackSide, depthWrite: false, fog: false,
-      uniforms: { sunDir: { value: sunDir } },
+      uniforms: { sunDir: { value: sunDir }, uHigh: { value: 0 } },
       vertexShader: 'varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `varying vec3 vP; uniform vec3 sunDir;
+      // uHigh (0 ground … 1 high altitude): the zenith deepens, the horizon
+      // whitens and everything below it becomes a cloud deck — the ascent
+      // environment for an embodied dragon climbing out of the editor grid
+      fragmentShader: `varying vec3 vP; uniform vec3 sunDir; uniform float uHigh;
         void main() {
           vec3 d = normalize(vP);
-          vec3 zen = vec3(0.180, 0.420, 0.745);
-          vec3 mid = vec3(0.475, 0.665, 0.875);
-          vec3 hor = vec3(0.865, 0.915, 0.960);
+          vec3 zen = mix(vec3(0.180, 0.420, 0.745), vec3(0.075, 0.215, 0.560), uHigh);
+          vec3 mid = mix(vec3(0.475, 0.665, 0.875), vec3(0.400, 0.610, 0.860), uHigh);
+          vec3 hor = mix(vec3(0.865, 0.915, 0.960), vec3(0.935, 0.955, 0.985), uHigh);
           vec3 c = mix(hor, mix(mid, zen, smoothstep(0.04, 0.65, d.y)), smoothstep(-0.06, 0.12, d.y));
+          float deck = smoothstep(0.03, -0.24, d.y) * uHigh;
+          c = mix(c, vec3(0.945, 0.960, 0.990), deck * 0.96);
           float s = max(dot(d, sunDir), 0.0);
           c += vec3(1.0, 0.96, 0.88) * (pow(s, 1400.0) * 0.9 + pow(s, 40.0) * 0.10);
           gl_FragColor = vec4(c, 1.0);
@@ -4772,8 +4816,9 @@ async function engInit() {
   ENG.grid = new THREE.Mesh(
     new THREE.PlaneGeometry(3000, 3000, 1, 1).rotateX(-Math.PI / 2),
     new THREE.ShaderMaterial({
+      uniforms: { uAlt: { value: 0 } },
       vertexShader: 'varying vec3 vW; void main(){ vW = (modelMatrix * vec4(position, 1.0)).xyz; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `varying vec3 vW;
+      fragmentShader: `varying vec3 vW; uniform float uAlt;
         float gridLine(vec2 p, float sc) {
           vec2 g = abs(fract(p / sc - 0.5) - 0.5) / (fwidth(p / sc) + 1e-4);
           return 1.0 - min(min(g.x, g.y), 1.0);
@@ -4785,6 +4830,7 @@ async function engInit() {
           vec3 c = mix(base, line, l);
           float dist = length(vW.xz);
           c = mix(c, vec3(0.865, 0.915, 0.960), smoothstep(70.0, 320.0, dist));   // dissolve into the haze
+          c = mix(c, vec3(0.945, 0.960, 0.990), uAlt);                   // seen from altitude: the ground sinks under cloud
           gl_FragColor = vec4(c, 1.0);
         }`,
     }));
@@ -4954,6 +5000,8 @@ function engLoop() {
       engRestoreHands(rec);                    // demoted → stumps return, rigs hide
     }
   }
+  engDragonTick(avDt);                         // procedural dragons: gait / flight / look
+  engEnvTick(avDt);                            // altitude → sky / grid / cloud layer
   engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
   engGestureTick(avDt);                        // hand gestures: grab bow, draw string
@@ -5248,19 +5296,41 @@ function engAvCtlRefresh() {
   const lbl = document.getElementById('engAvCtlLbl'), host = document.getElementById('engAvCtl');
   const d = ENG.sel && ENG.sel.userData.eng;
   const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
-  const show = !!rec;
+  const drec = d && d.type === 'dragon' ? DRAGONS.get(d.id) : null;
+  const show = !!rec || !!drec;
   lbl.style.display = show ? 'block' : 'none';
+  lbl.textContent = drec ? 'DRAGON · motion' : 'AVATAR · animation';
   host.style.display = show ? 'flex' : 'none';
   engMindRows(rec);                            // MIND section rides the selection too
   const bh = document.getElementById('engBowHint');
   if (bh) bh.style.display = ENG.sel && BOWS.has(ENG.sel.userData.eng.id) ? 'block' : 'none';
+  const dh = document.getElementById('engDragonHint');
+  if (dh) dh.style.display = drec ? 'block' : 'none';
   if (!show) return;
   host.innerHTML = '';
-  const mk = (txt, sel, fn) => {
+  const mk = (txt, sel, fn, title) => {
     const b = document.createElement('button');
     b.className = 'opt' + (sel ? ' sel' : ''); b.textContent = txt;
+    if (title) b.title = title;
     b.addEventListener('click', fn); host.appendChild(b);
   };
+  if (drec) {                                  // DRAGON strip: motion modes · look · roam
+    const D = drec.driver, sel = ENG.sel;
+    mk('⏹ idle', D.mode === 'idle', () => engDragonSetMode(sel, 'idle'), 'stand still (lands first if flying)');
+    mk('🚶 walk', D.mode === 'walk', () => engDragonSetMode(sel, 'walk'), 'lateral-sequence walk');
+    mk('🏃 run', D.mode === 'run', () => engDragonSetMode(sel, 'run'), 'trot — diagonal pairs');
+    mk('🪽 fly', D.mode === 'fly', () => engDragonSetMode(sel, 'fly'), 'take off — flapping flight');
+    mk('🕊 glide', D.mode === 'glide', () => engDragonSetMode(sel, 'glide'), 'wings out, slow strokes');
+    mk('👀 ahead', drec.lookMode === 'ahead', () => engDragonSetLook(sel, 'ahead'), 'head follows the body');
+    mk('👀 camera', drec.lookMode === 'camera', () => engDragonSetLook(sel, 'camera'), 'head tracks the engine camera');
+    mk('👀 scan', drec.lookMode === 'scan', () => engDragonSetLook(sel, 'scan'), 'head sweeps side to side');
+    mk('🔁 roam', D.auto, () => { D.auto = !D.auto; D.input.fwd = D.input.turn = D.input.climb = 0; engAvCtlRefresh(); toast(D.auto ? '🔁 roam — it steers itself in a loop' : '🎮 manual — W/S/A/D · SPACE fly/land · R/F climb'); }, 'self-steer in a wide loop, or drive it with the keys');
+    mk('📷 follow', drec.follow, () => { drec.follow = !drec.follow; engAvCtlRefresh(); }, 'orbit camera rides along with this dragon');
+    mk(drec.user ? '🐲 you are the dragon' : '🐲 become dragon', !!drec.user, () => {
+      engDragonSetUser(sel, !drec.user).catch(err => toast('⚠ ' + (err.message || err), 5000));
+    }, 'full-body tracking: your arms are its wings, your head turns its head — flap fast to take off; in the air turn your body to steer, bend forward to dive (Kinect-style)');
+    return;
+  }
   mk('⏹', rec.clipIdx < 0, () => engAvatarSetClip(ENG.sel, -1));
   rec.clips.forEach((c, i) => mk('▶ ' + c.name, i === rec.clipIdx, () => engAvatarSetClip(ENG.sel, i)));
   if (rec.driver) mk(rec.role === 'user' ? '🎮 user' : '🎮 make user', rec.driveOn, () => {
@@ -5295,6 +5365,293 @@ function engAvCtlRefresh() {
 ENG.spawnAvatar = engSpawnAvatar; ENG.avatarSetClip = engAvatarSetClip; ENG.avatars = AVREG;
 ENG.mindSet = engMindSet;                       // hoisted fns — safe here
 ENG.spawnBow = engSpawnBow; ENG.bowSetDraw = engBowSetDraw;
+ENG.spawnDragon = (...a) => engSpawnDragon(...a); ENG.dragonSetMode = (...a) => engDragonSetMode(...a);
+ENG.dragonSetUser = (...a) => engDragonSetUser(...a);
+Object.defineProperty(ENG, 'env', { get: () => ENG_ENV });
+Object.defineProperty(ENG, 'dragons', { get: () => DRAGONS });
+
+// ═══ DRAGON — a self-propelled rigged game object (procedural motion) ═════
+// The dragon.glb is a UniRig auto-rig (69 generic Bone_NNN, no clips) — the
+// DragonDriver (sdk/interaction/dragon-driver.js) carries the AUTHORED bone
+// contract and generates head-look, walk (lateral sequence), run (trot) and
+// flapping flight from gait parameters, measuring every rotation sign against
+// the rig at bind. It also moves the host group (heading / speed / altitude),
+// so the dragon walks and flies around the scene by itself (🔁 roam) or under
+// the keys (W/S/A/D · SPACE fly⇄land · R/F climb) while selected.
+const DRAGONS = new Map();                     // eng.id → { driver, grp, lookMode }
+const ENG_DRAGON_URL = 'sdk/assets/avatars/dragon.glb';
+const ENG_DRAGON_HEIGHT = 1.6;                 // standing height in the engine (m)
+async function engSpawnDragon(meta = {}) {
+  const [{ GLTFLoader }, { DragonDriver, dragonContractMatches }] = await Promise.all([
+    import('three/addons/loaders/GLTFLoader.js'),
+    import('./sdk/interaction/dragon-driver.js'),
+  ]);
+  const gltf = await new Promise((res, rej) => new GLTFLoader().load(meta.url || ENG_DRAGON_URL, res, null, rej));
+  const chk = dragonContractMatches(gltf.scene);
+  if (!chk.ok) throw new Error('not the dragon rig — missing ' + chk.missing.slice(0, 4).join(','));
+  const grp = new THREE.Group();
+  grp.add(gltf.scene);
+  let sm0 = null;
+  gltf.scene.traverse(o => { if (o.isSkinnedMesh) { o.frustumCulled = false; if (!sm0) sm0 = o; } });
+  // bind BEFORE any pose runs (the driver captures rest + measures signs here)
+  const driver = new DragonDriver().bind(gltf.scene);
+  const box = sm0 ? _skinnedBox(sm0, gltf.scene) : new THREE.Box3().setFromObject(gltf.scene);
+  const h = Math.max(box.max.y - box.min.y, 1e-6);
+  const f = ENG_DRAGON_HEIGHT / h;
+  gltf.scene.scale.setScalar(f);
+  gltf.scene.position.y = -box.min.y * f;
+  gltf.scene.position.x = -(box.min.x + box.max.x) / 2 * f;
+  // pick proxy: the body core (not the full wingspan) so the gizmo box stays honest
+  const sz = box.getSize(new THREE.Vector3()).multiplyScalar(f);
+  const proxy = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.min(sz.x, 1.3), sz.y, Math.max(sz.z, 0.6)),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+  proxy.position.set(0, sz.y / 2, (box.min.z + box.max.z) / 2 * f);
+  grp.add(proxy);
+  grp.userData.pickProxy = proxy;
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.5);
+  grp.position.set(p.x, 0, p.z);
+  // spawn facing the camera so the head-look reads immediately
+  grp.rotation.y = Math.atan2(-fwd.x, -fwd.z);
+  driver.heading = grp.rotation.y;
+  engAdopt(grp, { type: 'dragon', url: meta.url || ENG_DRAGON_URL, label: meta.label || 'dragon ' + ENG.seq });
+  const rec = { driver, grp, lookMode: 'camera', follow: meta.follow !== undefined ? !!meta.follow : true, user: null, dolly: false };
+  DRAGONS.set(grp.userData.eng.id, rec);
+  driver.auto = meta.auto !== undefined ? !!meta.auto : true;
+  engDragonSetLook(grp, meta.look || 'camera');
+  engDragonSetMode(grp, meta.mode || 'idle');
+  return grp;
+}
+function engDragonSetMode(obj, mode) {
+  const rec = DRAGONS.get(obj.userData.eng.id);
+  if (!rec) return;
+  rec.driver.setMode(mode);
+  engAvCtlRefresh();
+}
+function engDragonSetLook(obj, look) {
+  const rec = DRAGONS.get(obj.userData.eng.id);
+  if (!rec) return;
+  rec.lookMode = look;
+  if (look === 'scan') rec.driver.lookScan(); else if (look === 'ahead') rec.driver.lookAhead();
+  engAvCtlRefresh();
+}
+const DRAGON_KEYS = new Set();
+function engDragonKey(e, down) {
+  const code = e.code;
+  if (!/^(KeyW|KeyS|KeyA|KeyD|KeyR|KeyF|Space|ShiftLeft|ShiftRight)$/.test(code)) return;
+  if (down) {
+    e.preventDefault();
+    if (DRAGON_KEYS.has(code)) return;         // auto-repeat
+    DRAGON_KEYS.add(code);
+    const rec = ENG.sel && DRAGONS.get(ENG.sel.userData.eng.id);
+    if (rec && code === 'Space') {             // take off ⇄ land
+      const D = rec.driver;
+      engDragonSetMode(ENG.sel, (D.mode === 'fly' || D.mode === 'glide') ? 'idle' : 'fly');
+    }
+    if (rec && rec.driver.auto && code !== 'Space') { rec.driver.auto = false; engAvCtlRefresh(); }
+  } else DRAGON_KEYS.delete(code);
+}
+function engDragonTick(dt) {
+  if (!DRAGONS.size) return;
+  const sel = ENG.sel && DRAGONS.get(ENG.sel.userData.eng.id);
+  for (const rec of DRAGONS.values()) {
+    const D = rec.driver;
+    if (rec === sel && !D.auto) {
+      const K = DRAGON_KEYS;
+      D.input.fwd = K.has('KeyW') ? 1 : K.has('KeyS') ? -0.5 : 0;
+      D.input.turn = K.has('KeyA') ? 1 : K.has('KeyD') ? -1 : 0;
+      D.input.climb = K.has('KeyR') ? 1 : K.has('KeyF') ? -1 : 0;
+      const run = K.has('ShiftLeft') || K.has('ShiftRight');
+      // ground modes follow the keys: forward = walk (⇧ run); airborne keeps flying
+      if (D.mode === 'idle' && D.input.fwd) { D.setMode(run ? 'run' : 'walk'); engAvCtlRefresh(); }
+      else if ((D.mode === 'walk' && run) || (D.mode === 'run' && !run)) { D.setMode(run ? 'run' : 'walk'); engAvCtlRefresh(); }
+    } else if (rec !== sel && !rec.user) D.input.fwd = D.input.turn = D.input.climb = 0;
+    if (rec.lookMode === 'camera') D.lookAt(ENG.camera.position);
+    if (rec.user) engDragonUserTick(rec, dt);    // 🐲 embodied: arms → wings, flap → flight
+    D.update(dt, rec.grp);
+    // 📷 follow: the orbit pivot rides the selected dragon (camera carried along,
+    // so orbit / zoom still work around it) — a roaming dragon never leaves frame
+    if (rec === sel && rec.follow && !rec.dolly && !ENG.tc.dragging) {
+      const s = rec.grp.scale.x || 1;
+      _dF.set(rec.grp.position.x, rec.grp.position.y + 0.7 * s, rec.grp.position.z).sub(ENG.orbit.target).multiplyScalar(0.12);
+      ENG.orbit.target.add(_dF); ENG.camera.position.add(_dF);
+    }
+    // 🎬 dolly: the POV shot for an embodied dragon — behind and above it, on
+    // its heading, lifting with it; the lift-off kicks the camera back a beat
+    if (rec.dolly) {
+      const s = rec.grp.scale.x || 1, h = D.heading, U = rec.user;
+      const pull = U ? U.pull : 0;
+      _dF.set(rec.grp.position.x - Math.sin(h) * (4.8 + pull * 2.2) * s, rec.grp.position.y + (2.0 + pull * 0.8) * s, rec.grp.position.z - Math.cos(h) * (4.8 + pull * 2.2) * s);
+      ENG.camera.position.lerp(_dF, 1 - Math.exp(-dt * 4));
+      _dF.set(rec.grp.position.x, rec.grp.position.y + 0.85 * s, rec.grp.position.z);
+      ENG.orbit.target.lerp(_dF, 1 - Math.exp(-dt * 6));
+      ENG.camera.lookAt(ENG.orbit.target);
+      if (U) U.pull = Math.max(0, U.pull - dt * 0.5);
+    }
+  }
+}
+const _dF = new THREE.Vector3();
+
+// ═══ 🐲 BECOME THE DRAGON — full-body embodiment (Kinect-Adventures grammar) ═══
+// The lab's BlazePose-33 world landmarks (AVSYNC.poseWorld — hands NOT needed)
+// feed WingDrive: shoulders = wing roots, upper arm = wing drum, forearm = wing
+// flat, head = dragon head. DragonFlightControl turns sustained FAST flapping
+// into LIFT OFF, then flap = climb · arms out = glide · lean = steer · arms
+// down = land. The dolly rides the shot and the environment climbs with it
+// (grid sinks under a cloud deck, sky deepens, cloud layer drifts past).
+const ENG_DRAGON_MAX_ALT = 42;                  // model units ≈ metres
+async function engDragonSetUser(obj, on, opts = {}) {
+  const rec = DRAGONS.get(obj.userData.eng.id);
+  if (!rec) return;
+  if (on) {
+    if (rec.user) return;
+    for (const r of DRAGONS.values()) if (r !== rec && r.user) await engDragonSetUser(r.grp, false);   // one embodied dragon
+    if (!ENG.sdk.on && opts.sdk !== false) {   // needs the tracking SDK: boot it on the full-3D body suite
+      engEls.engSdkChk.checked = true;
+      try { await engSdkOn(); } catch (e) { engSdkOff(); throw new Error('tracking failed: ' + (e.message || e)); }
+      const b = document.querySelector('#engBodySuite [data-bs="body3d"]'); if (b) b.click();
+    }
+    const { WingDrive, DragonFlightControl } = await import('./sdk/interaction/wing-drive.js');
+    rec.user = { wings: new WingDrive(), ctl: new DragonFlightControl(), flash: 0, pull: 0, lostFor: 0 };
+    const D = rec.driver;
+    D.auto = false; D.input.fwd = D.input.turn = D.input.climb = 0;
+    D.setMode('idle'); D.lookUser(); D.climbMul = 1.6; D.cruiseAlt = D.c.gait.fly.alt;
+    rec.lookMode = 'user'; rec.dolly = true; rec.follow = false;
+    ENG.orbit.enabled = false;
+    document.body.classList.add('eng-dragon');
+    engCamPipSync();                           // 📹 raw camera reference in the corner
+    engEnvInit();
+    engSelect(obj);
+    toast('🐲 YOU ARE THE DRAGON — spread your arms: they are its wings. Flap them fast to take off!', 7000);
+  } else {
+    if (!rec.user) return;
+    rec.user = null; rec.dolly = false; rec.follow = true;
+    const D = rec.driver;
+    D.setUserWings(null); D.climbMul = 1; D.dive = 0; D.bank = 0; D.input.fwd = D.input.turn = D.input.climb = 0;
+    D.cruiseAlt = D.c.gait.fly.alt;
+    if (D.mode === 'fly' || D.mode === 'glide') D.setMode('idle');   // comes down and lands
+    rec.lookMode = 'camera'; D.lookAhead();
+    ENG.orbit.enabled = true;
+    if (![...DRAGONS.values()].some(r => r.user)) { document.body.classList.remove('eng-dragon'); engCamPipSync(false); }
+  }
+  engAvCtlRefresh(); engRefreshList();
+}
+// the PiP plays the SAME stream the tracker reads (els.vid) — never a second
+// camera open, never a tracking overlay; it follows source swaps (camera ↔ file)
+function engCamPipSync(on = true) {
+  const pip = document.getElementById('engCamPip'); if (!pip) return;
+  if (!on) { pip.srcObject = null; pip.removeAttribute('src'); return; }
+  const src = els.vid && els.vid.srcObject;
+  if (src) { if (pip.srcObject !== src) { pip.srcObject = src; pip.play().catch(() => {}); } }
+  else if (els.vid && els.vid.src && pip.src !== els.vid.src) { pip.src = els.vid.src; pip.play().catch(() => {}); }
+}
+function engDragonUserTick(rec, dt) {
+  const U = rec.user, D = rec.driver;
+  const T = window.__lab && window.__lab.AVSYNC;
+  const pose = T ? (T.ovPose !== undefined ? T.ovPose : T.poseWorld) : null;   // probe seam honoured
+  const st = U.wings.update(pose, dt);
+  D.setUserWings(st);
+  engCamPipSync();                             // camera may have come up after the chip
+  const c = U.ctl.update(st, dt, D.altitude);
+  U.lostFor = st.valid ? 0 : U.lostFor + dt;
+  if (c.event === 'liftoff') {
+    D.setMode('fly'); D.cruiseAlt = 3.5; U.flash = 2.4; U.pull = 1;
+    toast('🪽 LIFT OFF!', 2500);
+  }
+  if (c.phase === 'flying') {
+    D.input.fwd = 1; D.input.turn = c.turn; D.dive = c.dive; D.bank = c.bank;   // face = steer · bend = dive · lean = bank
+    D.cruiseAlt = Math.max(0, Math.min(ENG_DRAGON_MAX_ALT, D.cruiseAlt + c.climb * 2.4 * dt));
+  } else { D.input.fwd = 0; D.input.turn = 0; D.dive = 0; D.bank = 0; }
+  if (c.event === 'landed') {
+    D.setMode('idle'); D.cruiseAlt = D.c.gait.fly.alt;
+    toast('🐉 landed — flap fast to take off again', 3000);
+  }
+  engFlapHudTick(rec, c, st, dt);
+}
+function engFlapHudTick(rec, c, st, dt) {
+  const U = rec.user; U.flash = Math.max(0, U.flash - dt);
+  const hud = document.getElementById('engFlapHud'), ring = document.getElementById('engFlapRing');
+  const big = document.getElementById('engFlapBig'), sub = document.getElementById('engFlapSub'), ico = document.getElementById('engFlapIco');
+  if (!hud) return;
+  const CIRC = 2 * Math.PI * 52;
+  const meter = c.phase === 'ground' ? c.meter : 1;
+  ring.style.strokeDashoffset = (CIRC * (1 - meter)).toFixed(1);
+  hud.classList.toggle('lift', U.flash > 0);
+  hud.classList.toggle('lost', !st.valid && U.lostFor > 0.4);
+  const alt = rec.grp.position.y.toFixed(1);
+  let B, S, I;
+  if (!st.valid && U.lostFor > 0.4) { B = 'SPREAD YOUR ARMS'; S = 'head + both arms in view is all it needs (one arm still works) — no need for the whole body'; I = '🙌'; }
+  else if (U.flash > 0) { B = 'LIFT OFF!'; S = 'keep flapping to climb · arms out to glide · turn your body to steer · bend forward to dive'; I = '🪽'; }
+  else if (c.phase === 'ground') {
+    B = c.meter > 0.05 ? 'KEEP FLAPPING!' : 'FLAP YOUR WINGS TO TAKE OFF';
+    S = c.meter > 0.05 ? Math.round(c.meter * 100) + '% · faster, bigger strokes' : 'big fast strokes, like real wings · turn your head — the dragon looks';
+    I = c.meter > 0.05 ? '🔥' : '🐉';
+  } else {
+    B = c.dive > 0.25 ? 'DIVING' : c.climb > 0.2 ? 'CLIMBING' : c.climb < -0.6 ? 'DESCENDING' : 'GLIDING';
+    S = alt + ' m · flap = climb · arms out = glide · turn your body = steer · bend forward = dive · arms down = land';
+    I = c.dive > 0.25 ? '🔻' : c.climb > 0.2 ? '⬆' : c.climb < -0.6 ? '⬇' : '🕊';
+  }
+  if (big.textContent !== B) big.textContent = B;
+  if (sub.textContent !== S) sub.textContent = S;
+  if (ico.textContent !== I) ico.textContent = I;
+}
+// ── ascent environment: altitude-driven sky/grid uniforms + a drifting cloud layer ──
+const ENG_ENV = { alt: 0, clouds: null, high: 0 };
+function engCloudTexture() {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const g = cv.getContext('2d');
+  const paint = (x, y, r, a) => {
+    const rg = g.createRadialGradient(x, y, 0, x, y, r);
+    rg.addColorStop(0, `rgba(255,255,255,${a})`); rg.addColorStop(0.55, `rgba(255,255,255,${a * 0.55})`); rg.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, 256, 256);
+  };
+  paint(128, 150, 120, 0.85); paint(90, 120, 80, 0.7); paint(170, 115, 85, 0.7); paint(128, 100, 60, 0.6);
+  const t = new THREE.CanvasTexture(cv); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function engEnvInit() {
+  if (ENG_ENV.clouds || !ENG.scene) return;
+  const tex = engCloudTexture();
+  const grp = new THREE.Group(); grp.name = 'clouds';
+  for (let i = 0; i < 44; i++) {
+    const m = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false, fog: false });
+    const sp = new THREE.Sprite(m);
+    const a = Math.random() * Math.PI * 2, r = 14 + Math.random() * 90;
+    const w = 16 + Math.random() * 22;
+    sp.scale.set(w, w * 0.42, 1);
+    sp.position.set(Math.cos(a) * r, 8 + Math.random() * 36, Math.sin(a) * r);
+    sp.userData = { drift: 0.25 + Math.random() * 0.5, k: 0.7 + Math.random() * 0.3 };
+    grp.add(sp);
+  }
+  ENG.scene.add(grp);
+  ENG_ENV.clouds = grp;
+}
+function engEnvTick(dt) {
+  // the reference altitude: the embodied dragon, else the selected/followed one
+  let ref = null;
+  for (const r of DRAGONS.values()) if (r.user) ref = r;
+  if (!ref && ENG.sel) ref = DRAGONS.get(ENG.sel.userData.eng.id) || null;
+  const target = ref ? ref.grp.position.y : 0;
+  ENG_ENV.alt += (target - ENG_ENV.alt) * (1 - Math.exp(-dt * 1.5));
+  const sm = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  ENG_ENV.high = sm(5, 28, ENG_ENV.alt);
+  if (ENG.sky) ENG.sky.material.uniforms.uHigh.value = ENG_ENV.high;
+  if (ENG.grid) ENG.grid.material.uniforms.uAlt.value = sm(7, 26, ENG_ENV.alt) * 0.97;
+  if (ENG_ENV.alt > 2.5 && !ENG_ENV.clouds) engEnvInit();
+  const C = ENG_ENV.clouds; if (!C) return;
+  const vis = sm(3, 11, ENG_ENV.alt);
+  C.visible = vis > 0.001;
+  if (!C.visible) return;
+  const cx = ref ? ref.grp.position.x : 0, cz = ref ? ref.grp.position.z : 0;
+  for (const sp of C.children) {
+    sp.material.opacity = vis * 0.92 * sp.userData.k;
+    sp.position.x += sp.userData.drift * dt;
+    // keep the layer centred on the flyer: wrap clouds that fall too far behind
+    if (sp.position.x - cx > 120) sp.position.x -= 240; else if (sp.position.x - cx < -120) sp.position.x += 240;
+    if (sp.position.z - cz > 120) sp.position.z -= 240; else if (sp.position.z - cz < -120) sp.position.z += 240;
+  }
+}
 Object.defineProperty(ENG, 'minds', { get: () => ENG_MINDS });   // consts live later
 Object.defineProperty(ENG, 'world', { get: () => ENG_WORLD });   // in the file (TDZ)
 Object.defineProperty(ENG, 'bows', { get: () => BOWS });
@@ -6154,7 +6511,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -6169,6 +6526,8 @@ function engDelete(o) {
     if (T) Object.assign(T[d.sub], { x: 0, y: 0, z: 0, s: 1, qx: 0, qy: 0, qz: 0, qw: 1 });
   }
   AVREG.delete(o.userData.eng.id);
+  if (DRAGONS.get(o.userData.eng.id)?.user) engDragonSetUser(o, false);   // embodied → release the HUD/dolly
+  DRAGONS.delete(o.userData.eng.id);
   const bw = BOWS.get(o.userData.eng.id);
   if (bw) {
     if (bw.nocked) ENG.scene.remove(bw.nocked);
@@ -6185,9 +6544,10 @@ function engDelete(o) {
 function engSnapshot() {
   return { v: 1, objects: ENG.objects.filter(o => o.userData.eng.type !== 'tracker')
     .map(o => {
-      const rec = AVREG.get(o.userData.eng.id);
+      const rec = AVREG.get(o.userData.eng.id), dr = DRAGONS.get(o.userData.eng.id);
       return { ...o.userData.eng, clip: rec ? rec.clipIdx : undefined, role: rec ? rec.role : undefined,
                mind: rec && rec.mind ? { key: rec.mind.key, stats: { ...rec.mind.stats } } : undefined,
+               dragon: dr ? { mode: dr.driver.mode, look: dr.lookMode, auto: dr.driver.auto, follow: dr.follow } : undefined,
                p: o.position.toArray(), r: o.rotation.toArray().slice(0, 3), s: o.scale.toArray() };
     }) };
 }
@@ -6203,6 +6563,12 @@ async function engRestore(snap) {
           const rr = AVREG.get(g.userData.eng.id);
           if (rr && rr.mind) rr.mind.stats = { ...rec.mind.stats };
         }
+      } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'dragon') {
+      try {
+        const g = await engSpawnDragon({ label: rec.label, ...(rec.dragon || {}) });
+        g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
     }
     else if (rec.type === 'bow') {
@@ -6480,6 +6846,12 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
       .catch(err => toast('⚠ avatar failed: ' + (err.message || err), 5000));
     return;
   }
+  if (b.dataset.sp === 'dragon') {
+    toast('loading dragon…', 6000);
+    engSpawnDragon().then(() => toast('🐉 dragon — select it for the motion strip: walk · run · fly · look'))
+      .catch(err => toast('⚠ dragon failed: ' + (err.message || err), 6000));
+    return;
+  }
   if (b.dataset.sp === 'bow') {
     if (ENG.sdk.on) {   // tracking live (POV or mirror) → the ON-HANDS lane:
       // the bow renders IN the lab scene, on the blue holo hands themselves
@@ -6572,10 +6944,12 @@ addEventListener('keydown', e => {
     e.preventDefault();                        // draw the selected bow, not scroll
     BOWS.get(ENG.sel.userData.eng.id).drawing = true;
   }
+  if (ENG.sel && DRAGONS.has(ENG.sel.userData.eng.id)) engDragonKey(e, true);
 });
 addEventListener('keyup', e => {
-  if (e.code !== 'Space' || !ENG.on) return;
-  for (const b of BOWS.values()) b.drawing = false;   // release → engBowTick looses
+  if (!ENG.on) return;
+  if (e.code === 'Space') for (const b of BOWS.values()) b.drawing = false;   // release → engBowTick looses
+  engDragonKey(e, false);
 });
 </script>
 <script src="./sdk/ui/panel-toggle.js" defer></script>

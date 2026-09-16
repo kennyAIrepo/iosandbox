@@ -13,7 +13,9 @@
     "test:rubiks": "node tests/rubiks-smoke.mjs",
     "test:skeleton": "node tests/skeleton-smoke.mjs",
     "test:wrist": "node tests/wrist-clamp-smoke.mjs",
-    "test:sign": "node tests/sign-smoke.mjs"
+    "test:sign": "node tests/sign-smoke.mjs",
+    "test:dragon": "node tests/dragon-smoke.mjs",
+    "test:wing": "node tests/wing-smoke.mjs"
   },
   "dependencies": {
     "@vercel/blob": "latest"
