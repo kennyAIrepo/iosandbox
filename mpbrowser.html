@@ -140,7 +140,7 @@
   #engCamPip { position: fixed; inset: auto 18px 18px auto; width: 224px; height: 168px; display: none; z-index: 31; pointer-events: none;
     object-fit: cover; transform: scaleX(-1); border-radius: 14px; border: 2px solid rgba(120, 200, 255, 0.45);
     box-shadow: 0 6px 24px rgba(0,0,0,0.55); background: #05080f; }
-  body.engine-view.eng-dragon #engCamPip { display: block; }
+  body.engine-view.eng-dragon #engCamPip, body.engine-view.eng-fox #engCamPip { display: block; }
   body.ext-source #engCamPip { transform: none; }
   @keyframes engLiftPop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.15); opacity: 1; } 100% { transform: scale(1); } }
   #engTop { left: 50%; transform: translateX(-50%); top: 12px; width: auto; align-items: center; gap: 12px; padding: 8px 12px; }
@@ -246,6 +246,8 @@
       <button class="opt" data-sp="cone">▲ Cone</button>
       <button class="opt" data-sp="avatar" title="rigged avatar (riggedmale) with reusable animation packages — walk · run">🧍 Avatar</button>
       <button class="opt" data-sp="dragon" title="rigged dragon — procedural head-look · walk · run · flapping flight (select it for the motion strip; W/S/A/D drive, Space = fly/land, R/F climb)">🐉 Dragon</button>
+      <button class="opt" data-sp="foxfull" title="full-body fox with an authored facial rig (Auto-Rig-Pro-style lip ring · jaw hinge · lids · brows · gaze, built by tools/facerig) — select it → 🎭 mirror me for live lip sync from the camera">🦊 Fox</button>
+      <button class="opt" data-sp="fox" title="rigged fox bust — your lips, expressions and head turns land on it live from the camera (select it → 🎭 mirror me)">🦊 Fox bust</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -302,6 +304,7 @@
     <div class="row" id="engMindRow" style="display:none"></div>
     <div class="sname" id="engMindInfo" style="display:none"></div>
     <div class="sname" id="engBowHint" style="display:none">🏹 HOLD SPACE = draw · release = shoot — draw <span id="engBowPct">0%</span></div>
+    <div class="sname" id="engFoxHint" style="display:none">🦊 select → 🎭 mirror me: face tracking drives its lips, cheeks, brows, ears and head</div>
     <div class="sname" id="engDragonHint" style="display:none">🐉 W/S walk · hold ⇧ to run · A/D turn · SPACE fly ⇄ land · R/F climb/sink — any key takes over from 🔁 roam</div>
     <div class="sname">click = select · ⧉ duplicates the selection</div>
     <div class="row" style="margin-top:6px">
@@ -2071,7 +2074,7 @@ let engBodyPts = null;          // this frame's retargeted 33-pt POV body (world
 // Raw tracking feed for the engine's avatar live-drive (BipedDriver wants the
 // RAW MediaPipe world data — it does its own filtering, z-sign calibration and
 // human-ROM clamping). Written every lab frame, consumed in engLoop.
-const AVSYNC = { poseWorld: null, handsWorld: null, handedness: null, packs: null, t: 0 };
+const AVSYNC = { poseWorld: null, handsWorld: null, handedness: null, packs: null, face: null, faceAspect: 4 / 3, t: 0 };
 let faceReady = false;          // face landmarker loaded (runtime re-init)
 const _engSdk = () => (window.__eng && window.__eng.sdk) || null;
 
@@ -2896,10 +2899,13 @@ const FACE_LOOPS = {
 };
 let faceGrp = null;
 const _fv = new THREE.Vector3(), _fin = { x: 0, y: 0, z: 0 };
-function updateFaceOutline(face) {
+function updateFaceOutline(faceRes) {
   const es = _engSdk();
   const mode = es && es.on ? es.face : 'off';
-  if (!face || mode === 'off') { if (faceGrp) faceGrp.visible = false; return; }
+  // tracking.js hands over { landmarks, blendshapes, matrix } — the contours
+  // want the 478-point array (a bare array is accepted too)
+  const face = faceRes && (Array.isArray(faceRes) ? faceRes : faceRes.landmarks);
+  if (!face || !face[468] || mode === 'off') { if (faceGrp) faceGrp.visible = false; return; }
   if (!faceGrp) {
     faceGrp = new THREE.Group(); faceGrp.renderOrder = 30;
     for (const [name, idx] of Object.entries(FACE_LOOPS)) {
@@ -2943,7 +2949,7 @@ async function ensureFaceTracking() {
   if (!S.running || !tracker) throw new Error('start tracking first');
   if (faceReady) return;
   toast('loading face landmarker…', 5000);
-  tracker = await initTracking(els.vid, { numHands: 2, raw: true, enableFace: true, poseEvery: 2 });
+  tracker = await initTracking(els.vid, { numHands: 2, raw: true, enableFace: true, faceMatrix: true, poseEvery: 2 });   // faceMatrix: head pose for the face puppets
   faceReady = true;
 }
 
@@ -3004,7 +3010,7 @@ function loop() {
               pose: mpPrimary?.bodyImg || null, poseWorld: mpPrimary?.bodyWorld || null, face: null };
   } else {
     frame = tracker ? tracker.detect() : { hands: null, handedness: [], handCount: 0 };
-    if (faceReady) updateFaceOutline(frame && frame.face);
+    if (faceReady) updateFaceOutline(AVSYNC.ovFace !== undefined ? AVSYNC.ovFace : frame && frame.face);   // seam-aware (probes)
   }
   // AVSYNC — the avatar live-drive consumes the SAME pose reference as the
   // tracked skeleton, in EVERY mode (single lane or multi primary, via the
@@ -3025,6 +3031,12 @@ function loop() {
     if (frame.handsWorld) { AVSYNC.handsWorld = frame.handsWorld; AVSYNC.handedness = frame.handedness; AVSYNC.hT = now; }
     else if (AVSYNC.handsWorld && now - (AVSYNC.hT || 0) > 400) { AVSYNC.handsWorld = null; AVSYNC.handedness = null; }
   }
+  // FACE lane (478 landmarks + 52 blendshapes + transform) for the engine's
+  // face puppets — same freshness rule; AVSYNC.ovFace is the probe seam
+  if (AVSYNC.ovFace !== undefined) AVSYNC.face = AVSYNC.ovFace;
+  else if (frame.face) { AVSYNC.face = frame.face; AVSYNC.fT = now; }
+  else if (AVSYNC.face && now - (AVSYNC.fT || 0) > 600) AVSYNC.face = null;
+  AVSYNC.faceAspect = (els.vid && els.vid.videoWidth) ? els.vid.videoWidth / els.vid.videoHeight : 4 / 3;
   AVSYNC.t = now;
   M.detect += (performance.now() - t0 - M.detect) * 0.1;
 
@@ -5001,6 +5013,7 @@ function engLoop() {
     }
   }
   engDragonTick(avDt);                         // procedural dragons: gait / flight / look
+  engFoxTick(avDt);                            // face puppets: lips / expressions / head from the face lane
   engEnvTick(avDt);                            // altitude → sky / grid / cloud layer
   engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
@@ -5297,9 +5310,12 @@ function engAvCtlRefresh() {
   const d = ENG.sel && ENG.sel.userData.eng;
   const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
   const drec = d && d.type === 'dragon' ? DRAGONS.get(d.id) : null;
-  const show = !!rec || !!drec;
+  const frec = d && d.type === 'fox' ? FOXES.get(d.id) : null;
+  const show = !!rec || !!drec || !!frec;
   lbl.style.display = show ? 'block' : 'none';
-  lbl.textContent = drec ? 'DRAGON · motion' : 'AVATAR · animation';
+  lbl.textContent = drec ? 'DRAGON · motion' : frec ? 'FOX · face puppet' : 'AVATAR · animation';
+  const fh = document.getElementById('engFoxHint');
+  if (fh) fh.style.display = frec ? 'block' : 'none';
   host.style.display = show ? 'flex' : 'none';
   engMindRows(rec);                            // MIND section rides the selection too
   const bh = document.getElementById('engBowHint');
@@ -5314,6 +5330,15 @@ function engAvCtlRefresh() {
     if (title) b.title = title;
     b.addEventListener('click', fn); host.appendChild(b);
   };
+  if (frec) {                                  // FOX strip: face live · neutral · mirror/POV
+    const sel = ENG.sel, F = frec.driver;
+    mk(frec.live ? '🎭 mirroring you' : '🎭 mirror me', frec.live, () => engFoxSetLive(sel, !frec.live).catch(err => toast('⚠ ' + (err.message || err), 5000)),
+       'face tracking from the camera drives the fox: jaw, lips, corners, cheeks, brows, blink, ears, head');
+    mk('🎯 neutral', false, () => { F.calibrate(); toast('🎯 hold a relaxed face for a second — capturing your neutral'); }, 're-capture your relaxed face as the fox\'s rest');
+    mk(F.mirror ? '🪞 mirror' : '🎮 POV', true, () => { F.mirror = !F.mirror; engAvCtlRefresh(); toast(F.mirror ? '🪞 mirror — your left is its screen-left' : '🎮 POV — your left is its left'); }, 'side convention');
+    mk('📷 frame', false, () => engFoxFrame(sel), 'put the camera on its face');
+    return;
+  }
   if (drec) {                                  // DRAGON strip: motion modes · look · roam
     const D = drec.driver, sel = ENG.sel;
     mk('⏹ idle', D.mode === 'idle', () => engDragonSetMode(sel, 'idle'), 'stand still (lands first if flying)');
@@ -5368,6 +5393,113 @@ ENG.spawnBow = engSpawnBow; ENG.bowSetDraw = engBowSetDraw;
 ENG.spawnDragon = (...a) => engSpawnDragon(...a); ENG.dragonSetMode = (...a) => engDragonSetMode(...a);
 ENG.dragonSetUser = (...a) => engDragonSetUser(...a);
 Object.defineProperty(ENG, 'env', { get: () => ENG_ENV });
+ENG.spawnFox = (...a) => engSpawnFox(...a); ENG.foxSetLive = (...a) => engFoxSetLive(...a);
+ENG.importGLB = (...a) => engImportGLB(...a);   // probe handle (tests/_foxmatprobe.mjs)
+Object.defineProperty(ENG, 'foxes', { get: () => FOXES });
+
+// ═══ 🦊 FOX BUST — a face puppet game object ═════════════════════════════
+// foxbust.glb is a UniRig auto-rig whose bones turned out to include a jaw
+// hinge, lower-lip chain, snout/upper lip, mouth-corner, cheek, eye/brow,
+// forehead and ear bones (regions measured from the skin weights). The
+// FaceRigDriver (sdk/interaction/face-rig-driver.js) aligns the user's lip /
+// corner / cheek / brow LANDMARK deltas onto those same-role bones, rotates
+// the jaw from mouth-open, reads blink / puff / pucker from the blendshapes,
+// and turns the head with the user's — all from the lab's face lane.
+// The full-body fox (foxfull_face.glb) instead carries an AUTHORED facial rig:
+// tools/facerig placed Auto-Rig-Pro-style markers on the Meshy head (lip ring
+// along the muzzle crease, eyelid rings, brows, nose, cheeks, ears, jaw pivot)
+// and built named deform bones + weights in headless Blender; the
+// ArpFaceDriver (sdk/interaction/arp-face-driver.js) maps the user's lip
+// contour ring-to-ring onto it, closes the mouth at neutral, hinges the jaw,
+// blinks the lids, turns the eyes with the gaze blendshapes.
+const FOXES = new Map();                       // eng.id → { driver, grp, live, headY, kind }
+const ENG_FOX_URL = 'sdk/assets/avatars/foxbust.glb';
+const ENG_FOXFULL_URL = 'sdk/assets/avatars/foxfull_face.glb';
+const ENG_FOX_HEIGHT = 1.15;                   // bust height in the engine (m)
+const ENG_FOXFULL_HEIGHT = 1.75;               // the standing fox
+async function engSpawnFox(meta = {}) {
+  const kind = meta.kind || (meta.url === ENG_FOXFULL_URL ? 'full' : 'bust');
+  const url = meta.url || (kind === 'full' ? ENG_FOXFULL_URL : ENG_FOX_URL);
+  const [{ GLTFLoader }, { FaceRigDriver, faceRigContractMatches }, { ArpFaceDriver, arpContractMatches }] = await Promise.all([
+    import('three/addons/loaders/GLTFLoader.js'),
+    import('./sdk/interaction/face-rig-driver.js'),
+    import('./sdk/interaction/arp-face-driver.js'),
+  ]);
+  const gltf = await new Promise((res, rej) => new GLTFLoader().load(url, res, null, rej));
+  const arp = arpContractMatches(gltf.scene);            // authored ARP-style face rig?
+  const bust = arp.ok ? null : faceRigContractMatches(gltf.scene);
+  if (!arp.ok && !bust.ok) throw new Error('not a face-rigged fox — missing ' + bust.missing.slice(0, 4).join(','));
+  const grp = new THREE.Group();
+  grp.add(gltf.scene);
+  let sm0 = null;
+  gltf.scene.traverse(o => { if (o.isSkinnedMesh) { o.frustumCulled = false; if (!sm0) sm0 = o; } });
+  const mirror = meta.mirror !== undefined ? !!meta.mirror : true;
+  const driver = arp.ok ? new ArpFaceDriver(undefined, { mirror }).bind(gltf.scene) : new FaceRigDriver(undefined, { mirror }).bind(gltf.scene);
+  // bust only: lip line + jaw hinge sharpening + lip-edge parametrization on the skinned muzzle
+  if (sm0 && !arp.ok) { const st = driver.bindMesh(sm0); if (st) console.log('[fox] lip seam:', st.sharpened, 'verts re-weighted,', st.edge, 'lip-edge verts'); }
+  const box = sm0 ? _skinnedBox(sm0, gltf.scene) : new THREE.Box3().setFromObject(gltf.scene);
+  const h = Math.max(box.max.y - box.min.y, 1e-6), f = (arp.ok ? ENG_FOXFULL_HEIGHT : ENG_FOX_HEIGHT) / h;
+  gltf.scene.scale.setScalar(f);
+  gltf.scene.position.y = -box.min.y * f;
+  gltf.scene.position.x = -(box.min.x + box.max.x) / 2 * f;
+  const sz = box.getSize(new THREE.Vector3()).multiplyScalar(f);
+  const proxy = new THREE.Mesh(new THREE.BoxGeometry(Math.max(sz.x, 0.5), sz.y, Math.max(sz.z, 0.5)),
+    new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false, colorWrite: false }));
+  proxy.position.set(0, sz.y / 2, (box.min.z + box.max.z) / 2 * f);
+  grp.add(proxy); grp.userData.pickProxy = proxy;
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.2);
+  grp.position.set(p.x, 0, p.z);
+  grp.rotation.y = Math.atan2(-fwd.x, -fwd.z);      // faces the camera, like a mirror
+  // camera framing height: the head bone for the full fox, 72 % of the bust
+  let headY = 0.72 * sz.y;
+  if (arp.ok) headY = driver.modelPos(driver.c.joints.head).y * f + gltf.scene.position.y + 0.07 * f;
+  engAdopt(grp, { type: 'fox', url, label: meta.label || (arp.ok ? 'fox ' : 'fox bust ') + ENG.seq });
+  FOXES.set(grp.userData.eng.id, { driver, grp, live: false, headY, kind: arp.ok ? 'full' : 'bust' });
+  engAvCtlRefresh(); engRefreshList();         // registered after adopt → show its strip now
+  return grp;
+}
+function engFoxFrame(obj) {                    // camera onto its face, front-on
+  const rec = FOXES.get(obj.userData.eng.id); if (!rec) return;
+  const s = obj.scale.x || 1, h = obj.rotation.y;
+  ENG.orbit.target.set(obj.position.x, obj.position.y + rec.headY * s, obj.position.z);
+  ENG.camera.position.set(obj.position.x + Math.sin(h) * 1.9 * s, obj.position.y + rec.headY * s + 0.15, obj.position.z + Math.cos(h) * 1.9 * s);
+  ENG.orbit.update();
+}
+async function engFoxSetLive(obj, on, opts = {}) {
+  const rec = FOXES.get(obj.userData.eng.id); if (!rec) return;
+  if (on) {
+    if (rec.live) return;
+    for (const r of FOXES.values()) if (r !== rec && r.live) engFoxSetLive(r.grp, false);   // one face, one fox
+    if (!ENG.sdk.on && opts.sdk !== false) {   // needs the SDK with the face lane on
+      engEls.engSdkChk.checked = true;
+      try { await engSdkOn(); } catch (e) { engSdkOff(); throw new Error('tracking failed: ' + (e.message || e)); }
+    }
+    if (opts.sdk !== false) { const b = document.querySelector('#engFaceRow [data-face="full"]'); if (b && !b.classList.contains('sel')) b.click(); }
+    rec.live = true; rec.driver.calibrate();
+    document.body.classList.add('eng-fox');
+    engCamPipSync();
+    engFoxFrame(obj);
+    engSelect(obj);
+    toast('🎭 the fox is your face — relax for a second (neutral), then talk, smile, pout, raise your brows, turn your head', 7000);
+  } else {
+    if (!rec.live) return;
+    rec.live = false;
+    if (![...FOXES.values()].some(r => r.live) && ![...DRAGONS.values()].some(r => r.user)) { document.body.classList.remove('eng-fox'); engCamPipSync(false); }
+  }
+  engAvCtlRefresh(); engRefreshList();
+}
+function engFoxTick(dt) {
+  if (!FOXES.size) return;
+  const T = window.__lab && window.__lab.AVSYNC;
+  for (const rec of FOXES.values()) {
+    if (rec.live && T) {
+      const face = T.ovFace !== undefined ? T.ovFace : T.face;
+      rec.driver.update(face, dt, { aspect: T.faceAspect || 4 / 3 });
+      engCamPipSync();
+    } else rec.driver.update(null, dt);      // idle: breathing + the odd blink
+  }
+}
 Object.defineProperty(ENG, 'dragons', { get: () => DRAGONS });
 
 // ═══ DRAGON — a self-propelled rigged game object (procedural motion) ═════
@@ -6511,7 +6643,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -6528,6 +6660,8 @@ function engDelete(o) {
   AVREG.delete(o.userData.eng.id);
   if (DRAGONS.get(o.userData.eng.id)?.user) engDragonSetUser(o, false);   // embodied → release the HUD/dolly
   DRAGONS.delete(o.userData.eng.id);
+  if (FOXES.get(o.userData.eng.id)?.live) engFoxSetLive(o, false);
+  FOXES.delete(o.userData.eng.id);
   const bw = BOWS.get(o.userData.eng.id);
   if (bw) {
     if (bw.nocked) ENG.scene.remove(bw.nocked);
@@ -6548,6 +6682,7 @@ function engSnapshot() {
       return { ...o.userData.eng, clip: rec ? rec.clipIdx : undefined, role: rec ? rec.role : undefined,
                mind: rec && rec.mind ? { key: rec.mind.key, stats: { ...rec.mind.stats } } : undefined,
                dragon: dr ? { mode: dr.driver.mode, look: dr.lookMode, auto: dr.driver.auto, follow: dr.follow } : undefined,
+               fox: FOXES.get(o.userData.eng.id) ? { mirror: FOXES.get(o.userData.eng.id).driver.mirror, kind: FOXES.get(o.userData.eng.id).kind } : undefined,
                p: o.position.toArray(), r: o.rotation.toArray().slice(0, 3), s: o.scale.toArray() };
     }) };
 }
@@ -6563,6 +6698,12 @@ async function engRestore(snap) {
           const rr = AVREG.get(g.userData.eng.id);
           if (rr && rr.mind) rr.mind.stats = { ...rec.mind.stats };
         }
+      } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'fox') {
+      try {
+        const g = await engSpawnFox({ label: rec.label, ...(rec.fox || {}) });
+        g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
     }
     else if (rec.type === 'dragon') {
@@ -6844,6 +6985,18 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
     toast('loading avatar…', 5000);
     engSpawnAvatar().then(() => toast('🧍 avatar — select it for the animation strip'))
       .catch(err => toast('⚠ avatar failed: ' + (err.message || err), 5000));
+    return;
+  }
+  if (b.dataset.sp === 'fox') {
+    toast('loading fox bust…', 6000);
+    engSpawnFox().then(() => toast('🦊 fox bust — select it, then 🎭 mirror me to drive it with your face'))
+      .catch(err => toast('⚠ fox failed: ' + (err.message || err), 6000));
+    return;
+  }
+  if (b.dataset.sp === 'foxfull') {
+    toast('loading fox…', 8000);
+    engSpawnFox({ kind: 'full' }).then(() => toast('🦊 fox — select it, then 🎭 mirror me: your lips, jaw, brows, lids and gaze drive its face'))
+      .catch(err => toast('⚠ fox failed: ' + (err.message || err), 6000));
     return;
   }
   if (b.dataset.sp === 'dragon') {

@@ -15,7 +15,10 @@
     "test:wrist": "node tests/wrist-clamp-smoke.mjs",
     "test:sign": "node tests/sign-smoke.mjs",
     "test:dragon": "node tests/dragon-smoke.mjs",
-    "test:wing": "node tests/wing-smoke.mjs"
+    "test:wing": "node tests/wing-smoke.mjs",
+    "test:facerig": "node tests/facerig-smoke.mjs",
+    "test:lipseam": "node tests/lipseam-smoke.mjs",
+    "test:facerig-arp": "node tests/facerig-arp-smoke.mjs"
   },
   "dependencies": {
     "@vercel/blob": "latest"
