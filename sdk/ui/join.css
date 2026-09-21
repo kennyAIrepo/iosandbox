@@ -1,0 +1,120 @@
+/* join.css — pre-join screen, invite dialog, connection chip, People-pane invite row (sdk/game/join-ui.js).
+ * Load AFTER sdk/ui/teams-tokens.css and sdk/ui/teamslab.css; every colour / size is a token from those two files
+ * (Fluent 2 tokens; the Teams pre-join screen is the reference: preview tile left, device row under it, name + Join
+ * on the right, https://support.microsoft.com/office/join-a-meeting-in-microsoft-teams). Stacking: the screen sits at
+ * z 35 (above the panel 30, below dialogs 40 — the consent <dialog> is in the top layer anyway).
+ * Phone (<= 480px wide): one column, controls >= 44 px (Apple HIG / WCAG 2.5.8 target size), no horizontal scroll. */
+
+.tw-frame { --tw-z-prejoin: 35; --tw-touch-min: 44px; }
+
+/* ---------- pre-join screen ---------- */
+.prejoin {
+  position: absolute; inset: 0; z-index: var(--tw-z-prejoin);
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto; min-width: 0; min-height: 0;
+  background: var(--colorNeutralBackground3); color: var(--colorNeutralForeground1);
+  font-family: var(--tw-font-ui); font-size: var(--fontSizeBase300); line-height: var(--lineHeightBase300);
+  overflow: hidden auto; overscroll-behavior: contain;
+}
+.prejoin[hidden] { display: none; }
+.prejoin__top { display: flex; align-items: center; gap: 8px; min-height: var(--tw-topbar-h); padding: 0 12px; background: var(--tw-topbar-bg); border-bottom: 1px solid var(--tw-panel-border); }
+.prejoin__logo { width: 24px; height: 24px; flex: none; border-radius: 6px; background: var(--colorBrandBackground); display: grid; place-items: center; color: var(--colorNeutralForegroundOnBrand); font-weight: var(--fontWeightSemibold); font-size: var(--fontSizeBase200); }
+.prejoin__title { font-weight: var(--fontWeightSemibold); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prejoin__sub { color: var(--colorNeutralForeground3); font-size: var(--fontSizeBase200); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prejoin__top .prejoin__chip { margin-left: auto; }
+
+.prejoin__body {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(280px, 380px); gap: 24px; align-content: center; justify-content: center;
+  width: min(100%, 1040px); margin: 0 auto; padding: 24px; min-height: 0;
+}
+.prejoin__preview { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.prejoin__tile { position: relative; aspect-ratio: 16 / 9; width: 100%; border-radius: var(--tw-tile-radius); overflow: hidden; background: var(--tw-tile-bg); box-shadow: var(--shadow8); }
+.prejoin__video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); background: var(--tw-tile-bg); }
+.prejoin__tile.is-camoff .prejoin__video { visibility: hidden; }
+.prejoin__avatar { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--colorNeutralForeground3); }
+.prejoin__tile.is-camoff .prejoin__avatar { display: flex; }
+.prejoin__initials { width: 72px; height: 72px; border-radius: 50%; display: grid; place-items: center; background: var(--colorBrandBackground); color: #000; font-size: var(--fontSizeBase600); font-weight: var(--fontWeightSemibold); }
+.prejoin__label { position: absolute; left: 8px; bottom: 8px; display: flex; align-items: center; gap: 6px; max-width: calc(100% - 16px); padding: var(--tw-tile-label-pad); border-radius: var(--tw-tile-label-radius); background: var(--tw-tile-label-bg); color: var(--tw-tile-label-fg); font: var(--tw-tile-label-font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prejoin__pill { position: absolute; top: 8px; left: 8px; padding: 2px 8px; border-radius: var(--borderRadiusMedium); background: var(--tw-tile-label-bg); color: var(--tw-tile-label-fg); font-size: var(--fontSizeBase200); font-weight: var(--fontWeightSemibold); }
+
+.prejoin__devices { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.prejoin__devbtn { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 14px 0 10px; border: 1px solid var(--colorNeutralStroke1); border-radius: 20px; background: var(--colorNeutralBackground1); color: var(--colorNeutralForeground1); font: inherit; font-weight: var(--fontWeightSemibold); cursor: pointer; }
+.prejoin__devbtn:hover { background: var(--colorNeutralBackground1Hover); }
+.prejoin__devbtn svg { width: 20px; height: 20px; flex: none; }
+.prejoin__devbtn .off, .prejoin__devbtn[aria-pressed="false"] .on { display: none; }
+.prejoin__devbtn[aria-pressed="false"] .off { display: block; }
+.prejoin__devbtn[aria-pressed="false"] { color: var(--colorNeutralForeground2); border-color: var(--colorNeutralStroke2); }
+.prejoin__devbtn[aria-pressed="false"] svg { color: var(--colorStatusDangerForeground1); }
+.prejoin__devbtn:disabled { color: var(--colorNeutralForegroundDisabled); cursor: default; }
+.prejoin__devnote { color: var(--colorNeutralForeground3); font-size: var(--fontSizeBase200); flex: 1 1 100%; }
+
+.prejoin__card { display: flex; flex-direction: column; gap: 12px; padding: 20px; border-radius: var(--borderRadiusXLarge); background: var(--colorNeutralBackground1); box-shadow: var(--shadow16); align-self: center; min-width: 0; }
+.prejoin__h { margin: 0; font-size: var(--fontSizeBase500); line-height: var(--lineHeightBase500); font-weight: var(--fontWeightSemibold); }
+.prejoin__room { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--colorNeutralForeground2); font-size: var(--fontSizeBase200); }
+.prejoin__code { font-family: var(--fontFamilyMonospace); font-size: var(--fontSizeBase400); font-weight: var(--fontWeightSemibold); letter-spacing: .12em; color: var(--colorNeutralForeground1); padding: 2px 8px; border-radius: var(--borderRadiusMedium); background: var(--colorNeutralBackground3); }
+.prejoin__field { display: flex; flex-direction: column; gap: 4px; }
+.prejoin__field label { font-size: var(--fontSizeBase200); color: var(--colorNeutralForeground2); }
+.prejoin__field .tw-input { width: 100%; height: 40px; font-size: var(--fontSizeBase300); }
+.prejoin__actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.prejoin__actions .tw-btn { min-height: 40px; padding: 0 20px; font-size: var(--fontSizeBase300); }
+.prejoin__actions .tw-btn svg, .roster__invite svg { width: 16px; height: 16px; flex: none; }
+.prejoin__actions .tw-btn--primary { flex: 1 1 auto; }
+.prejoin__err { color: var(--colorStatusDangerForeground1); font-size: var(--fontSizeBase200); min-height: 1.2em; }
+.prejoin__err:empty { display: none; }
+.prejoin__foot { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--tw-strip-h); padding: 4px 12px; color: var(--colorNeutralForeground3); font-size: var(--fontSizeBase100); text-align: center; border-top: 1px solid var(--tw-panel-border); }
+
+/* ---------- connection chip (pre-join top bar and the meeting top bar) ---------- */
+.conn-chip { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px 0 8px; border-radius: 12px; background: var(--colorNeutralBackground2); color: var(--colorNeutralForeground2); font-size: var(--fontSizeBase200); font-weight: var(--fontWeightSemibold); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.conn-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--colorNeutralForeground3); flex: none; }
+.conn-chip[data-state="connecting"]::before, .conn-chip[data-state="reconnecting"]::before { background: var(--colorPaletteMarigoldBorderActive); animation: conn-pulse calc(900ms * var(--tw-motion) + 1ms) ease-in-out infinite; }
+.conn-chip[data-state="connected"]::before { background: var(--colorStatusSuccessForeground1); }
+.conn-chip[data-state="offline"] { color: var(--colorStatusDangerForeground1); }
+.conn-chip[data-state="offline"]::before { background: var(--colorStatusDangerForeground1); }
+.conn-chip[data-state="reconnecting"] { color: var(--colorPaletteMarigoldForeground2); }
+.conn-chip[hidden] { display: none; }
+@keyframes conn-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ---------- invite dialog (Fluent dialog: .dlg from teamslab.css) ---------- */
+.invite .dlg { width: clamp(280px, 92vw, 440px); }
+.invite__lead { color: var(--colorNeutralForeground2); margin: 0 0 12px; }
+.invite__code { display: flex; align-items: center; gap: 10px; margin: 0 0 12px; }
+.invite__code .prejoin__code { font-size: var(--fontSizeBase600); padding: 4px 12px; }
+.invite__linkrow { display: flex; gap: 6px; align-items: center; }
+.invite__linkrow .tw-input { flex: 1 1 auto; min-width: 0; font-family: var(--fontFamilyMonospace); font-size: var(--fontSizeBase200); }
+.invite__linkrow .tw-btn { flex: none; }
+.invite__copied { min-height: 20px; margin: 4px 0 0; color: var(--colorStatusSuccessForeground1); font-size: var(--fontSizeBase200); }
+.invite__qr { display: flex; flex-direction: column; align-items: center; gap: 6px; margin: 12px 0 8px; }
+.invite__qr img { width: 176px; height: 176px; border-radius: var(--borderRadiusLarge); background: #fff; padding: 6px; }
+.invite__qr .invite__qrtext { width: 100%; padding: 8px 10px; border-radius: var(--borderRadiusMedium); background: var(--colorNeutralBackground3); color: var(--colorNeutralForeground2); font-family: var(--fontFamilyMonospace); font-size: var(--fontSizeBase200); overflow-wrap: anywhere; user-select: all; }
+.invite__hint { color: var(--colorNeutralForeground3); font-size: var(--fontSizeBase200); margin: 0; }
+.invite__qr[hidden] { display: none; }
+
+/* ---------- People pane: invite row + in-meeting chip ---------- */
+.roster__invite { display: flex; align-items: center; gap: 8px; min-height: var(--tw-roster-row-h); padding: 8px 0; border-bottom: 1px solid var(--tw-panel-border); }
+.roster__invite .roster__avatar { background: var(--colorNeutralBackground1Selected); color: var(--colorBrandForeground2); }
+.roster__invite .tw-btn { margin-left: auto; }
+.roster__invite .roster__meta { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#topbar .conn-chip { flex: none; }
+
+/* ---------- phone (portrait, <= 480px): one column, 44 px targets ---------- */
+@media (max-width: 480px) {
+  .prejoin__body { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 12px; align-content: start; }
+  .prejoin__card { padding: 16px; box-shadow: none; }
+  .prejoin__actions .tw-btn, .prejoin__devbtn, .prejoin__field .tw-input, .invite__linkrow .tw-btn, .invite__linkrow .tw-input, .dlg__btns .tw-btn { min-height: var(--tw-touch-min); }
+  .prejoin__devbtn { flex: 1 1 auto; justify-content: center; }
+  .prejoin__actions .tw-btn { flex: 1 1 auto; }
+  .prejoin__top .prejoin__sub { display: none; }
+  .prejoin__foot { display: none; }                 /* the C10 strip below the frame already carries the sandbox notice */
+  /* the UA caps a modal dialog at calc(100% - 6px - 2em); size the dialog box itself, and let the link row wrap */
+  .tw-frame dialog.invite { width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 16px); }
+  .invite .dlg { width: 100%; max-height: calc(100dvh - 16px); }
+  .invite__linkrow { flex-wrap: wrap; }
+  .invite__linkrow .tw-input { flex: 1 1 100%; }
+  .invite__linkrow .tw-btn { flex: 1 1 100%; }
+}
+/* short landscape phones: keep the tile from pushing Join off-screen */
+@media (max-height: 480px) and (min-width: 481px) {
+  .prejoin__body { padding: 12px 16px; gap: 16px; }
+  .prejoin__tile { max-height: 40vh; aspect-ratio: auto; height: 40vh; }
+}
+@media (prefers-reduced-motion: reduce) { .conn-chip::before { animation: none; } }
+@media (forced-colors: active) { .conn-chip, .prejoin__devbtn, .prejoin__code { forced-color-adjust: none; border: 1px solid CanvasText; background: Canvas; color: CanvasText; } }

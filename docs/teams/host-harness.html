@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS — Teams video-effect host harness</title>
+<!--
+  host-harness.html — a LOCAL stand-in for the Teams client so video effects can be developed and
+  profiled in plain Chrome. Serve it with `node serve.mjs` and open http://localhost:8787/host-harness.html
+  (localhost is a secure context; the server also sets COOP/COEP so SharedArrayBuffer is available).
+  Automated run: `node verify-harness.mjs` (headless Chrome + fake camera, all four modes).
+
+  Four modes, selectable in the toolbar or via ?mode=…&autostart=1&effect=holohands&w=1280&h=720:
+
+    A-mediaStream  (default)  getUserMedia -> MediaStreamTrackProcessor -> VideoFrame -> effect.videoFrameHandler
+                              -> new VideoFrame(processed,{timestamp}) -> MediaStreamTrackGenerator -> <video>.
+                              This is a line-for-line re-implementation of the SDK's DefaultTransformer
+                              (teams-js internal/videoEffectsUtils.ts L182-209, processMediaStream L73-86,
+                              pipeVideoSourceToGenerator L161-171), minus the WebView2
+                              chrome.webview.getTextureStream/registerTextureStream calls.
+    A-sharedFrame             same camera, but each frame is converted to an NV12 Uint8ClampedArray and handed to
+                              effect.videoBufferHandler(bufferData, notifyProcessed, notifyError) for IN-PLACE editing,
+                              like classic (Electron) Teams' 'video.newVideoFrame' path. Output is rebuilt from the buffer.
+    B-mediaStream             loads video-effect.html?harness=1 in an iframe and speaks the REAL teams-js postMessage
+                              protocol to the REAL SDK: answers 'initialize', pushes 'video.startVideoExtensibilityVideoStream',
+                              and lets the page's chrome.webview shim supply the camera. Exercises isSupported(), the
+                              both-handlers check, effect readiness, notifyError, and the SDK's own frame monitor.
+    B-sharedFrame             as above but with runtime.supports.video.sharedFrame: the host pumps 'video.newVideoFrame'
+                              with a SharedArrayBuffer-backed NV12 buffer and waits for 'video.videoFrameProcessed'.
+
+  Browser support (mdn/browser-compat-data api/*.json, fetched 2026-09-18): MediaStreamTrackProcessor Chrome 94
+  (partial: exposed on Window instead of DedicatedWorker), Safari 18, Firefox none. MediaStreamTrackGenerator
+  Chrome 94 only (experimental, not on a standards track). VideoFrame Chrome 94, Firefox 130, Safari 16.4.
+  So: Chrome/Edge only, which is also what Teams' WebView2 (Edge) host runs.
+-->
+<style>
+  :root { color-scheme: dark; --bg:#0f1117; --panel:#171a23; --line:#262a36; --fg:#e6e8ef; --mut:#8a90a3; --ok:#3ddc84; --warn:#ffb86b; --bad:#ff6b6b; --acc:#7f85f5; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:13px/1.45 system-ui,"Segoe UI",sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; padding:10px 14px; border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:14px; margin:0 8px 0 0; }
+  label { color:var(--mut); }
+  select, button { background:#20242f; color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#0b0d14; font-weight:600; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 380px; gap:14px; padding:14px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .tile { position:relative; background:#000; border-radius:10px; overflow:hidden; aspect-ratio:16/9; border:1px solid var(--line); }
+  .tile video { width:100%; height:100%; object-fit:contain; display:block; }
+  .tile .name { position:absolute; left:10px; bottom:8px; background:rgba(0,0,0,.55); padding:2px 8px; border-radius:4px; font-size:12px; }
+  .hud { position:absolute; top:8px; left:8px; background:rgba(10,12,18,.8); border:1px solid var(--line); border-radius:6px; padding:6px 8px; font:12px/1.4 ui-monospace,Consolas,monospace; white-space:pre; }
+  .hud b { font-weight:600; }
+  .ok { color:var(--ok);} .warn { color:var(--warn);} .bad { color:var(--bad);} .mut { color:var(--mut);}
+  aside { display:flex; flex-direction:column; gap:10px; min-width:0; }
+  iframe { width:100%; height:300px; border:1px solid var(--line); border-radius:8px; background:#1f1f1f; }
+  #log { margin:0; padding:8px 10px; background:var(--panel); border:1px solid var(--line); border-radius:8px; height:340px; overflow:auto; font:11.5px/1.4 ui-monospace,Consolas,monospace; white-space:pre-wrap; }
+  .legend { color:var(--mut); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Teams host harness</h1>
+  <label>mode <select id="mode">
+    <option value="A-mediaStream">A · in-process · mediaStream (VideoFrame)</option>
+    <option value="A-sharedFrame">A · in-process · sharedFrame (NV12 in place)</option>
+    <option value="B-mediaStream">B · protocol · real SDK · mediaStream</option>
+    <option value="B-sharedFrame">B · protocol · real SDK · sharedFrame</option>
+  </select></label>
+  <label>camera <select id="res">
+    <option value="640x360">640×360</option>
+    <option value="1280x720" selected>1280×720</option>
+    <option value="1920x1080">1920×1080</option>
+  </select></label>
+  <label>effect <select id="effect">
+    <option value="">none (pass-through)</option>
+    <option value="holohands">HoloHands</option>
+    <option value="ballpass">Ball pass</option>
+    <option value="apple">Apple in hand</option>
+  </select></label>
+  <button id="start" class="primary">Start</button>
+  <button id="stop">Stop</button>
+  <span class="legend">budget: <span class="ok">≤45 ms</span> = 22 fps @720p rule · <span class="warn">≤100 ms</span> = SDK slow-frame limit · <span class="bad">&gt;100 ms</span></span>
+</header>
+<main>
+  <section class="tile">
+    <video id="out" autoplay muted playsinline></video>
+    <div class="hud" id="hud">idle</div>
+    <div class="name">You (processed)</div>
+  </section>
+  <aside>
+    <iframe id="app" hidden allow="camera; microphone"></iframe>
+    <pre id="log"></pre>
+  </aside>
+</main>
+
+<script type="module">
+import { createEffect, EFFECT_IDS, rgbaToNV12InPlace } from './effect-core.js';
+
+const $ = (id) => document.getElementById(id);
+const out = $('out'), hud = $('hud'), logEl = $('log'), iframe = $('app');
+const params = new URLSearchParams(location.search);
+const EFFECT_BY_NAME = { holohands: EFFECT_IDS.HOLOHANDS, ballpass: EFFECT_IDS.BALL_PASS, apple: EFFECT_IDS.APPLE };
+
+const lines = [];
+function log(msg, cls = '') {
+  const t = (performance.now() / 1000).toFixed(2).padStart(7);
+  lines.push(`${t} ${msg}`);
+  if (lines.length > 400) lines.shift();
+  const span = document.createElement('span'); span.className = cls; span.textContent = `${t} ${msg}\n`;
+  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ------------------------------------------------------------------ HUD / stats (ms per frame)
+const stats = { mode: 'idle', frames: 0, fps: 0, lastMs: 0, avgMs: 0, maxMs: 0, w: 0, h: 0, errors: 0, transport: '' };
+let fpsCount = 0;
+function frameDone(ms) {
+  stats.frames++; fpsCount++;
+  stats.lastMs = ms; stats.avgMs += (ms - stats.avgMs) / Math.min(stats.frames, 60); stats.maxMs = Math.max(stats.maxMs, ms);
+}
+setInterval(() => { stats.fps = fpsCount; fpsCount = 0; drawHud(); }, 1000);
+function budgetClass(ms) { return ms <= 45 ? 'ok' : ms <= 100 ? 'warn' : 'bad'; }
+function drawHud() {
+  const c = budgetClass(stats.avgMs);
+  hud.innerHTML =
+    `<b>${stats.mode}</b> ${stats.transport ? '· ' + stats.transport : ''}\n` +
+    `${stats.w}×${stats.h}  out ${out.videoWidth}×${out.videoHeight}  <b>${stats.fps} fps</b>\n` +
+    `${stats.transport.includes('relay') ? 'handler ms: see app panel HUD (SDK monitor)\n' : ''}handler ms  last <span class="${budgetClass(stats.lastMs)}">${stats.lastMs.toFixed(1)}</span>` +
+    `  avg <span class="${c}">${stats.avgMs.toFixed(1)}</span>  max ${stats.maxMs.toFixed(1)}\n` +
+    `frames ${stats.frames}  errors ${stats.errors}`;
+}
+
+// ------------------------------------------------------------------ shared plumbing
+let cam = null, generator = null, abort = null, pumping = false, effect = null;
+const scratch = new OffscreenCanvas(16, 16), sctx = scratch.getContext('2d', { willReadFrequently: true });
+
+function camConstraints() {
+  const [w, h] = ($('res').value).split('x').map(Number);
+  return { video: { width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 30 } }, audio: false };
+}
+async function openCamera() {
+  cam = await navigator.mediaDevices.getUserMedia(camConstraints());
+  const track = cam.getVideoTracks()[0]; const s = track.getSettings();
+  stats.w = s.width; stats.h = s.height;
+  log(`camera ${s.width}×${s.height}@${s.frameRate} (${track.label})`);
+  return track;
+}
+function makeGenerator() {
+  generator = new MediaStreamTrackGenerator({ kind: 'video' });   // same call as videoEffectsUtils.ts L153
+  out.srcObject = new MediaStream([generator]);
+  return generator;
+}
+/** Fill `dst` (NV12, stride = w) from a VideoFrame's visible rect. Tries copyTo format conversion (the `format`
+ *  option is Chrome 127+ per BCD; in practice Chrome only converts to RGBA-family formats, so this usually falls
+ *  back), else 2D readback + JS conversion. */
+async function frameToNV12(frame, dst, w, h) {
+  try {
+    await frame.copyTo(dst, { rect: frame.visibleRect, format: 'NV12', layout: [{ offset: 0, stride: w }, { offset: w * h, stride: w }] });
+    return 'copyTo';
+  } catch {
+    scratch.width = w; scratch.height = h; sctx.drawImage(frame, 0, 0, w, h);
+    rgbaToNV12InPlace(sctx.getImageData(0, 0, w, h).data, w, h, dst, w, w);
+    return 'canvas';
+  }
+}
+function hostNotifyError(e) { stats.errors++; log(`notifyError: ${e?.message || e}`, 'bad'); }
+
+// ------------------------------------------------------------------ MODE A (in-process)
+async function startA(sub) {
+  effect = createEffect({ createTracker: null }); // TODO(hopeOS): pass the MediaPipe tracker factory here
+  const wanted = EFFECT_BY_NAME[$('effect').value]; if (wanted) await effect.setEffect(wanted);
+  const track = await openCamera();
+  const processor = new MediaStreamTrackProcessor({ track });      // videoEffectsUtils.ts L166-167
+  const gen = makeGenerator();
+  abort = new AbortController();
+  stats.mode = `A · ${sub}`; stats.transport = 'in-process';
+  const transformer = sub === 'mediaStream' ? mediaStreamTransformer() : sharedFrameTransformer();
+  processor.readable.pipeThrough(new TransformStream(transformer)).pipeTo(gen.writable, { signal: abort.signal })   // L170
+    .catch((e) => { if (e?.name !== 'AbortError') log(`pipeline ended: ${e}`, 'bad'); });
+  log(`mode A started (${sub})`);
+}
+// Mirrors internal/videoEffectsUtils.ts DefaultTransformer.transform (L188-208) exactly.
+function mediaStreamTransformer() {
+  return {
+    async transform(originalFrame, controller) {
+      const t0 = performance.now();
+      const timestamp = originalFrame.timestamp;
+      if (timestamp === null) { originalFrame.close(); hostNotifyError('timestamp of the original video frame is null'); return; }
+      try {
+        const frameProcessedByApp = await effect.videoFrameHandler({ videoFrame: originalFrame });
+        const processedFrame = new VideoFrame(frameProcessedByApp, { timestamp });
+        controller.enqueue(processedFrame);
+        originalFrame.close();
+        frameProcessedByApp.close();
+      } catch (error) { originalFrame.close(); hostNotifyError(error); }
+      frameDone(performance.now() - t0);
+    },
+  };
+}
+// Mirrors the 'video.newVideoFrame' -> videoBufferHandler -> 'video.videoFrameProcessed' round trip (videoEffects.ts L391-422).
+function sharedFrameTransformer() {
+  let nv12 = null, conv = '';
+  return {
+    async transform(frame, controller) {
+      const w = frame.visibleRect.width & ~1, h = frame.visibleRect.height & ~1, ts = frame.timestamp, size = (w * h * 3) >> 1;
+      if (!nv12 || nv12.length !== size) nv12 = new Uint8ClampedArray(size);
+      const c = await frameToNV12(frame, nv12, w, h); if (c !== conv) { conv = c; stats.transport = `in-process · nv12 via ${c}`; }
+      frame.close();
+      const t0 = performance.now();
+      await new Promise((resolve) => {
+        effect.videoBufferHandler(
+          { width: w, height: h, videoFrameBuffer: nv12, lumaStride: w, chromaStride: w, timestamp: ts },
+          () => resolve(),                              // notifyVideoFrameProcessed
+          (msg) => { hostNotifyError(msg); resolve(); }, // notifyError
+        );
+      });
+      frameDone(performance.now() - t0);
+      controller.enqueue(new VideoFrame(nv12, { format: 'NV12', codedWidth: w, codedHeight: h, timestamp: ts }));
+    },
+  };
+}
+
+// ------------------------------------------------------------------ MODE B (real SDK over postMessage)
+// Message shapes from teams-js internal/messageObjects.ts: app->host requests are {id:number, uuidAsString, func,
+// timestamp, args}; host->app responses are {id, uuidAsString, args}; host->app EVENTS are {func, args} with no id
+// (internal/communication.ts: a message with 'id' resolves a pending callback, one with 'func' invokes a handler).
+// The 'initialize' response is [frameContext, hostClientType, runtimeConfig(JSON string), clientSupportedSDKVersion]
+// (communication.ts L130-135).
+let runtimeConfig = null, pending = null, pendingTimer = 0, relayWriter = null;
+function reply(m, args = []) { iframe.contentWindow.postMessage({ id: m.id, uuidAsString: m.uuidAsString, args }, location.origin); }
+function pushEvent(func, args = []) { iframe.contentWindow.postMessage({ func, args }, location.origin); log(`host -> app: ${func} ${short(args)}`, 'mut'); }
+function short(x) { try { return JSON.stringify(x, (k, v) => (v instanceof Uint8ClampedArray ? `<${v.length} bytes>` : v)).slice(0, 110); } catch { return ''; } }
+
+async function startB(sub) {
+  // runtime.supports.video.{mediaStream|sharedFrame} is what isSupported()/doesSupportMediaStream() read
+  // (runtime.ts L77-80; videoEffects.ts L329-336, L437-453).
+  runtimeConfig = { apiVersion: 4, supports: { video: sub === 'mediaStream' ? { mediaStream: {} } : { sharedFrame: {} } } };
+  stats.mode = `B · ${sub}`; stats.transport = 'postMessage · teams-js 2.56.0';
+  window.addEventListener('message', onAppMessage);
+  iframe.hidden = false;
+  const [w, h] = ($('res').value).split('x');
+  iframe.src = `video-effect.html?harness=1&w=${w}&h=${h}`;
+  log(`mode B started (${sub}); runtime=${JSON.stringify(runtimeConfig)}`);
+  if (sub === 'sharedFrame' && !(self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined')) {
+    log('NOT crossOriginIsolated: the app\'s in-place NV12 edits will be invisible here (structured clone). Serve with serve.mjs.', 'warn');
+  }
+}
+function onAppMessage(evt) {
+  if (evt.source !== iframe.contentWindow) return;
+  const m = evt.data; if (!m || typeof m !== 'object') return;
+  if (m.__harness === 'frameRelay') { relayWriter = makeGenerator().writable.getWriter(); stats.transport = 'postMessage · VideoFrame relay'; log('app -> host: relaying processed VideoFrames'); return; }
+  if (m.__harness === 'frame') { const f = m.frame; if (relayWriter) { stats.w = f.displayWidth; stats.h = f.displayHeight; relayWriter.write(f).catch(() => f.close()); frameDone(0); } else f.close(); return; }
+  if (m.__harness === 'processedTrackLocal') { log(`app previews locally (${m.reason}); look at the iframe`, 'warn'); iframe.style.height = '420px'; return; }
+  if (typeof m.func !== 'string') return;
+  if (m.func !== 'video.videoFrameProcessed') log(`app -> host: ${m.func} ${short(m.args ?? [])}`);
+  switch (m.func) {
+    case 'initialize':
+      reply(m, ['sidePanel', 'desktop', JSON.stringify(runtimeConfig), '2.56.0']); break;
+    case 'getContext':
+      // legacy flat context; the SDK converts it with transformLegacyContextToAppContext (app.ts)
+      reply(m, [{ frameContext: 'sidePanel', hostClientType: 'desktop', hostName: 'Teams', locale: 'en-us', theme: 'dark' }]); break;
+    case 'video.mediaStream.registerForVideoFrame':          // videoEffects.ts L359-363
+      if (m.id !== undefined) reply(m);
+      pushEvent('video.setFrameProcessTimeLimit', [{ timeLimit: 100 }]);            // L232-238
+      pushEvent('video.startVideoExtensibilityVideoStream', [{ streamId: 'harness-stream-1' }]);   // L344-357
+      break;
+    case 'video.registerForVideoFrame':                      // sharedFrame registration, L417-421
+      if (m.id !== undefined) reply(m);
+      pushEvent('video.setFrameProcessTimeLimit', [{ timeLimit: 100 }]);
+      startSharedFramePump().catch((e) => log(`pump failed: ${e}`, 'bad'));
+      break;
+    case 'video.videoEffectChanged': {                       // L266-270
+      const [changeType, effectId] = m.args || [];
+      if (m.id !== undefined) reply(m);
+      // Pre-meeting behaviour: host applies immediately. In-meeting Teams waits for the Apply button.
+      pushEvent('video.effectParameterChange', [changeType === 'EffectDisabled' ? undefined : effectId]);   // L283-288
+      break;
+    }
+    case 'video.videoEffectReadiness': { const [ready, id, reason] = m.args || []; log(`effect ${id ?? '(none)'} ${ready ? 'READY' : 'FAILED ' + reason}`, ready ? 'ok' : 'bad'); if (m.id !== undefined) reply(m); break; }
+    case 'video.videoFrameProcessed': { if (pending) { const p = pending; pending = null; clearTimeout(pendingTimer); p.resolve(); } if (m.id !== undefined) reply(m); break; }
+    case 'video.notifyError': hostNotifyError(m.args?.[0]); if (m.id !== undefined) reply(m); break;
+    case 'video.performance.frameProcessingSlow': log(`SDK monitor: slow frames, avg ${Number(m.args?.[0]).toFixed(1)} ms`, 'warn'); break;
+    default: if (m.id !== undefined) reply(m); // ack everything else so promises settle
+  }
+}
+// Host side of the sharedFrame path: one NV12 frame in flight, SharedArrayBuffer-backed so the app's
+// in-place edit is visible to us, 2 s timeout like videoEffectsEx.frameProcessingTimeoutInMs.
+async function startSharedFramePump() {
+  const track = await openCamera();
+  const reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+  const writer = makeGenerator().writable.getWriter();
+  const SAB = self.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined';
+  let buf = null; pumping = true;
+  while (pumping) {
+    const { value: frame, done } = await reader.read(); if (done || !pumping) { frame?.close(); break; }
+    const w = frame.visibleRect.width & ~1, h = frame.visibleRect.height & ~1, ts = frame.timestamp, size = (w * h * 3) >> 1;
+    if (!buf || buf.length !== size) buf = new Uint8ClampedArray(SAB ? new SharedArrayBuffer(size) : size);
+    await frameToNV12(frame, buf, w, h); frame.close();
+    const t0 = performance.now();
+    await new Promise((resolve) => {
+      pending = { resolve };
+      pendingTimer = setTimeout(() => { if (pending) { pending = null; hostNotifyError('Frame not processed in 2000ms'); resolve(); } }, 2000);
+      pushEventQuiet('video.newVideoFrame', [{ width: w, height: h, videoFrameBuffer: buf, lumaStride: w, chromaStride: w, timestamp: ts }]);   // L397-416
+    });
+    frameDone(performance.now() - t0);
+    await writer.write(new VideoFrame(buf, { format: 'NV12', codedWidth: w, codedHeight: h, timestamp: ts }));
+  }
+}
+function pushEventQuiet(func, args) { iframe.contentWindow.postMessage({ func, args }, location.origin); }
+
+// ------------------------------------------------------------------ controls
+async function start() {
+  await stop();
+  stats.frames = 0; stats.avgMs = 0; stats.maxMs = 0; stats.errors = 0;
+  const [kind, sub] = $('mode').value.split('-');
+  try { if (kind === 'A') await startA(sub); else await startB(sub); }
+  catch (e) { log(`start failed: ${e.message || e}`, 'bad'); console.error(e); }
+}
+async function stop() {
+  pumping = false;
+  if (abort) { abort.abort(); abort = null; }
+  if (cam) { cam.getTracks().forEach((t) => t.stop()); cam = null; }
+  if (generator) { try { generator.stop(); } catch {} generator = null; }
+  window.removeEventListener('message', onAppMessage);
+  if (pending) { pending.resolve(); pending = null; }
+  if (relayWriter) { relayWriter.close().catch(() => {}); relayWriter = null; }
+  iframe.hidden = true; iframe.src = 'about:blank';
+  out.srcObject = null; stats.mode = 'idle'; stats.transport = ''; drawHud();
+}
+$('start').onclick = start; $('stop').onclick = stop;
+$('effect').onchange = async () => {
+  const id = EFFECT_BY_NAME[$('effect').value];
+  if (effect) { await effect.setEffect(id); log(`effect -> ${id ?? 'none'}`); }
+  else if (!iframe.hidden) log('in mode B pick the effect inside the app panel (that is the Teams flow)', 'mut');
+};
+
+// URL automation (used by verify-harness.mjs): ?mode=A-mediaStream&effect=holohands&w=640&h=360&autostart=1
+if (params.get('mode')) $('mode').value = params.get('mode');
+if (params.get('effect')) $('effect').value = params.get('effect');
+if (params.get('w') && params.get('h')) { const v = `${params.get('w')}x${params.get('h')}`; if ([...$('res').options].some((o) => o.value === v)) $('res').value = v; }
+window.__harness = { stats, lines, snapshot: () => ({ ...stats, videoWidth: out.videoWidth, videoHeight: out.videoHeight, currentTime: out.currentTime, crossOriginIsolated: self.crossOriginIsolated, log: lines.slice(-40) }) };
+if (params.get('autostart') === '1') start();
+</script>
+</body>
+</html>

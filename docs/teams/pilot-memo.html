@@ -1,0 +1,699 @@
+<title>hopeOS Teams Pilot Plan</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #F3F5F8;
+    --surface: #FFFFFF;
+    --surface-2: #E9EDF2;
+    --ink: #15202B;
+    --muted: #5A6674;
+    --line: #D5DCE4;
+    --accent: #4A4EAF;
+    --accent-ink: #FFFFFF;
+    --fast: #0E7C6B;
+    --fast-bg: #DDF3EE;
+    --slow: #B0501F;
+    --slow-bg: #F9E6D9;
+    --warn: #8A6A00;
+    --warn-bg: #F7EFC9;
+    --code-bg: #EEF1F5;
+    --shadow: 0 1px 2px rgba(21,32,43,.06);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0F141A;
+      --surface: #161D26;
+      --surface-2: #1E2732;
+      --ink: #E4EAF0;
+      --muted: #97A3B0;
+      --line: #2A3542;
+      --accent: #9396EA;
+      --accent-ink: #0F141A;
+      --fast: #43C1A8;
+      --fast-bg: #143A34;
+      --slow: #E3925C;
+      --slow-bg: #3F2A1C;
+      --warn: #E4C561;
+      --warn-bg: #3A3115;
+      --code-bg: #1B242E;
+      --shadow: none;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F141A;
+    --surface: #161D26;
+    --surface-2: #1E2732;
+    --ink: #E4EAF0;
+    --muted: #97A3B0;
+    --line: #2A3542;
+    --accent: #9396EA;
+    --accent-ink: #0F141A;
+    --fast: #43C1A8;
+    --fast-bg: #143A34;
+    --slow: #E3925C;
+    --slow-bg: #3F2A1C;
+    --warn: #E4C561;
+    --warn-bg: #3A3115;
+    --code-bg: #1B242E;
+    --shadow: none;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 860px; margin: 0 auto; padding: 40px 24px 96px; }
+  h1, h2, h3 {
+    font-family: "Archivo", "Segoe UI", system-ui, sans-serif;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+    line-height: 1.15;
+    margin: 0;
+  }
+  h1 { font-size: 2.25rem; font-weight: 700; }
+  h2 { font-size: 1.45rem; font-weight: 600; margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); }
+  h3 { font-size: 1.1rem; font-weight: 600; margin-top: 28px; }
+  p { margin: 12px 0; max-width: 70ch; }
+  ul, ol { padding-left: 22px; max-width: 72ch; }
+  li { margin: 6px 0; }
+  li::marker { color: var(--muted); }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  strong { font-weight: 600; }
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 0.88em;
+  }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 3px; }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+    font-size: 0.84rem;
+    line-height: 1.5;
+    max-width: 100%;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.76rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+  }
+  header p.lede { font-size: 1.12rem; color: var(--ink); max-width: 64ch; margin-top: 18px; }
+
+  .thesis {
+    margin-top: 28px;
+    border-left: 4px solid var(--accent);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    padding: 18px 22px;
+    display: grid;
+    gap: 10px;
+  }
+  .thesis p { margin: 0; }
+  .thesis .k { font-family: "Archivo", sans-serif; font-weight: 600; }
+
+  .contents {
+    margin-top: 28px;
+    display: flex; flex-wrap: wrap; gap: 8px 18px;
+    font-size: 0.9rem;
+  }
+  .contents a { color: var(--muted); text-decoration: none; }
+  .contents a:hover { color: var(--accent); text-decoration: underline; }
+
+  figure { margin: 24px 0; }
+  figure svg { max-width: 100%; height: auto; display: block; }
+  figcaption { font-size: 0.86rem; color: var(--muted); margin-top: 8px; max-width: 72ch; }
+  .fig-wrap { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
+
+  .tablewrap { overflow-x: auto; margin: 16px 0; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+  th, td { text-align: left; padding: 10px 12px; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 0.82rem; letter-spacing: 0.02em; color: var(--muted); background: var(--surface-2); }
+  tr:last-child td { border-bottom: none; }
+  td.num, th.num { font-family: "IBM Plex Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; white-space: nowrap; font-size: 0.86rem; }
+  tfoot td { color: var(--muted); font-size: 0.84rem; }
+
+  .chip {
+    display: inline-block; font-family: "IBM Plex Mono", monospace; font-size: 0.72rem; letter-spacing: 0.05em; text-transform: uppercase;
+    padding: 2px 8px; border-radius: 3px; white-space: nowrap; vertical-align: middle;
+  }
+  .chip.core { background: var(--fast-bg); color: var(--fast); }
+  .chip.exp { background: var(--warn-bg); color: var(--warn); }
+  .chip.fallback { background: var(--surface-2); color: var(--muted); }
+  .chip.avoid { background: var(--slow-bg); color: var(--slow); }
+
+  .option { margin-top: 22px; padding: 16px 18px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; box-shadow: var(--shadow); }
+  .option h3 { margin-top: 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .option p:last-child { margin-bottom: 0; }
+
+  .note { padding: 12px 16px; border-radius: 6px; background: var(--warn-bg); color: var(--ink); border: 1px solid transparent; margin: 14px 0; max-width: 72ch; }
+  .note.good { background: var(--fast-bg); }
+  .note p { margin: 4px 0; }
+
+  ol.tests { padding-left: 0; list-style: none; counter-reset: t; max-width: none; }
+  ol.tests > li { counter-increment: t; margin: 14px 0; padding: 14px 16px 14px 60px; position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; }
+  ol.tests > li::before {
+    content: "T" counter(t);
+    position: absolute; left: 14px; top: 14px;
+    font-family: "IBM Plex Mono", monospace; font-size: 0.8rem; font-weight: 500;
+    color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 3px; padding: 1px 6px;
+  }
+  ol.tests h3 { margin: 0 0 6px; font-size: 1rem; }
+  ol.tests p { margin: 6px 0; max-width: 74ch; }
+  ol.tests .meta { font-size: 0.82rem; color: var(--muted); font-family: "IBM Plex Mono", monospace; }
+  .pass { font-weight: 600; color: var(--fast); }
+
+  .sources { font-size: 0.86rem; columns: 1; }
+  .sources li { margin: 4px 0; overflow-wrap: anywhere; }
+  @media (max-width: 640px) {
+    h1 { font-size: 1.75rem; }
+    main { padding: 28px 16px 72px; }
+    ol.tests > li { padding-left: 16px; padding-top: 40px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">Research memo · 16 Sep 2026 · Microsoft Teams pilot · hopeOS browser stack</div>
+    <h1>Track locally, ship landmarks, never track the video call</h1>
+    <p class="lede">
+      Feeding Teams video back into our tracker is the slow path by construction. The prototype that will feel fast in a demo runs the tracker on each person's own webcam in their own browser, sends only skeletal data between browsers, and hands Teams a finished picture. This memo lays out why, which Teams entry points exist for that, and the small local tests to run before we build.
+    </p>
+    <div class="thesis">
+      <p><span class="k">The problem.</span> A video call already spends roughly 200 to 400 ms getting a frame from one camera to another screen. Screen-capturing that tile and tracking it adds two more hops on top of a compressed, resized picture. Nothing in our tracker can claw that back.</p>
+      <p><span class="k">The design.</span> Each participant's browser tracks their own camera (the path we already have), broadcasts a ~600 byte landmark packet at 30 Hz, and renders everyone's avatars in the same scene. The user's own avatar responds within one or two frames. Teams supplies identity, audio, and the meeting container.</p>
+      <p><span class="k">Into Teams.</span> Three ways to put the rendered scene in front of Teams users, in order of effort: a virtual camera (works today), a Teams video-effect app (frames processed inside the Teams client, still beta), or our page joining the meeting as a participant through Azure Communication Services.</p>
+    </div>
+    <nav class="contents" aria-label="Contents">
+      <a href="#budget">Latency budget</a>
+      <a href="#options">Options ranked</a>
+      <a href="#proto">Recommended prototype</a>
+      <a href="#faceid">Local face ID</a>
+      <a href="#tests">Mini tests to run first</a>
+      <a href="#ask">Questions for the Teams side</a>
+      <a href="#stack">What we already have</a>
+      <a href="#hooks">Notes for the business case</a>
+      <a href="#sources">Sources</a>
+    </nav>
+  </header>
+
+  <h2 id="budget">Where the latency comes from</h2>
+  <p>
+    The numbers below are engineering estimates for a typical laptop on a normal office connection. They are ranges on purpose. Test T1 replaces them with measured values on our hardware; the shape of the comparison will not change.
+  </p>
+
+  <figure>
+    <div class="fig-wrap">
+    <svg viewBox="0 0 900 330" role="img" aria-label="Two pipelines compared. The external-video tap passes through Teams encode, network, decode and screen capture before the tracker runs, roughly 250 to 450 milliseconds. The local-first path runs the tracker straight off the camera in 50 to 110 milliseconds and sends only a small landmark packet to peers.">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <marker id="arrSlow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#B0501F"/>
+        </marker>
+        <marker id="arrFast" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#0E7C6B"/>
+        </marker>
+      </defs>
+      <g font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="12" fill="currentColor">
+        <!-- Lane 1: external tap -->
+        <text x="20" y="28" font-family="Archivo, sans-serif" font-weight="600" font-size="13">A · External-video tap (what we do today when we stream a video source in)</text>
+        <text x="20" y="46" font-size="11" fill="#B0501F">≈ 250–450 ms camera-to-avatar, on a compressed, bandwidth-scaled tile</text>
+
+        <g stroke="#B0501F" stroke-width="1.4" fill="none">
+          <rect x="20" y="66" width="92" height="40" rx="4"/>
+          <rect x="146" y="66" width="104" height="40" rx="4"/>
+          <rect x="284" y="66" width="104" height="40" rx="4"/>
+          <rect x="422" y="66" width="104" height="40" rx="4"/>
+          <rect x="560" y="66" width="118" height="40" rx="4"/>
+          <rect x="712" y="66" width="80" height="40" rx="4"/>
+          <rect x="826" y="66" width="60" height="40" rx="4"/>
+        </g>
+        <g text-anchor="middle" font-size="12">
+          <text x="66" y="90">Camera</text>
+          <text x="198" y="85">Teams encode</text>
+          <text x="198" y="99" font-size="10" fill="#5A6674">their laptop</text>
+          <text x="336" y="85">Network +</text>
+          <text x="336" y="99" font-size="10" fill="#5A6674">jitter buffer</text>
+          <text x="474" y="85">Teams decode</text>
+          <text x="474" y="99" font-size="10" fill="#5A6674">our laptop</text>
+          <text x="619" y="85">Screen capture</text>
+          <text x="619" y="99" font-size="10" fill="#5A6674">getDisplayMedia</text>
+          <text x="752" y="90">Tracker</text>
+          <text x="856" y="90">Avatar</text>
+        </g>
+        <g stroke="#B0501F" stroke-width="1.4" marker-end="url(#arrSlow)">
+          <line x1="112" y1="86" x2="144" y2="86"/>
+          <line x1="250" y1="86" x2="282" y2="86"/>
+          <line x1="388" y1="86" x2="420" y2="86"/>
+          <line x1="526" y1="86" x2="558" y2="86"/>
+          <line x1="678" y1="86" x2="710" y2="86"/>
+          <line x1="792" y1="86" x2="824" y2="86"/>
+        </g>
+        <g text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#B0501F">
+          <text x="66" y="124">30–60</text>
+          <text x="198" y="124">20–40</text>
+          <text x="336" y="124">40–150</text>
+          <text x="474" y="124">15–30</text>
+          <text x="619" y="124">16–50</text>
+          <text x="752" y="124">15–40</text>
+          <text x="856" y="124">8–16</text>
+        </g>
+        <text x="20" y="146" font-size="10" fill="#5A6674">ms per hop, estimate</text>
+
+        <!-- divider -->
+        <line x1="20" y1="168" x2="886" y2="168" stroke="currentColor" stroke-opacity="0.2" stroke-dasharray="3 4"/>
+
+        <!-- Lane 2: local-first -->
+        <text x="20" y="196" font-family="Archivo, sans-serif" font-weight="600" font-size="13">B · Local-first: track your own camera, send landmarks, render everyone</text>
+        <text x="20" y="214" font-size="11" fill="#0E7C6B">≈ 50–110 ms for your own avatar · remote avatars add one network hop, not a video pipeline</text>
+
+        <g stroke="#0E7C6B" stroke-width="1.4" fill="none">
+          <rect x="20" y="234" width="92" height="40" rx="4"/>
+          <rect x="146" y="234" width="80" height="40" rx="4"/>
+          <rect x="260" y="234" width="110" height="40" rx="4"/>
+          <rect x="500" y="234" width="160" height="40" rx="4" stroke-dasharray="4 3"/>
+          <rect x="756" y="234" width="130" height="40" rx="4"/>
+        </g>
+        <g text-anchor="middle" font-size="12">
+          <text x="66" y="258">Camera</text>
+          <text x="186" y="258">Tracker</text>
+          <text x="315" y="253">Own avatar</text>
+          <text x="315" y="267" font-size="10" fill="#5A6674">same browser</text>
+          <text x="580" y="253">Relay</text>
+          <text x="580" y="267" font-size="10" fill="#5A6674">WS · DataChannel · Live Share</text>
+          <text x="821" y="253">Peer's browser</text>
+          <text x="821" y="267" font-size="10" fill="#5A6674">renders your avatar</text>
+        </g>
+        <g stroke="#0E7C6B" stroke-width="1.4" marker-end="url(#arrFast)">
+          <line x1="112" y1="254" x2="144" y2="254"/>
+          <line x1="226" y1="254" x2="258" y2="254"/>
+          <line x1="370" y1="254" x2="498" y2="254"/>
+          <line x1="660" y1="254" x2="754" y2="254"/>
+        </g>
+        <g text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#0E7C6B">
+          <text x="66" y="292">30–60</text>
+          <text x="186" y="292">10–35</text>
+          <text x="315" y="292">8–16</text>
+          <text x="434" y="246">~0.6 KB @ 30 Hz</text>
+          <text x="580" y="292">5–80 one-way</text>
+          <text x="821" y="292">+33–66 interp.</text>
+        </g>
+        <text x="20" y="318" font-size="10" fill="#5A6674">ms per hop, estimate · camera and render hops are identical in both lanes; the difference is everything in the middle</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Figure 1. The external tap (A) inherits the whole conferencing pipeline before our tracker sees a pixel. The local-first path (B) removes it; only a tiny landmark packet crosses the network.</figcaption>
+  </figure>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>What the person sees</th><th class="num">A · External tap</th><th class="num">B · Local-first</th><th>Why</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Their own avatar reacting to them</td><td class="num">250–450 ms</td><td class="num">50–110 ms</td><td>B never leaves the machine. Camera exposure and driver latency are the floor for both.</td></tr>
+        <tr><td>A remote colleague's avatar, same city</td><td class="num">250–450 ms</td><td class="num">90–200 ms</td><td>B pays one packet hop plus a two-frame interpolation buffer instead of encode, jitter buffer, decode and capture.</td></tr>
+        <tr><td>Tracking quality</td><td>Degrades with Teams bandwidth adaptation, tile size, and other people's layouts</td><td>Full camera resolution, our own frame rate</td><td>A tracks a picture of a picture. Small tiles lose hands first.</td></tr>
+        <tr><td>Bandwidth per person</td><td class="num">1–2 Mbit/s video</td><td class="num">≈ 20 KB/s</td><td>Landmarks are ~1% of a video stream, so ten avatars cost less than one camera.</td></tr>
+        <tr><td>Works with Teams camera off</td><td>No</td><td>Yes</td><td>B is what lets a person appear as a dragon while their real camera stays private.</td></tr>
+      </tbody>
+      <tfoot><tr><td colspan="4">Estimates. The published figure for WebRTC conferencing is 200 to 500 ms glass-to-glass; Teams does not publish its own number. T1 measures both lanes on our hardware.</td></tr></tfoot>
+    </table>
+  </div>
+
+  <h2 id="options">Options, ranked</h2>
+  <p>Each option is judged on three things: how fast the person's own avatar feels, how the other Teams participants get to see it, and how much Teams-side plumbing it needs before a demo can run.</p>
+
+  <div class="tablewrap">
+    <table>
+      <thead>
+        <tr><th>Path</th><th>Own-avatar feel</th><th>Others see it via</th><th>Teams plumbing</th><th>Verdict</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>A · Screen-capture the Teams tile, track it</td><td class="num">250–450 ms</td><td>Our page only</td><td>None</td><td><span class="chip avoid">Avoid for avatars</span></td></tr>
+        <tr><td>B · Local tracking + landmark relay</td><td class="num">50–110 ms</td><td>Shared 3D scene in every browser</td><td>None for LAN demo; relay service for remote</td><td><span class="chip core">Core</span></td></tr>
+        <tr><td>C1 · Rendered scene → virtual camera → Teams</td><td class="num">as B</td><td>Normal Teams video tile</td><td>None (OBS or similar on the presenter's PC)</td><td><span class="chip fallback">Demo fallback</span></td></tr>
+        <tr><td>C2 · Teams video-effect app</td><td class="num">as B, inside Teams</td><td>Normal Teams video tile</td><td>Sideloaded app; beta API; desktop client</td><td><span class="chip exp">Experiment</span></td></tr>
+        <tr><td>C3 · Our page joins the meeting via Azure Communication Services</td><td class="num">as B</td><td>Normal Teams video tile, from a participant that is our web page</td><td>Azure resource; tenant must allow external join</td><td><span class="chip exp">Experiment</span></td></tr>
+        <tr><td>D · Teams meeting app + share to stage + Live Share</td><td>n/a (container)</td><td>The scene fills the meeting stage for everyone</td><td>Sideloaded app; RSC permissions; camera access on the stage unverified</td><td><span class="chip core">Core container</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="option">
+    <h3>A · Tapping the Teams video <span class="chip avoid">Avoid for avatars</span></h3>
+    <p>Keep this path for exactly one thing: showing that we can track a person who is <em>not</em> running our app, for example the one colleague who joined from a phone. It is the "after" half of the side-by-side latency demo in T1, and that is its main value. It should never drive anyone's own avatar.</p>
+  </div>
+
+  <div class="option">
+    <h3>B · Local tracking, landmark relay <span class="chip core">Core</span></h3>
+    <p>This is the architecture every avatar-telepresence product uses, including the Mesh 3D spaces Microsoft just retired: capture and inference stay on the participant's device, the network carries pose. Our stack already does the capture and inference half on the user's webcam; what is new is a packet format, a relay, and remote-avatar interpolation.</p>
+    <p>Three relay choices, to be measured in T2 and T3. A plain WebSocket relay (a 40-line Node script locally, Azure Web PubSub when it has to be Microsoft-hosted: 1 MB per frame, about 1,000 connections per unit). WebRTC data channels, peer-to-peer, unordered and unreliable, lowest latency up to roughly six people, then a small SFU. Live Share, which is the Teams-native choice and free, but every event passes through Azure Fluid Relay; Microsoft documents a 700 KB per-op ceiling and 100 users per session but no ops-per-second figure, so a 30 Hz stream from every participant needs a test before we trust it. Live Share is a good fit for the low-rate state either way: who picked which avatar, scene changes, game events.</p>
+  </div>
+
+  <div class="option">
+    <h3>C1 · Virtual camera into Teams <span class="chip fallback">Demo fallback</span></h3>
+    <p>Our page renders the avatar view, OBS captures it as a browser source and exposes a virtual camera, Teams picks it as the webcam. No Teams integration at all, so it is the path that cannot fail on demo day. OBS adds at least one frame; users report about 300 ms when its buffering is on, so buffering must be off and T5 measures the result. Every VTuber pipeline works this way, which is also the weakness: it is a presenter trick, not a product feature.</p>
+  </div>
+
+  <div class="option">
+    <h3>C2 · Teams video-effect app <span class="chip exp">Experiment</span></h3>
+    <p>The Teams JavaScript SDK has a <code>videoEffects</code> module: a sideloaded app registers a frame handler and the Teams client hands it every local camera frame as a WebCodecs <code>VideoFrame</code> (or an NV12 buffer on older hosts) and puts back whatever the app returns. That is the shortest possible path inside Teams: our tracker and avatar renderer run in the Teams client's own video pipeline, before encoding, and the avatar shows up in the normal video tile with no virtual camera. Microsoft requires at least 22 fps at 720p, so the whole tracker-plus-render has to fit in roughly 45 ms per frame, and the client will flag the app as frozen if it repeatedly fails.</p>
+    <p>Caveats to state plainly: the API is marked beta and "do not use in production", the docs do not list which clients support it (the source checks a <code>mediaStream</code> or <code>sharedFrame</code> runtime capability, which maps to new Teams desktop vs the classic Electron client), and it needs sideloading in a tenant. Microsoft ships a local Electron test tool with the sample repo, so T4 can measure our per-frame budget without any tenant.</p>
+  </div>
+
+  <div class="option">
+    <h3>C3 · Our page as a meeting participant, via Azure Communication Services <span class="chip exp">Experiment</span></h3>
+    <p>The ACS Calling SDK for JavaScript can join a Teams for Work meeting as an external participant, send a custom outgoing video stream built from <code>canvas.captureStream()</code>, and expose every remote participant's video and audio as a <code>MediaStream</code>. That turns the hopeOS page into a Teams endpoint: the rendered scene goes out as our video, and the Teams tiles of the people who are not tracked can be placed inside the 3D room. The tenant has to allow anonymous or external join, Teams for Home and end-to-end-encrypted meetings are excluded, and it is metered per participant-minute. Highest ceiling of the three return paths, and the most convincing "this is a Teams client" story, but it needs an Azure resource and the pilot tenant's policy before we can test it.</p>
+  </div>
+
+  <div class="option">
+    <h3>D · Meeting app on the stage with Live Share <span class="chip core">Core container</span></h3>
+    <p>A Teams meeting app declares the <code>meetingSidePanel</code> and <code>meetingStage</code> contexts plus the <code>MeetingStage.Write.Chat</code> permission; a presenter shares it and every participant's client loads the same URL, so each person runs the scene locally and Live Share keeps them in sync. This is the right container for "everyone in the same room" and it is how Teams expects collaborative apps to work.</p>
+    <p>One documented limit matters to us. Microsoft states that device permissions are not supported in the pop-out chat window, tabs, and the meeting side panel. The meeting stage is not named either way, so T6 has to check whether <code>getUserMedia</code> works on the stage in new Teams desktop and in the browser client. If it does not, the tracker runs in a separate browser window (or as the C2 video-effect app) and the stage app is purely the shared renderer, which still works because the landmark relay decouples the two.</p>
+  </div>
+
+  <h2 id="proto">Recommended prototype</h2>
+  <p>Build B first, on this machine and one more laptop, with the latency HUD on screen. Add D when we have a tenant to sideload into. Keep C1 ready as the demo-day return path and run C2 and C3 as time-boxed experiments to find out which one the pilot should bet on.</p>
+
+  <figure>
+    <div class="fig-wrap">
+    <svg viewBox="0 0 900 418" role="img" aria-label="Prototype architecture. Two participant browsers each run camera, tracker and scene renderer and exchange landmark packets through a relay. A Teams meeting provides identity and audio; the rendered scene reaches Teams users through a virtual camera, a video-effect app, an ACS participant, or the meeting stage.">
+      <g font-family="IBM Plex Sans, Segoe UI, sans-serif" font-size="12" fill="currentColor">
+        <!-- Participant A -->
+        <rect x="20" y="20" width="300" height="150" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="34" y="42" font-family="Archivo, sans-serif" font-weight="600">Participant A · browser</text>
+        <g stroke="currentColor" stroke-width="1.2" fill="none">
+          <rect x="34" y="60" width="74" height="34" rx="4"/>
+          <rect x="128" y="60" width="74" height="34" rx="4"/>
+          <rect x="222" y="60" width="84" height="34" rx="4"/>
+        </g>
+        <g text-anchor="middle">
+          <text x="71" y="81">Camera</text>
+          <text x="165" y="81">Tracker</text>
+          <text x="264" y="77">Scene</text>
+          <text x="264" y="89" font-size="10" fill="#5A6674">all avatars</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)">
+          <line x1="108" y1="77" x2="126" y2="77"/>
+          <line x1="202" y1="77" x2="220" y2="77"/>
+        </g>
+        <text x="34" y="122" font-size="11" fill="#5A6674">face · pose · hands · blendshapes</text>
+        <text x="34" y="138" font-size="11" fill="#5A6674">holohands · game objects · voice cmds</text>
+        <text x="34" y="154" font-size="11" fill="#5A6674">own avatar: 1–2 frames behind you</text>
+
+        <!-- Participant B -->
+        <rect x="580" y="20" width="300" height="150" rx="6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <text x="594" y="42" font-family="Archivo, sans-serif" font-weight="600">Participant B · browser</text>
+        <g stroke="currentColor" stroke-width="1.2" fill="none">
+          <rect x="594" y="60" width="74" height="34" rx="4"/>
+          <rect x="688" y="60" width="74" height="34" rx="4"/>
+          <rect x="782" y="60" width="84" height="34" rx="4"/>
+        </g>
+        <g text-anchor="middle">
+          <text x="631" y="81">Camera</text>
+          <text x="725" y="81">Tracker</text>
+          <text x="824" y="77">Scene</text>
+          <text x="824" y="89" font-size="10" fill="#5A6674">all avatars</text>
+        </g>
+        <g stroke="currentColor" stroke-width="1.2" marker-end="url(#arr)">
+          <line x1="668" y1="77" x2="686" y2="77"/>
+          <line x1="762" y1="77" x2="780" y2="77"/>
+        </g>
+        <text x="594" y="122" font-size="11" fill="#5A6674">same page, same models</text>
+        <text x="594" y="138" font-size="11" fill="#5A6674">renders A's avatar from A's packets</text>
+        <text x="594" y="154" font-size="11" fill="#5A6674">optional: local face ID for multi-person</text>
+
+        <!-- Relay -->
+        <rect x="380" y="70" width="140" height="50" rx="6" fill="none" stroke="#0E7C6B" stroke-width="1.4"/>
+        <text x="450" y="90" text-anchor="middle" font-family="Archivo, sans-serif" font-weight="600">Landmark relay</text>
+        <text x="450" y="106" text-anchor="middle" font-size="10" fill="#5A6674">WS · DataChannel · Live Share</text>
+        <g stroke="#0E7C6B" stroke-width="1.4" marker-end="url(#arrFast)" marker-start="url(#arrFast)">
+          <line x1="322" y1="95" x2="378" y2="95"/>
+          <line x1="522" y1="95" x2="578" y2="95"/>
+        </g>
+        <text x="450" y="62" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#0E7C6B">~0.6 KB packets @ 30 Hz</text>
+        <text x="450" y="140" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10" fill="#0E7C6B">+ state: avatar choice, game events</text>
+
+        <!-- Teams -->
+        <rect x="20" y="230" width="860" height="172" rx="6" fill="none" stroke="#4A4EAF" stroke-width="1.4"/>
+
+        <g stroke="#4A4EAF" stroke-width="1.2" fill="none">
+          <rect x="34" y="248" width="190" height="90" rx="4"/>
+          <rect x="246" y="248" width="190" height="90" rx="4"/>
+          <rect x="458" y="248" width="190" height="90" rx="4"/>
+          <rect x="670" y="248" width="196" height="90" rx="4"/>
+        </g>
+        <g font-size="11">
+          <text x="46" y="268" font-weight="600">D · Meeting app on stage</text>
+          <text x="46" y="284">each client loads the scene URL</text>
+          <text x="46" y="298">Live Share syncs state</text>
+          <text x="46" y="326" font-family="IBM Plex Mono, monospace" font-size="10" fill="#5A6674">camera on stage: verify (T6)</text>
+
+          <text x="258" y="268" font-weight="600">C1 · Virtual camera</text>
+          <text x="258" y="284">scene → OBS → "webcam"</text>
+          <text x="258" y="298">shows as a normal tile</text>
+          <text x="258" y="326" font-family="IBM Plex Mono, monospace" font-size="10" fill="#5A6674">works today · +1 frame (T5)</text>
+
+          <text x="470" y="268" font-weight="600">C2 · Video-effect app</text>
+          <text x="470" y="284">Teams hands us each frame</text>
+          <text x="470" y="298">we return the avatar frame</text>
+          <text x="470" y="326" font-family="IBM Plex Mono, monospace" font-size="10" fill="#5A6674">beta · ≤45 ms budget (T4)</text>
+
+          <text x="682" y="268" font-weight="600">C3 · ACS participant</text>
+          <text x="682" y="284">our page joins the meeting</text>
+          <text x="682" y="298">sends canvas as its video</text>
+          <text x="682" y="326" font-family="IBM Plex Mono, monospace" font-size="10" fill="#5A6674">needs Azure + tenant (T7)</text>
+        </g>
+        <text x="34" y="366" font-family="Archivo, sans-serif" font-weight="600" fill="#4A4EAF">Microsoft Teams meeting</text>
+        <text x="34" y="384" font-size="11" fill="#5A6674">identity (SSO) · audio · roster · the container everyone already has open</text>
+
+        <!-- arrows from scenes down to Teams options -->
+        <g stroke="currentColor" stroke-width="1" stroke-dasharray="4 3" fill="none" marker-end="url(#arr)">
+          <path d="M264,94 L264,200 L129,200 L129,246"/>
+          <path d="M264,200 L341,200 L341,246"/>
+          <path d="M824,94 L824,200 L553,200 L553,246"/>
+          <path d="M824,200 L768,200 L768,246"/>
+        </g>
+        <text x="447" y="196" text-anchor="middle" font-size="10" fill="#5A6674">rendered scene → Teams (pick return paths)</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption>Figure 2. Tracking never crosses the network; only landmarks do. Teams stays the identity and audio layer, and the rendered scene reaches Teams users through whichever return path the tenant permits.</figcaption>
+  </figure>
+
+  <h3>The packet</h3>
+  <p>One participant, one packet per tracked frame. Everything the avatar rigs already consume, quantized to 16-bit and sent unreliably; a lost packet is replaced by the next one 33 ms later.</p>
+<pre><code>header   : userId (4 B) · seq (2 B) · captureTs ms (4 B) · flags (1 B)
+pose     : 33 × (x,y,z) int16, normalized      198 B
+hands    : 2 × 21 × (x,y,z) int16              252 B
+face     : 52 blendshapes uint8 + head quat     56 B + 8 B
+extras   : avatarId, game-object grabs, voice-cmd tokens (rare, separate reliable channel)
+≈ 520–600 B → ~18 KB/s per person at 30 Hz</code></pre>
+  <p>Remote avatars are drawn at <code>now − 2 frames</code> and interpolated between the last two packets; a missing third packet extrapolates for up to 100 ms and then holds. Capture timestamps plus a ping-based clock offset give a per-avatar "age" number for the HUD, which is what we point at during the demo.</p>
+
+  <h3>The one real refactor</h3>
+  <p>Everything else in this plan is a new file beside existing code. The exception is embodiment: today exactly one avatar syncs to the camera and every other avatar in the scene is an NPC, and the multi-person tracker collapses to one primary player before it reaches the rigs. The shared-room demo needs the opposite: each tracked person on this camera and each remote packet owns an avatar. The avatar registry already holds many rigs, so the lift is to make "who drives this rig" a per-avatar source (local player id, remote user id, or NPC mind) instead of a global slot. Do it as part of T2, before any Teams work, because every return path renders from that scene.</p>
+
+  <h3>What Teams contributes without us building anything</h3>
+  <ul>
+    <li><strong>Identity.</strong> A meeting app gets the signed-in user from the Teams SDK context, so "which avatar is Hannah" is answered by SSO, not by face recognition.</li>
+    <li><strong>Audio.</strong> The meeting carries voice; we do not touch it. Voice commands keep using the browser microphone in our page, which is a separate capture from the Teams call.</li>
+    <li><strong>Roster and roles.</strong> Presenter and organizer roles control who can share the scene to the stage; attendees cannot.</li>
+  </ul>
+
+  <h2 id="faceid">Local face identification</h2>
+  <p>Because Teams already knows who is signed in, face ID only earns its place in three situations: more than one person in front of one camera (a huddle room, a shop floor), a shared screen or kiosk where nobody is signed in, and keeping avatar identity stable when two tracked people cross in frame. Those are exactly the "actual place they work at" scenarios, so it is worth prototyping, but as a scoped feature with consent built in.</p>
+  <ul>
+    <li><strong>Pipeline.</strong> Our face landmarker already finds each face; add an embedding model on a crop, once per second per track rather than per frame, and match by cosine distance against an enrolled set. Two browser-ready candidates: <code>facex</code> (Apache-2.0, WebAssembly, reports about 25 ms for detect plus embed on a desktop CPU, weights shipped encrypted) and an ArcFace or MobileFaceNet ONNX model through onnxruntime-web on WebGPU, which is the same runtime we use for sign recognition. Check model licences: several InsightFace weights are research-only.</li>
+    <li><strong>Storage.</strong> Enrollment keeps five to ten embeddings per person, never frames, in IndexedDB on the device or encrypted in the org's own store. Matching is local; nothing biometric leaves the browser.</li>
+    <li><strong>Consent pattern.</strong> Copy the one Microsoft already sells: Teams Rooms Pro "people recognition" requires each user to enrol a face profile in their own Teams settings, lets them unenrol at any time, and lets admins switch enrollment off by policy. Framing ours the same way removes most of the objections before they are raised. Biometric identifiers are special-category data under GDPR and regulated under Illinois BIPA, so opt-in enrollment and on-device processing are requirements, not niceties.</li>
+    <li><strong>Multi-avatar in one browser.</strong> The pose, hand and face landmarkers all accept a count parameter; running them with two or three targets on one camera is the cheap way to demo two colleagues sharing a room camera, each driving their own avatar. T8 checks frame rate on this box with two people in frame.</li>
+  </ul>
+
+  <h2 id="tests">Mini tests to run before building</h2>
+  <p>Ordered so that the first five need nothing from Microsoft: this laptop, one more laptop, the existing dev server, and OBS. T6 and T7 wait on a tenant. Each test has one number that decides it.</p>
+
+  <ol class="tests">
+    <li>
+      <h3>Latency HUD and the side-by-side lag probe</h3>
+      <p>Add per-frame timing to the existing tracking page: capture timestamp (from the video frame or <code>requestVideoFrameCallback</code>), tracker done, avatar posed, frame presented. Then open the same camera in Teams (or any second window), screen-capture that window with <code>getDisplayMedia</code>, run a second tracker on it, and drive a second avatar side by side. The lag is measured automatically by cross-correlating the wrist-height signal from the two trackers; no LED, no phone camera needed.</p>
+      <p class="meta">builds on: the existing screen lane (srcActivate 'screen') and the HUD/EMA metrics in mpbrowser.html; sdk/core/tracking.js binds to one video element, so a second instance on a second element is the new part · ~1 day</p>
+      <p><span class="pass">Decides:</span> the measured gap between lanes A and B on our hardware. This is the demo slide.</p>
+    </li>
+    <li>
+      <h3>Landmark relay over WebSocket, two windows, then two laptops</h3>
+      <p>A 40-line Node relay (<code>tools/relay.mjs</code>, plain <code>ws</code>) that fans packets out to everyone else in a room. Two browser windows on this machine first, then this laptop plus one more on the same Wi-Fi. Implement the packet above, a ping-based clock offset, and 2-frame interpolation on the receiving side; the HUD shows each remote avatar's age.</p>
+      <p class="meta">builds on: the BroadcastChannel presence bus and packet (mpbrowser.html ≈4278), the echoed-capture-timestamp RTT code (≈4230), and the sync design doc · new: tools/relay.mjs, sdk/net/landmark-packet.js, sdk/net/remote-avatar.js · plus the single-embodiment cap lift so a remote packet can own an avatar · ~3 days</p>
+      <p><span class="pass">Decides:</span> remote-avatar age under 80 ms on LAN at 30 Hz with two senders, under 25 KB/s per sender.</p>
+    </li>
+    <li>
+      <h3>Same test on WebRTC data channels and on Live Share's local host</h3>
+      <p>Swap the transport behind the same packet interface: an unordered, unreliable <code>RTCDataChannel</code> between the two laptops (signal through the same Node server), then Live Share's <code>TestLiveShareHost</code> running on its bundled tinylicious server, sending packets as <code>LiveEvent</code> values. Compare age and jitter at 30 Hz with two, then four, simulated senders.</p>
+      <p class="meta">new: sdk/net/transport-datachannel.js, transport-liveshare.js · ~2 days</p>
+      <p><span class="pass">Decides:</span> which transport carries pose, and whether Live Share is limited to low-rate state.</p>
+    </li>
+    <li>
+      <h3>Video-effect frame budget in Microsoft's local test tool</h3>
+      <p>Clone <code>microsoft/teams-videoapp-sample</code>, unzip its Electron test app, and point it at a page of ours served over HTTPS on localhost. The page registers <code>videoEffects.registerForVideoFrame</code>, runs our face and hand trackers on the incoming <code>VideoFrame</code>, renders the avatar to a canvas, and returns it as a new frame. The tool reports average and range of processing time per frame at 720p and lets us halve or double the resolution.</p>
+      <p class="meta">new: teamsfx/video-effect.html (tracker + avatar in one frame handler) · needs an HTTPS localhost server; the dev server is HTTP only · ~2 days · the test app is x64 Electron, so run it on the second laptop if it will not launch on this ARM64 box</p>
+      <p><span class="pass">Decides:</span> whether tracker plus render fits under 45 ms per frame at 720p. If yes, C2 is the return path to pitch.</p>
+    </li>
+    <li>
+      <h3>Virtual camera round trip</h3>
+      <p>OBS browser source pointed at the scene page, virtual camera on, buffering off, Teams set to use it. Measure the added lag with the T1 cross-correlation probe: direct tracker versus a tracker on Teams' self-view of the virtual camera.</p>
+      <p class="meta">no code; OBS on the second laptop · ~half a day</p>
+      <p><span class="pass">Decides:</span> added lag under 100 ms means C1 is an acceptable demo fallback.</p>
+    </li>
+    <li>
+      <h3>Teams sideload probe (needs a tenant with sideloading)</h3>
+      <p>A minimal manifest: <code>devicePermissions: ["media"]</code>, contexts <code>meetingSidePanel</code> and <code>meetingStage</code>, RSC permissions for the stage and Live Share, served through a Dev Tunnel or ngrok. In new Teams desktop and in the browser client, check four things: does <code>getUserMedia</code> work in a personal tab, in the side panel, and on the shared stage; does our WebSocket and a data channel connect from inside the app iframe; does the tracker keep 30 fps inside the Teams WebView; does a <code>LiveEvent</code> at 30 Hz from three clients arrive intact.</p>
+      <p class="meta">new: teamsfx/manifest.json, teamsfx/stage.html (scene + Live Share join) · ~2 days once a tenant exists</p>
+      <p><span class="pass">Decides:</span> whether the tracker can live inside the stage app or must run in a separate window.</p>
+    </li>
+    <li>
+      <h3>Join a Teams meeting from our page through Azure Communication Services</h3>
+      <p>An ACS resource, a token endpoint (fits the existing Vercel serverless key-proxy pattern), and the Calling SDK. Join by meeting link, send <code>canvas.captureStream(30)</code> of the avatar view as our video, render one remote participant's <code>MediaStream</code> onto a plane in the scene.</p>
+      <p class="meta">new: api/acs-token.js, teamsfx/acs-client.html · needs the pilot tenant to allow external join · ~2 days</p>
+      <p><span class="pass">Decides:</span> whether "hopeOS is a Teams participant" is viable for the pilot without any Teams app approval.</p>
+    </li>
+    <li>
+      <h3>Local face ID with two people in frame</h3>
+      <p>Run the face landmarker with two faces, add an embedding model on crops at 1 Hz per track, enrol two people (five embeddings each) into IndexedDB, and show name labels that survive the two people swapping places. Measure tracker frame rate with two people and embedding time per crop on this box.</p>
+      <p class="meta">new: sdk/recognition/face-id.js, faceidlab.html · ~2 days</p>
+      <p><span class="pass">Decides:</span> whether the whole thing stays above 24 fps on a laptop with two people, and which embedding model we can license.</p>
+    </li>
+  </ol>
+
+  <h2 id="ask">Questions to put to the Teams side</h2>
+  <ul>
+    <li>Can they give us a developer tenant (or enable sideloading in a sandbox tenant) so T6 can run? Without it, D and C2 cannot be tested at all.</li>
+    <li>Is the third-party video-effect (video filter) app path still open for pilots in new Teams, and on which clients (Windows, Mac, web)? The API is documented as beta; we need their read on its future.</li>
+    <li>Will the pilot tenant allow external participants to join meetings through Azure Communication Services? That single policy decides whether C3 is on the table.</li>
+    <li>Which clients do their target users run: new Teams desktop on Windows, Mac, or the browser? Camera access and the video-effect API differ by client.</li>
+    <li>Do the pilot locations have Teams Rooms with intelligent cameras? The "shared room camera, several avatars" scenario is much stronger where they already exist.</li>
+  </ul>
+
+  <h2 id="stack">What we already have that this builds on</h2>
+  <div id="stack-body">
+    <p>A read of the repo on 16 Sep 2026, so the tests above point at real seams rather than a blank page.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Capability</th><th>State today</th><th>Where</th><th>What the pilot needs on top</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>External video in</td>
+            <td>Four local lanes into one <code>&lt;video&gt;</code>: camera, <code>getDisplayMedia</code> screen/window, URL, file; plus a cloud-ingest lane where the GPU node fetches a URL and streams back pose packets</td>
+            <td><code>mpbrowser.html</code> <span class="mono">srcActivate</span> (≈3705–3758), <code>signlab.html</code> (≈232–259)</td>
+            <td>Nothing new; the screen lane is lane A of the T1 comparison</td>
+          </tr>
+          <tr>
+            <td>Tracking</td>
+            <td>MediaPipe hand, pose, face landmarkers (478 pts, 52 blendshapes, head matrix), GPU delegate, all on the main thread, rAF-paced; no worker, no <code>requestVideoFrameCallback</code>, no WASM fallback</td>
+            <td><code>sdk/core/tracking.js</code> (≈113–269)</td>
+            <td>Capture timestamps per frame for the HUD; a worker or rVFC later if the video-effect budget (T4) is tight</td>
+          </tr>
+          <tr>
+            <td>Latency instrumentation</td>
+            <td>fps and detect-cost EMAs, per-packet RTT from server-echoed capture timestamps, adaptive send pacing, a display ring that delays video to match tracking</td>
+            <td><code>mpbrowser.html</code> (≈2063, 3445–3465, 4230–4242, 3996–4036)</td>
+            <td>The same echoed-timestamp trick gives remote-avatar age for free in T2</td>
+          </tr>
+          <tr>
+            <td>Multi-person in one camera</td>
+            <td>Built: MoveNet MultiPose finds up to six people with stable ids, then one MediaPipe pipeline per cropped person (four warm), with hand-ownership gating</td>
+            <td><code>sdk/core/multipose.js</code>, <code>player-tracker.js</code>, <code>multiplayer.js</code>, <code>player-pipeline.js</code></td>
+            <td>Nothing for tracking; this is the "two colleagues, one room camera" demo</td>
+          </tr>
+          <tr>
+            <td>Multi-avatar in one scene</td>
+            <td>Many rigged avatars can exist, but exactly one syncs to the camera; every other avatar is an NPC. Tracked players collapse to one "primary"</td>
+            <td><code>mpbrowser.html</code> (≈5336–5363, 859–864, 2986–3010)</td>
+            <td><strong>Lift the single-embodiment cap</strong>: N tracked players and N remote packets each drive their own avatar. This is the one real refactor in the plan</td>
+          </tr>
+          <tr>
+            <td>Browser-to-browser sync</td>
+            <td>Does not exist. There is a <code>BroadcastChannel</code> presence bus with a defined packet, a viewer that subscribes to a cloud-room WebSocket, and a design doc that already specifies a WebRTC mesh with an unordered, no-retransmit presence channel</td>
+            <td><code>mpbrowser.html</code> (≈4278–4297), <code>dollhouse.html</code> (≈203–250), <code>MULTIPLAYER_SYNC_ARCHITECTURES.md</code></td>
+            <td>T2 is the transport swap the doc recommends, with the packet extended from court positions to full landmarks</td>
+          </tr>
+          <tr>
+            <td>Face identity</td>
+            <td>None. The face puppet pipeline is deliberately identity-free (blendshapes only); person re-identification uses position, team colour and tags</td>
+            <td><code>sdk/lab/human-capture.js</code>, <code>pipeline.html</code>, <code>MULTIPLAYER_PLAN.md</code></td>
+            <td>Greenfield (T8). The repo's earlier "not viable" finding was for 10–20 px broadcast faces; webcam and room-camera faces are a different regime</td>
+          </tr>
+          <tr>
+            <td>Voice and engine control</td>
+            <td>Voice is four-second opus chunks transcribed through a serverless Whisper proxy, then regex commands; the world editor has a Claude tool-calling agent with 44 scene tools</td>
+            <td><code>sdk/interaction/voice.js</code>, <code>api/openai.js</code>, <code>sdk/world/ai-agent.js</code>, <code>world.html</code></td>
+            <td>Works inside a Teams app as-is (browser mic, not the call audio); expect several seconds per command, which is fine for commands and wrong for anything that must feel live</td>
+          </tr>
+          <tr>
+            <td>Teams and Zoom today</td>
+            <td>Sign-language captions already float over a captured Teams or Zoom window using document picture-in-picture</td>
+            <td><code>sdk/recognition/pip-captions.js</code>, <code>signlab.html</code></td>
+            <td>A second, separate pilot story: accessibility captions on the call, no avatar needed</td>
+          </tr>
+          <tr>
+            <td>Hosting</td>
+            <td>Static site plus Vercel serverless key proxies (HTTP only, no sockets); local dev server is HTTP on port 3333</td>
+            <td><code>api/</code>, <code>tools/dev-server.mjs</code></td>
+            <td>A WebSocket relay has to live elsewhere (a Node process, Azure Web PubSub, or the GPU node); Teams sideloading and the video-effect test tool need HTTPS</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h2 id="hooks">Notes for the business case (for later)</h2>
+  <p>Not the topic of this memo, but three facts from the research are worth keeping for that conversation.</p>
+  <ul>
+    <li><strong>Microsoft retired the small-group 3D space.</strong> Mesh, the Mesh apps for PC and Quest, and the "Immersive space (3D)" view in Teams meetings were switched off in early December 2025 and replaced by "immersive events", which target large scheduled events and need Teams Premium to host. A tracked, in-meeting, browser-only avatar layer for small teams is a gap they just created themselves.</li>
+    <li><strong>Avatars for Teams still exist but are not tracked.</strong> They are desktop-only, driven by audio and chosen emotes, and view-only on mobile. Camera-driven bodies and hands in a shared scene is a visible step up, not a duplicate.</li>
+    <li><strong>Face recognition already ships in Teams Rooms Pro.</strong> Enrolled face and voice profiles, admin policy, per-user unenrol. Our local version follows an established pattern the buyer already accepted, which shortens the privacy conversation.</li>
+  </ul>
+
+  <h2 id="sources">Sources</h2>
+  <ul class="sources">
+    <li><a href="https://learn.microsoft.com/en-us/javascript/api/@microsoft/teams-js/videoeffects?view=msteams-client-js-latest">Teams JS SDK: videoEffects module (beta; 22 fps at 720p requirement; NV12; VideoFrame)</a></li>
+    <li><a href="https://github.com/microsoft/teams-videoapp-sample">microsoft/teams-videoapp-sample (local Electron test tool with per-frame timing)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/microsoftteams/platform/apps-in-teams-meetings/build-apps-for-teams-meeting-stage">Apps for Teams meeting stage (share to stage, contexts, RSC permissions, roles)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/microsoftteams/platform/apps-in-teams-meetings/teams-live-share-capabilities">Live Share SDK capabilities (LiveEvent, LivePresence, LiveState; TestLiveShareHost for local testing)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/media-capabilities">Teams media capabilities (device permissions not supported in pop-out chat, tabs, meeting side panel)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/native-device-permissions">Teams device permissions (manifest devicePermissions, getUserMedia on desktop and web)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/voice-video-calling/get-started-raw-media-access">Azure Communication Services raw media access (custom outgoing video from a MediaStream; incoming remote MediaStreams; JS SDK 1.13.1+)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/azure/communication-services/concepts/interop/guest/meeting-capabilities">ACS external users in Teams meetings: capability matrix</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/azure/azure-fluid-relay/reference/service-limits">Azure Fluid Relay limits (700 KB per op, 100 users per session)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/azure/azure-web-pubsub/concept-performance">Azure Web PubSub performance guide (1 MB frames, ~1,000 connections per unit)</a></li>
+    <li><a href="https://www.computerworld.com/article/4100319/microsoft-retires-mesh-app-launches-immersive-spaces-for-teams.html">Computerworld: Microsoft retires Mesh, launches immersive events for Teams (Dec 2025)</a></li>
+    <li><a href="https://thejournal.com/articles/2025/12/11/3d-meetings-come-to-teams-as-microsoft-retires-mesh-platform.aspx">THE Journal: 3D meetings come to Teams as Microsoft retires Mesh</a></li>
+    <li><a href="https://support.microsoft.com/en-us/teams/meetings/join-a-meeting-as-an-avatar-in-microsoft-teams">Microsoft Support: Join a meeting as an avatar in Teams (desktop only, view-only on mobile)</a></li>
+    <li><a href="https://learn.microsoft.com/en-us/microsoftteams/rooms/teams-rooms-people-recognition">Teams Rooms people recognition (face and voice enrollment, Pro licence, admin policy, unenrol)</a></li>
+    <li><a href="https://github.com/obsproject/obs-studio/issues/9865">OBS issue #9865: virtual camera adds visible latency</a></li>
+    <li><a href="https://github.com/facex-engine/facex">facex: browser face stack (detection, mesh, recognition, anti-spoof; Apache-2.0)</a></li>
+    <li><a href="https://bloggeek.me/webrtcglossary/glass-to-glass/">BlogGeek: glass-to-glass latency (WebRTC 200–500 ms)</a></li>
+    <li><a href="https://developers.zoom.us/docs/zoom-apps/guides/layers-api/">Zoom Apps Layers API (the Zoom equivalent of a video-effect app, for a cross-platform story later)</a></li>
+  </ul>
+</main>

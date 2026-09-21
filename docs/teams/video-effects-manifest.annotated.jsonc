@@ -1,0 +1,72 @@
+// manifest.annotated.jsonc — manifest.json with the provenance of every video-filter-specific field.
+// JSONC is for reading; ship manifest.json (no comments) zipped with icon-color.png, icon-outline.png and the
+// three thumbnails.
+//
+// Field-by-field template: microsoft/teams-videoapp-sample manifest/manifest.json (1,800 bytes, fetched 2026-09-18)
+//   https://raw.githubusercontent.com/microsoft/teams-videoapp-sample/main/manifest/manifest.json
+// Schema: OfficeDev/microsoft-teams-app-schema preview/DevPreview/MicrosoftTeams.schema.json (68,789 bytes, fetched
+//   2026-09-18). manifestVersion enum = ["devPreview", "m365DevPreview"]. meetingExtensionDefinition.properties =
+//   [scenes, videoFilters, videoFiltersConfigurationUrl, supportsStreaming, supportsAnonymousGuestUsers];
+//   "videoFilters" at line 1013, "videoFiltersConfigurationUrl" at line 1039.
+// NOT in any GA schema: developer.microsoft.com/json-schemas/teams/v1.19 ... v1.25/MicrosoftTeams.schema.json each
+//   contain 0 occurrences of "videoFilters" (grep, 2026-09-18). The Learn manifest reference (ms.date 2026-08-11)
+//   shows videoFilters and videoFiltersConfigurationUrl under moniker "m365-app-prev" ONLY; 1.19-1.30 omit them:
+//   https://learn.microsoft.com/en-us/microsoft-365/extensibility/schema/root-meeting-extension-definition?view=m365-app-1.30
+//   https://learn.microsoft.com/en-us/microsoft-365/extensibility/schema/root-meeting-extension-definition-video-filters?view=m365-app-prev
+{
+  // Developer-preview schema. Required for videoFilters. Consequence (Learn "Public Developer Preview", updated
+  // 2025-12-19): "If you use this schema, you can't use Developer Portal for Teams to make these changes or upload
+  // your app for testing. To upload your app in Teams, select Apps > Manage your apps > Upload an app. Using this
+  // method, you can only upload a zipped version of your app package." The tenant must allow custom app upload.
+  // https://learn.microsoft.com/en-us/microsoftteams/platform/resources/dev-preview/developer-preview-intro
+  "$schema": "https://raw.githubusercontent.com/OfficeDev/microsoft-teams-app-schema/preview/DevPreview/MicrosoftTeams.schema.json",
+  "manifestVersion": "devPreview",          // literal, same as the sample
+  "version": "0.1.0",
+  "id": "7b1e2b6a-3c0f-4d7e-9a11-5f2c8e4d1a90",   // app GUID; regenerate for your own registration
+  "packageName": "io.h0p3.hopeos.videoeffect",
+  "developer": { "name": "hopeOS", "websiteUrl": "https://h0p3.io/", "privacyUrl": "https://h0p3.io/privacy", "termsOfUseUrl": "https://h0p3.io/terms" },
+  "icons": { "color": "icon-color.png", "outline": "icon-outline.png" },   // 192x192 and 32x32 PNGs in the zip
+  "name": { "short": "hopeOS HoloHands", "full": "hopeOS HoloHands video effect for Teams meetings" },
+  "description": { "short": "Tracked-hand AR layer and pass-the-ball game inside your Teams video.", "full": "..." },
+  "accentColor": "#0B0F1A",
+
+  // Resource-specific consent (RSC) permissions. Both names are documented in the Learn RSC reference
+  // (msteams-platform/graph-api/rsc/resource-specific-consent.md, ms.date 02/20/2025), user-scope table,
+  // "Type: Delegated -- Supported":
+  //   CameraStream.Read.User         "Read the user's camera stream."          (raw md line 171)
+  //   OutgoingVideoStream.Write.User "Modify the user's outgoing video."       (raw md line 175)
+  // https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent
+  // The sample added them in commit "update filters and videoAppContentUrl fields in the manifest (#17)" (2022-09-15).
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        { "name": "CameraStream.Read.User",         "type": "Delegated" },
+        { "name": "OutgoingVideoStream.Write.User", "type": "Delegated" }
+      ]
+    }
+  },
+
+  // GA v1.25 schema description: "A list of valid domains from which the tabs expect to load any content. Domain
+  // listings can include wildcards, for example `*.example.com`." The effect page's origin (videoFiltersConfigurationUrl)
+  // must be here. Whether script/wasm sub-resources from CDNs must also be listed is NOT documented anywhere I found;
+  // safest is to self-host teams-js, MediaPipe wasm/.task files and three.js on this domain.
+  "validDomains": [ "h0p3.io" ],
+  "localizationInfo": { "defaultLanguageTag": "en-us" },
+
+  "meetingExtensionDefinition": {
+    // videoFilters: array, maxItems 32, uniqueItems; item = { id: GUID (required), name: string <=128 (required),
+    // thumbnail: relative path in the app package (required) }; additionalProperties false. (DevPreview schema L1013-1038)
+    // Teams lists the thumbnails under More actions > "Video effects and settings" (support.microsoft.com); picking one
+    // loads videoFiltersConfigurationUrl in the side panel and, pre-meeting, immediately calls the app's
+    // registerForVideoEffect callback with the id; in-meeting it waits for "Apply" (videoEffects.ts L252-253).
+    // Name convention "Category_Name" comes from the sample ("Others_half", "Others_gray scale"); the sample commit
+    // "Filter names should start with a category (#12)" (2022-08-25) is the only documentation of it.
+    "videoFilters": [
+      { "id": "2a4f6c8e-1b3d-4e5f-8a9b-0c1d2e3f4a5b", "name": "Others_HoloHands",     "thumbnail": "holohands.png" },
+      { "id": "9f8e7d6c-5b4a-4c3d-9e2f-1a0b9c8d7e6f", "name": "Others_Ball pass",     "thumbnail": "ballpass.png" },
+      { "id": "c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f", "name": "Others_Apple in hand", "thumbnail": "apple.png" }
+    ],
+    // "The https:// URL for configuring the video filters." maxLength 2048 (Learn, m365-app-prev). This is video-effect.html.
+    "videoFiltersConfigurationUrl": "https://h0p3.io/teams/video-effect.html"
+  }
+}
