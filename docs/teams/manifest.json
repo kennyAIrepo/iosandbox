@@ -1,0 +1,78 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.30/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.30",
+  "version": "0.2.0",
+  "id": "REPLACE-WITH-A-FRESH-GUID-00000000-0000",
+  "developer": {
+    "name": "hopeOS",
+    "websiteUrl": "https://${{TAB_DOMAIN}}",
+    "privacyUrl": "https://${{TAB_DOMAIN}}/privacy.html",
+    "termsOfUseUrl": "https://${{TAB_DOMAIN}}/terms.html"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "hopeOS Ball Pass",
+    "full": "hopeOS Ball Pass - tracked-hand meeting stage sandbox"
+  },
+  "description": {
+    "short": "Pass a ball between meeting tiles with tracked hands.",
+    "full": "Meeting extension sandbox for hopeOS: a side panel that shares a Live Share stage where each participant's tracked hands pass a ball from tile to tile. Uses TeamsJS share-to-stage and the Live Share SDK (LiveEvent + LivePresence + LiveState)."
+  },
+  "accentColor": "#5558AF",
+  "configurableTabs": [
+    {
+      "id": "hopeos-ballpass-tab",
+      "configurationUrl": "https://${{TAB_DOMAIN}}/config.html",
+      "canUpdateConfiguration": true,
+      "scopes": [
+        "groupChat",
+        "team"
+      ],
+      "context": [
+        "meetingSidePanel",
+        "meetingStage",
+        "meetingChatTab",
+        "meetingDetailsTab"
+      ]
+    }
+  ],
+  "permissions": [
+    "identity"
+  ],
+  "devicePermissions": [
+    "media"
+  ],
+  "validDomains": [
+    "${{TAB_DOMAIN}}"
+  ],
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "MeetingStage.Write.Chat",
+          "type": "Delegated"
+        },
+        {
+          "name": "ChannelMeetingStage.Write.Group",
+          "type": "Delegated"
+        },
+        {
+          "name": "LiveShareSession.ReadWrite.Chat",
+          "type": "Delegated"
+        },
+        {
+          "name": "LiveShareSession.ReadWrite.Group",
+          "type": "Delegated"
+        }
+      ]
+    }
+  },
+  "meetingExtensionDefinition": {
+    "supportsCustomShareToStage": true,
+    "supportsAnonymousGuestUsers": true
+  },
+  "showLoadingIndicator": false
+}

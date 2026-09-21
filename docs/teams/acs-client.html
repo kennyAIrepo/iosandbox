@@ -1,0 +1,530 @@
+<!--
+  acs-client.html — hopeOS "Teams twin" transport probe: join a real Teams meeting
+  (or an ACS group call) from a vanilla-JS page, send a canvas as our camera,
+  render every remote participant into a tile, mute/unmute, leave, and carry
+  game state over the ACS DataChannel.
+
+  NO BUNDLER. Two ways to load the Calling SDK without npm/webpack, both verified
+  to resolve on 2026-09-18 (HTTP 200) but NOT executed in a browser during this
+  research pass — treat the first run as the test:
+
+    (A) [used below] Microsoft's own ES-module bundle, unmodified (local copy for
+      grepping: _src/sdk.bundle.esm.js — its only bare imports are the two below;
+      _src/esm__azure_communication-common_2.5.0__esm.js exports getIdentifierRawId and
+      AzureCommunicationTokenCredential; the jsDelivr +esm files import their own deps by
+      root-relative /npm/... URLs, which resolve against cdn.jsdelivr.net, so nothing
+      else needs mapping):
+        https://cdn.jsdelivr.net/npm/@azure/communication-calling@1.46.1/dist-esm/sdk.bundle.js
+        package.json: "module": "dist-esm/sdk.bundle.js"  (7.3 MB, minified)
+        Its ONLY bare imports are `@azure/logger` and `@azure/communication-common`
+        (checked by grepping the file), so an <script type="importmap"> that maps
+        those two names is enough.
+    (B) jsDelivr's on-the-fly ESM build of the same package:
+        https://cdn.jsdelivr.net/npm/@azure/communication-calling@1.46.1/+esm  (6.8 MB, HTTP 200)
+        Single URL, no import map, but the bytes are re-bundled by jsDelivr, not Microsoft.
+
+  The "main" entry (dist/sdk.bundle.js) is a UMD that exposes
+  globalThis["azure-communication-calling"] BUT expects `@azure/logger` and
+  `@azure/communication-common` as globals/externals — it is not a drop-in
+  <script src> either. So: ESM + import map is the honest no-bundler path.
+
+  Requirements (Microsoft):
+    - Must be served over https, or http://localhost / file: for local dev.
+      https://learn.microsoft.com/en-us/azure/communication-services/concepts/voice-video-calling/calling-sdk-features#use-webrtc-over-https
+    - A user access token with the "voip" scope, minted by a trusted server
+      (see acs-token.js) or pasted from the Azure portal
+      ("Identities & User Access Tokens" blade):
+      https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/identity/access-tokens?pivots=platform-azportal
+
+  API names below were checked against types/communication-calling.d.ts of
+  @azure/communication-calling@1.46.1 and the Microsoft Learn how-tos cited inline.
+  License note: @azure/communication-calling is NOT open source — it ships under
+  "Microsoft Software License Terms for the Azure Communication Services Voice and
+  Video Calling Client Library" (see LICENSE in the package). @azure/communication-common
+  and @azure/communication-identity are MIT.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS · ACS Teams-meeting probe</title>
+
+<!-- Import map MUST precede any module script. -->
+<script type="importmap">
+{
+  "imports": {
+    "@azure/communication-calling": "https://cdn.jsdelivr.net/npm/@azure/communication-calling@1.46.1/dist-esm/sdk.bundle.js",
+    "@azure/communication-common":  "https://cdn.jsdelivr.net/npm/@azure/communication-common@2.5.0/+esm",
+    "@azure/logger":                "https://cdn.jsdelivr.net/npm/@azure/logger@1.4.0/+esm"
+  }
+}
+</script>
+
+<style>
+  /* Teams-ish shell: header / gallery / right pane / bottom toolbar.
+     Palette values come from the ACS UI Library darkTheme (MIT):
+     themePrimary #2899f5, white(bg) #252423, neutralLighter #383735, callRed #c4314b
+     https://github.com/Azure/communication-ui-library/blob/main/packages/react-components/src/theming/themes.ts */
+  :root {
+    --bg: #201f1e; --surface: #252423; --surface-2: #383735; --line: #484644;
+    --text: #ffffff; --muted: #c8c6c4; --primary: #2899f5; --danger: #c4314b; --gold: #eaa300;
+    --tile-radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 "Segoe UI", system-ui, sans-serif; height: 100vh; display: grid; grid-template-rows: 48px 1fr 64px; grid-template-columns: 1fr 320px; grid-template-areas: "head head" "stage pane" "bar bar"; }
+  header { grid-area: head; display: flex; align-items: center; gap: 16px; padding: 0 16px; background: var(--surface); border-bottom: 1px solid var(--line); }
+  header .title { font-weight: 600; }
+  header .state { color: var(--muted); font-size: 12px; }
+  header .rec { display: none; background: var(--danger); color: #fff; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+  header .rec.on { display: inline-block; }
+  #stage { grid-area: stage; padding: 12px; overflow: auto; }
+  #gallery { display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-content: start; }
+  .tile { position: relative; aspect-ratio: 16/9; background: var(--surface-2); border-radius: var(--tile-radius); overflow: hidden; border: 2px solid transparent; }
+  .tile.speaking { border-color: var(--primary); }
+  .tile.goal { border-color: var(--gold); }
+  .tile.holder { box-shadow: inset 0 0 0 3px var(--danger); }
+  .tile video, .tile canvas, .tile > div { width: 100%; height: 100%; object-fit: cover; }
+  .tile .name { position: absolute; left: 8px; bottom: 8px; background: rgba(0,0,0,.6); padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+  .tile .badge { position: absolute; right: 8px; top: 8px; font-size: 11px; background: rgba(0,0,0,.6); padding: 2px 6px; border-radius: 4px; }
+  .tile .spinner { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; color: var(--muted); }
+  .tile.stalled .spinner { display: flex; }
+  #pane { grid-area: pane; background: var(--surface); border-left: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #pane h3 { margin: 0; padding: 12px 16px; font-size: 13px; border-bottom: 1px solid var(--line); }
+  #pane section { padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  #pane label { display: block; font-size: 12px; color: var(--muted); margin: 8px 0 2px; }
+  #pane input, #pane select { width: 100%; background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; }
+  #people { list-style: none; margin: 0; padding: 0; }
+  #people li { padding: 6px 0; display: flex; justify-content: space-between; }
+  #log { flex: 1; min-height: 0; overflow: auto; font: 11px/1.4 ui-monospace, monospace; color: var(--muted); padding: 8px 16px; white-space: pre-wrap; }
+  #bar { grid-area: bar; display: flex; align-items: center; justify-content: center; gap: 8px; background: var(--surface); border-top: 1px solid var(--line); }
+  button { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.primary { background: var(--primary); border-color: var(--primary); }
+  button.danger { background: var(--danger); border-color: var(--danger); }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="title">hopeOS · ACS meeting probe</span>
+  <span class="state" id="callState">not joined</span>
+  <span class="rec" id="recBanner">This meeting is being recorded</span>
+  <span class="rec" id="txBanner">Transcription is on</span>
+  <button id="btnConsent" class="primary" hidden>Grant recording/transcription consent</button>
+</header>
+
+<main id="stage">
+  <div id="gallery">
+    <!-- local tile: we show our own compositor canvas directly (no VideoStreamRenderer needed for a canvas source) -->
+    <div class="tile" id="localTile"><span class="name">You (canvas → camera)</span><span class="badge">local</span></div>
+  </div>
+</main>
+
+<aside id="pane">
+  <h3>Join</h3>
+  <section>
+    <label>Mode</label>
+    <select id="mode">
+      <option value="teams-link">Teams meeting link</option>
+      <option value="teams-id">Teams meeting ID + passcode</option>
+      <option value="group">ACS group call (GUID, no Teams tenant needed)</option>
+    </select>
+    <label>Teams meeting link (from the invite, https://teams.microsoft.com/l/meetup-join/...)</label>
+    <input id="meetingLink" placeholder="https://teams.microsoft.com/l/meetup-join/19%3ameeting_...">
+    <label>Meeting ID / passcode (Teams "meeting ID" join, SDK ≥ 1.17.1)</label>
+    <input id="meetingId" placeholder="000 000 000 000"> <input id="passcode" placeholder="aBcDeF (case-sensitive)">
+    <label>Group call GUID (any GUID; everyone who joins the same GUID is in the same call)</label>
+    <input id="groupId" placeholder="e.g. 3f0e7c6e-6d9a-4e0c-9b0c-3a3b6b7a1c2d">
+    <label>Display name (Teams shows it with an "External" label)</label>
+    <input id="displayName" value="hopeOS probe">
+    <label>Token endpoint (Vercel function, see acs-token.js) — or paste a token below</label>
+    <input id="tokenEndpoint" value="/api/acs-token">
+    <input id="tokenPaste" placeholder="paste a portal-minted voip token to skip the server">
+  </section>
+  <h3>People</h3>
+  <section><ul id="people"></ul></section>
+  <h3>Log</h3>
+  <div id="log"></div>
+</aside>
+
+<div id="bar">
+  <button id="btnJoin" class="primary">Join</button>
+  <button id="btnMic" disabled>Unmute</button>
+  <button id="btnCam" disabled>Stop canvas video</button>
+  <button id="btnBall" disabled>Pass ball to next tile</button>
+  <button id="btnGoal" disabled>Mark next tile as goal</button>
+  <button id="btnLeave" class="danger" disabled>Leave</button>
+</div>
+
+<script type="module">
+// ---------------------------------------------------------------------------
+// Imports. Names verified in types/communication-calling.d.ts (1.46.1):
+//   CallClient, LocalVideoStream (ctor accepts VideoDeviceInfo | MediaStream),
+//   VideoStreamRenderer, Features (Recording, DataChannel, OptimalVideoCount, ...)
+// getIdentifierRawId is exported by @azure/communication-common (it is one of the
+// names the calling bundle itself imports from that package).
+// ---------------------------------------------------------------------------
+import { CallClient, LocalVideoStream, VideoStreamRenderer, Features } from '@azure/communication-calling';
+import { AzureCommunicationTokenCredential, getIdentifierRawId } from '@azure/communication-common';
+
+const $ = (id) => document.getElementById(id);
+const log = (...a) => { const s = a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' '); $('log').textContent += s + '\n'; $('log').scrollTop = 1e9; console.log('[acs]', ...a); };
+
+const state = {
+  callClient: null, callAgent: null, deviceManager: null, call: null,
+  userId: null,               // our ACS id "8:acs:..." (from the token endpoint)
+  camStream: null,            // raw camera MediaStream we composite from
+  canvas: null, canvasStream: null, localVideoStream: null, videoOn: false,
+  tiles: new Map(),           // rawId -> { el, participant, renderer, view }
+  dc: { feature: null, sender: null, keepalive: null },
+  ball: { holder: null, goal: null }, // rawIds
+};
+
+// ---------------------------------------------------------------------------
+// 1. Token. Production: fetch from our trusted server (acs-token.js). The
+//    credential can refresh itself: AzureCommunicationTokenCredential({ tokenRefresher,
+//    refreshProactively, token }) — documented in the @azure/communication-common README:
+//    https://github.com/Azure/azure-sdk-for-js/blob/main/sdk/communication/communication-common/README.md
+//    Tokens live 60–1440 min (default 1440):
+//    https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/identity/access-tokens?pivots=programming-language-javascript#set-a-custom-token-expiration-time
+// ---------------------------------------------------------------------------
+async function fetchTokenFromServer(userId) {
+  const url = new URL($('tokenEndpoint').value, location.href);
+  if (userId) url.searchParams.set('userId', userId);   // refresh path keeps the same identity
+  const r = await fetch(url, { headers: { 'x-acs-token-secret': localStorage.getItem('acsTokenSecret') || '' } });
+  if (!r.ok) throw new Error(`token endpoint ${r.status}`);
+  return r.json(); // { userId, token, expiresOn }
+}
+
+async function makeCredential() {
+  const pasted = $('tokenPaste').value.trim();
+  if (pasted) {
+    state.userId = 'pasted-token-user';
+    return new AzureCommunicationTokenCredential(pasted); // static token, no refresh
+  }
+  const first = await fetchTokenFromServer();
+  state.userId = first.userId;
+  return new AzureCommunicationTokenCredential({
+    token: first.token,
+    refreshProactively: true,
+    tokenRefresher: async () => (await fetchTokenFromServer(state.userId)).token,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 2. CallClient / CallAgent / DeviceManager.
+//    https://learn.microsoft.com/en-us/azure/communication-services/how-tos/calling-sdk/manage-calls?pivots=platform-web#initialize-required-objects
+// ---------------------------------------------------------------------------
+async function init() {
+  state.callClient = new CallClient();
+  const cred = await makeCredential();
+  state.callAgent = await state.callClient.createCallAgent(cred, { displayName: $('displayName').value || 'hopeOS' });
+  state.callAgent.on('connectionStateChanged', (e) => log('callAgent connectionState', e)); // { oldState, newState, reason }
+  state.deviceManager = await state.callClient.getDeviceManager();
+  // askDevicePermission({audio, video}) -> DeviceAccess {audio, video}
+  const access = await state.deviceManager.askDevicePermission({ audio: true, video: true });
+  log('device access', access);
+}
+
+// ---------------------------------------------------------------------------
+// 3. Our "camera" = a canvas. hopeOS draws the tracked hand rig / props /
+//    the ball onto this canvas; ACS sends it as ordinary camera video, so Teams
+//    clients see it in their normal gallery. Raw-media how-to (canvas.captureStream(30)
+//    -> new LocalVideoStream(mediaStream)):
+//    https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/voice-video-calling/get-started-raw-media-access?pivots=platform-web
+//    captureStream(frameRate) is Baseline in Chrome/Edge/Firefox/Safari:
+//    https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/captureStream
+//    KNOWN ISSUE: on iOS Safari, calling getUserMedia yourself alongside the SDK can
+//    drop the call's audio; desktop Chrome/Edge are fine.
+//    https://learn.microsoft.com/en-us/azure/communication-services/concepts/known-issues#using-third-party-libraries-during-the-call-might-result-in-audio-loss
+// ---------------------------------------------------------------------------
+async function startCompositor() {
+  state.camStream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, frameRate: 30 }, audio: false });
+  const vid = document.createElement('video');
+  vid.muted = true; vid.playsInline = true; vid.srcObject = state.camStream; await vid.play();
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280; canvas.height = 720;
+  const ctx = canvas.getContext('2d');
+  $('localTile').prepend(canvas);
+  state.canvas = canvas;
+
+  let t0 = performance.now();
+  (function frame(now) {
+    ctx.drawImage(vid, 0, 0, canvas.width, canvas.height);
+    // === hopeOS hook =====================================================
+    // Replace this block with the real compositor: run MediaPipe on `vid`,
+    // rebuild the holohand rig, render three.js to an offscreen WebGL canvas,
+    // then ctx.drawImage(webglCanvas, 0, 0). Keep everything on this ONE
+    // canvas so ACS sees a single video track.
+    if (window.hopeOSOverlay) window.hopeOSOverlay(ctx, canvas, now, state);
+    else {
+      if (state.ball.holder === state.userId) { // placeholder ball while we hold it
+        const x = 640 + Math.sin((now - t0) / 500) * 200;
+        ctx.fillStyle = '#c4314b'; ctx.beginPath(); ctx.arc(x, 360, 40, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fillRect(0, 680, 420, 40);
+      ctx.fillStyle = '#fff'; ctx.font = '20px system-ui'; ctx.fillText('hopeOS canvas → ACS LocalVideoStream', 10, 708);
+    }
+    // ======================================================================
+    requestAnimationFrame(frame);
+  })(t0);
+
+  state.canvasStream = canvas.captureStream(30);
+  return state.canvasStream;
+}
+
+// ---------------------------------------------------------------------------
+// 4. Join. callAgent.join(locator, JoinCallOptions)
+//    locators: { meetingLink } | { meetingId, passcode } | { groupId }
+//    https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/voice-video-calling/get-started-teams-interop?pivots=platform-web
+//    https://learn.microsoft.com/en-us/azure/communication-services/how-tos/calling-sdk/manage-calls?pivots=platform-web#join-a-group-call
+//    JoinCallOptions = { videoOptions?: { localVideoStreams?, constraints? }, audioOptions?: { muted?, localAudioStreams? } }
+//    Send constraints (frameHeight/frameRate/bitrate max) — 1080p needs SDK ≥ 1.34.1:
+//    https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/voice-video-calling/get-started-video-constraints?pivots=platform-web
+// ---------------------------------------------------------------------------
+function buildLocator() {
+  switch ($('mode').value) {
+    case 'teams-link': return { meetingLink: $('meetingLink').value.trim() };
+    case 'teams-id':   return { meetingId: $('meetingId').value.replace(/\s+/g, ''), passcode: $('passcode').value.trim() };
+    case 'group':      return { groupId: $('groupId').value.trim() || crypto.randomUUID() };
+  }
+}
+
+async function join() {
+  $('btnJoin').disabled = true;
+  try {
+    if (!state.callAgent) await init();
+    const mediaStream = await startCompositor();
+    state.localVideoStream = new LocalVideoStream(mediaStream);   // mediaStreamType becomes 'RawMedia'
+    const locator = buildLocator();
+    log('joining', locator);
+    state.call = state.callAgent.join(locator, {
+      videoOptions: {
+        localVideoStreams: [state.localVideoStream],
+        constraints: { send: { frameHeight: { max: 720 }, frameRate: { max: 30 } } },
+      },
+      audioOptions: { muted: true },   // join muted; Teams etiquette + avoids echo in the lab
+    });
+    state.videoOn = true;
+    subscribeToCall(state.call);
+    $('btnLeave').disabled = false; $('btnMic').disabled = false; $('btnCam').disabled = false;
+  } catch (e) { log('join failed', String(e)); $('btnJoin').disabled = false; }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Call events. CallState = 'None'|'Connecting'|'Ringing'|'Connected'|'LocalHold'|
+//    'RemoteHold'|'InLobby'|'Disconnecting'|'Disconnected'|'EarlyMedia'
+//    Teams lobby rule: an ACS user is not admitted until at least one Teams user is
+//    in the meeting, then waits in the lobby unless "Who can bypass the lobby" = Everyone.
+//    https://learn.microsoft.com/en-us/azure/communication-services/concepts/join-teams-meeting#meeting-experience
+//    Recording/transcription MUST be surfaced to the user in real time (contractual):
+//    https://learn.microsoft.com/en-us/azure/communication-services/concepts/join-teams-meeting#privacy
+// ---------------------------------------------------------------------------
+function subscribeToCall(call) {
+  const paint = () => { $('callState').textContent = call.state + (call.state === 'InLobby' ? ' — waiting for a Teams user to admit you' : ''); };
+  paint();
+  call.on('stateChanged', () => {
+    paint(); log('call state', call.state);
+    if (call.state === 'Connected') { setupDataChannel(call); }
+    if (call.state === 'Disconnected') { log('ended', call.callEndReason); teardown(); }
+  });
+  call.on('isMutedChanged', () => { $('btnMic').textContent = call.isMuted ? 'Unmute' : 'Mute'; });
+  call.on('isLocalVideoStartedChanged', () => log('isLocalVideoStarted', call.isLocalVideoStarted));
+
+  // Teams cloud recording / transcription indicators. Both features are in the 1.46.1
+  // typings (_src/communication-calling-1.46.1.d.ts: RecordingCallFeature.isRecordingActive +
+  // 'isRecordingActiveChanged'; TranscriptionCallFeature.isTranscriptionActive +
+  // 'isTranscriptionActiveChanged'). Both also expose isTeamsConsentRequired /
+  // grantTeamsConsent(): when the Teams meeting requires explicit consent, our audio,
+  // video and screen share are NOT sent until we call grantTeamsConsent() — so the canvas
+  // would silently stop reaching the Teams gallery. Surface it as a button.
+  const rec = call.feature(Features.Recording);
+  const tx  = call.feature(Features.Transcription);
+  const paintRec = () => {
+    $('recBanner').classList.toggle('on', rec.isRecordingActive);
+    $('txBanner').classList.toggle('on', tx.isTranscriptionActive);
+    $('btnConsent').hidden = !(rec.isTeamsConsentRequired || tx.isTeamsConsentRequired);
+  };
+  rec.on('isRecordingActiveChanged', paintRec); tx.on('isTranscriptionActiveChanged', paintRec); paintRec();
+  $('btnConsent').onclick = async () => {
+    try { await (rec.isTeamsConsentRequired ? rec.grantTeamsConsent() : tx.grantTeamsConsent()); log('consent granted'); }
+    catch (e) { log('consent failed', String(e)); }
+    paintRec();
+  };
+
+  // Optimal Video Count: how many remote videos this machine/network can render now.
+  // Max 16 (GA) / 25 on desktop with SDK ≥ 1.40.0; 4 on mobile browsers.
+  // https://learn.microsoft.com/en-us/azure/communication-services/how-tos/calling-sdk/manage-video?pivots=platform-web#remote-video-quality
+  const ovc = call.feature(Features.OptimalVideoCount);
+  ovc.on('optimalVideoCountChanged', () => log('optimalVideoCount', ovc.optimalVideoCount));
+
+  call.remoteParticipants.forEach(subscribeToParticipant);
+  call.on('remoteParticipantsUpdated', (e) => {   // CollectionUpdatedEvent<RemoteParticipant> = { added, removed }
+    e.added.forEach(subscribeToParticipant);
+    e.removed.forEach(removeParticipant);
+  });
+}
+
+// Identifier kinds seen in Teams meetings: { communicationUserId } (other ACS users),
+// { microsoftTeamsUserId, isAnonymous?, cloud? } (Teams users), { phoneNumber }, { id }.
+// https://learn.microsoft.com/en-us/azure/communication-services/how-tos/calling-sdk/manage-calls?pivots=platform-web#access-remote-participant-properties
+function keyOf(p) { return getIdentifierRawId(p.identifier); }
+
+function subscribeToParticipant(p) {
+  const key = keyOf(p);
+  const el = document.createElement('div');
+  el.className = 'tile'; el.dataset.key = key;
+  el.innerHTML = `<div class="spinner">…</div><span class="name"></span><span class="badge"></span>`;
+  el.querySelector('.name').textContent = p.displayName || key;
+  el.querySelector('.badge').textContent = p.identifier.kind || '';
+  el.addEventListener('click', () => passBall(key));
+  $('gallery').appendChild(el);
+  state.tiles.set(key, { el, participant: p, renderer: null, view: null });
+  paintPeople();
+
+  p.on('stateChanged', () => { log('participant', key, p.state); paintPeople(); }); // Idle|Connecting|Ringing|Connected|Hold|EarlyMedia|InLobby|Disconnected
+  p.on('isMutedChanged', paintPeople);
+  p.videoStreams.forEach((s) => subscribeToRemoteVideoStream(key, s));
+  p.on('videoStreamsUpdated', (e) => {          // CollectionUpdatedEvent<RemoteVideoStream>
+    e.added.forEach((s) => subscribeToRemoteVideoStream(key, s));
+    e.removed.forEach(() => log('stream removed from', key));
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 6. Remote video. Pattern from the manage-video how-to: subscribe to
+//    isAvailableChanged, then VideoStreamRenderer(stream).createView({scalingMode}) and
+//    append view.target (an HTMLElement wrapping a <video>). isReceivingChanged = stall spinner.
+//    https://learn.microsoft.com/en-us/azure/communication-services/how-tos/calling-sdk/manage-video?pivots=platform-web#render-remote-participant-videoscreensharing-streams
+//    remoteVideoStream.getMediaStream() gives the raw incoming MediaStream — that is how
+//    hopeOS can run its trackers on a REMOTE participant's frames locally (fallback when
+//    the remote side is a plain Teams client and cannot send landmarks).
+// ---------------------------------------------------------------------------
+async function subscribeToRemoteVideoStream(key, stream) {
+  if (stream.mediaStreamType !== 'Video') { log('ignoring', stream.mediaStreamType, 'from', key); return; } // 'ScreenSharing' → put on a stage, not a tile
+  const tile = state.tiles.get(key); if (!tile) return;
+  const createView = async () => {
+    tile.renderer = new VideoStreamRenderer(stream);
+    tile.view = await tile.renderer.createView({ scalingMode: 'Crop', isMirrored: false });
+    tile.el.prepend(tile.view.target);
+    if (window.hopeOSRemoteFrames) window.hopeOSRemoteFrames(key, await stream.getMediaStream()); // optional tracker feed
+  };
+  const destroyView = () => { try { tile.view?.dispose(); tile.view?.target?.remove(); } catch {} tile.view = null; tile.renderer = null; };
+  stream.on('isAvailableChanged', async () => { stream.isAvailable ? await createView() : destroyView(); });
+  stream.on('isReceivingChanged', () => tile.el.classList.toggle('stalled', stream.isAvailable && !stream.isReceiving));
+  stream.on('sizeChanged', () => log('remote size', key, stream.size));
+  if (stream.isAvailable) await createView();
+}
+
+function removeParticipant(p) {
+  const key = keyOf(p); const t = state.tiles.get(key); if (!t) return;
+  try { t.view?.dispose(); } catch {}
+  t.el.remove(); state.tiles.delete(key); paintPeople();
+}
+
+function paintPeople() {
+  const ul = $('people'); ul.innerHTML = '';
+  for (const [key, t] of state.tiles) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span></span><span></span>`;
+    li.children[0].textContent = t.participant.displayName || key;
+    li.children[1].textContent = `${t.participant.state}${t.participant.isMuted ? ' · muted' : ''}${t.participant.role ? ' · ' + t.participant.role : ''}`;
+    ul.appendChild(li);
+  }
+  const n = state.tiles.size;
+  $('btnBall').disabled = n === 0 || state.call?.state !== 'Connected';
+  $('btnGoal').disabled = n === 0;
+}
+
+// ---------------------------------------------------------------------------
+// 7. DataChannel = game-state bus for the ball-pass game (ball holder, goal tile,
+//    optional landmark packets). GA since SDK 1.20.1 (2023-12-12).
+//    Limits: 32 KB/message; participants list ≤ 64 (empty list = broadcast);
+//    Durable ≤ 64 kbps, Lossy ≤ 512 kbps, High-priority Lossy ≤ 200 kbps; broadcast
+//    ≤ 80 packets/s (1200 B = 1 packet); receiver auto-closes after 2 min without
+//    messages, so send a keepalive.
+//    https://learn.microsoft.com/en-us/azure/communication-services/concepts/voice-video-calling/data-channel
+//    https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/voice-video-calling/get-started-data-channel?pivots=platform-web
+//    NOT VERIFIED: whether DataChannel works between two ACS *external users inside a
+//    Teams meeting* — it is absent from the Teams-external-user capabilities table.
+//    Teams-native clients will never receive it. Test in the group-call mode first, then
+//    inside a real Teams meeting; the WebSocket relay from roadmap step 2 is the fallback.
+// ---------------------------------------------------------------------------
+const CH_GAME = 1000;
+const enc = new TextEncoder(), dec = new TextDecoder();
+function setupDataChannel(call) {
+  const feature = call.feature(Features.DataChannel);
+  state.dc.feature = feature;
+  state.dc.sender = feature.createDataChannelSender({ channelId: CH_GAME, reliability: 'Lossy', priority: 'High', bitrateInKbps: 64 });
+  state.dc.sender.setParticipants([]); // broadcast
+  feature.on('dataChannelReceiverCreated', (receiver) => {
+    if (receiver.channelId !== CH_GAME) return;
+    const from = getIdentifierRawId(receiver.senderParticipantIdentifier);
+    receiver.on('messageReady', () => {
+      const msg = receiver.readMessage(); if (!msg) return;
+      let obj; try { obj = JSON.parse(dec.decode(msg.data)); } catch { return; }
+      onGameMessage(from, obj, msg.sequenceNumber);
+    });
+    receiver.on('close', () => log('dc receiver closed', from));
+  });
+  clearInterval(state.dc.keepalive);
+  state.dc.keepalive = setInterval(() => sendGame({ type: 'ping' }), 30_000);
+  sendGame({ type: 'hello', ball: state.ball });
+}
+async function sendGame(obj) {
+  if (!state.dc.sender) return;
+  try { await state.dc.sender.sendMessage(enc.encode(JSON.stringify({ ...obj, from: state.userId, t: Date.now() }))); }
+  catch (e) { log('dc send failed', String(e)); }
+}
+function onGameMessage(from, obj) {
+  if (obj.type === 'ping') return;
+  log('dc', from, obj);
+  if (obj.type === 'ball')  { state.ball.holder = obj.to; paintBall(); }
+  if (obj.type === 'goal')  { state.ball.goal = obj.tile; paintBall(); }
+  if (obj.type === 'hello' && obj.ball) { state.ball = obj.ball; paintBall(); }
+  if (obj.type === 'landmarks' && window.hopeOSRemoteLandmarks) window.hopeOSRemoteLandmarks(from, obj); // 21×3 hand points etc.
+}
+function paintBall() {
+  for (const [key, t] of state.tiles) { t.el.classList.toggle('holder', state.ball.holder === key); t.el.classList.toggle('goal', state.ball.goal === key); }
+  $('localTile').classList.toggle('holder', state.ball.holder === state.userId);
+  if (state.ball.holder === state.ball.goal && state.ball.holder) log('GOAL at', state.ball.goal);
+}
+function nextTileKey() { const keys = [...state.tiles.keys()]; const i = keys.indexOf(state.ball.holder); return keys[(i + 1) % keys.length]; }
+function passBall(to) { state.ball.holder = to; paintBall(); sendGame({ type: 'ball', to }); }
+
+// ---------------------------------------------------------------------------
+// 8. Toolbar. mute()/unmute() are throttled server-side if used > 15× in 30 s.
+//    startVideo/stopVideo take the SAME LocalVideoStream instance used to start.
+//    hangUp(options?: { forEveryone: boolean }) — ACS external users may "end for everyone" only
+//    where Teams role permits; plain hangUp() leaves.
+// ---------------------------------------------------------------------------
+$('btnJoin').onclick = join;
+$('btnMic').onclick = async () => { state.call.isMuted ? await state.call.unmute() : await state.call.mute(); };
+$('btnCam').onclick = async () => {
+  if (state.videoOn) { await state.call.stopVideo(state.localVideoStream); state.videoOn = false; $('btnCam').textContent = 'Start canvas video'; }
+  else { await state.call.startVideo(state.localVideoStream); state.videoOn = true; $('btnCam').textContent = 'Stop canvas video'; }
+};
+$('btnBall').onclick = () => passBall(nextTileKey());
+$('btnGoal').onclick = () => { state.ball.goal = nextTileKey(); paintBall(); sendGame({ type: 'goal', tile: state.ball.goal }); };
+$('btnLeave').onclick = async () => { try { await state.call.hangUp(); } catch (e) { log(String(e)); } };
+
+function teardown() {
+  clearInterval(state.dc.keepalive); state.dc = { feature: null, sender: null, keepalive: null };
+  for (const [, t] of state.tiles) { try { t.view?.dispose(); } catch {} t.el.remove(); }
+  state.tiles.clear(); paintPeople();
+  state.camStream?.getTracks().forEach((tr) => tr.stop());
+  $('btnJoin').disabled = false; $('btnLeave').disabled = $('btnMic').disabled = $('btnCam').disabled = true;
+}
+
+// Mid-call source swap (e.g. switch from the canvas to the raw camera) is
+// localVideoStream.setMediaStream(newMediaStream) per the raw-media how-to; only ONE
+// outgoing video stream is allowed per call (plus one screen share).
+window.acsProbe = state; // for DevTools poking
+log('ready. Serve over https or localhost. SDK 1.46.1 via import map.');
+// Syntax of this module was checked with `node --check` on 2026-09-18 (see SUMMARY.md);
+// it has NOT been executed in a browser against a live ACS resource yet.
+</script>
+</body>
+</html>

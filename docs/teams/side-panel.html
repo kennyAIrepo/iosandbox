@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS Ball Pass - side panel</title>
+<!--
+  MEETING SIDE PANEL (frameContext "sidePanel").
+  Responsibilities:
+    1. Gate the custom "Play together" button with meeting.getAppContentStageSharingCapabilities
+       (only presenters/organizers of in-tenant/guest/external type get doesAppHaveSharePermission=true;
+        attendees and anonymous users do not).
+       https://learn.microsoft.com/en-us/microsoftteams/platform/apps-in-teams-meetings/build-apps-for-teams-meeting-stage
+    2. Share stage.html to the meeting stage with meeting.shareAppContentToStage(callback, url, shareOptions?)
+       https://learn.microsoft.com/en-us/javascript/api/@microsoft/teams-js/meeting#@microsoft-teams-js-meeting-shareappcontenttostage
+    3. Poll meeting.getAppContentStageSharingState for isAppSharing and offer stop.
+    4. If Teams loaded THIS page on the stage (native share button, or supportsCustomShareToStage not honoured),
+       forward to stage.html so the stage always runs the game page.
+
+  Vanilla JS, no bundler. TeamsJS UMD from Microsoft's CDN -> global `microsoftTeams`.
+  Design: the in-meeting tab iframe is 280 px wide; use one column, vertical scroll only, dark-first.
+  https://learn.microsoft.com/en-us/microsoftteams/platform/apps-in-teams-meetings/design/designing-apps-in-meetings
+-->
+<script src="https://res.cdn.office.net/teams-js/2.56.0/js/MicrosoftTeams.min.js" crossorigin="anonymous"></script>
+<style>
+  :root { --bg:#292929; --fg:#fff; --muted:#adadad; --accent:#7f85f5; --ok:#6ccb5f; --bad:#f1707b; --card:#333; }
+  body[data-theme="light"] { --bg:#fff; --fg:#242424; --muted:#616161; --card:#f5f5f5; }
+  body[data-theme="contrast"] { --bg:#000; --fg:#fff; --muted:#fff; --accent:#ffff00; --card:#000; }
+  body { margin:0; padding:12px; background:var(--bg); color:var(--fg); font:14px system-ui,sans-serif; max-width:280px; }
+  h2 { font-size:16px; margin:0 0 8px; }
+  .card { background:var(--card); border-radius:6px; padding:10px; margin:8px 0; }
+  button { width:100%; padding:10px; border:0; border-radius:4px; background:var(--accent); color:#000; font-weight:600; cursor:pointer; margin:6px 0; }
+  button[disabled] { opacity:.4; cursor:not-allowed; }
+  button.secondary { background:transparent; color:var(--fg); border:1px solid var(--muted); }
+  .kv { font-size:12px; color:var(--muted); word-break:break-all; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .goal { display:flex; gap:6px; } .goal label { flex:1; text-align:center; padding:6px; background:var(--bg); border-radius:4px; cursor:pointer; }
+</style>
+</head>
+<body>
+  <h2>hopeOS Ball Pass</h2>
+
+  <div class="card" id="context">
+    <div class="kv" id="ctxLine">Initializing TeamsJS...</div>
+  </div>
+
+  <div class="card">
+    <!-- Microsoft's guidance: label the button "Share" or scenario text such as "Play together", never "Present". -->
+    <button id="shareBtn" disabled>Play together</button>
+    <button id="shareRoBtn" class="secondary" disabled>Share view-only (screen share)</button>
+    <button id="stopBtn" class="secondary" hidden>Stop sharing</button>
+    <div class="kv" id="shareLine">Checking share permission...</div>
+  </div>
+
+  <div class="card">
+    <div>Goal tile (sent to the stage as a URL param)</div>
+    <div class="goal">
+      <label><input type="radio" name="goal" value="none" checked> none</label>
+      <label><input type="radio" name="goal" value="A"> A</label>
+      <label><input type="radio" name="goal" value="B"> B</label>
+      <label><input type="radio" name="goal" value="C"> C</label>
+    </div>
+    <div class="kv">Only used at share time. In the real game the goal tile is a LiveState on the stage page so it can change mid-game.</div>
+  </div>
+
+  <div class="card">
+    <button id="localBtn" class="secondary">Open stage locally (TestLiveShareHost)</button>
+    <div class="kv">Outside Teams: needs <code>npx tinylicious@latest</code> on :7070.</div>
+  </div>
+
+<script>
+(async () => {
+  const $ = (id) => document.getElementById(id);
+  const params = new URL(location.href).searchParams;
+  const meeting = microsoftTeams.meeting;
+
+  // ---------- Detect "inside Teams" robustly ----------
+  // TeamsJS app.initialize() waits for the host handshake; outside Teams it does not resolve promptly.
+  // We race it against a timeout and also look at whether we are framed at all.
+  const framed = window.self !== window.top;
+  const initPromise = microsoftTeams.app.initialize();
+  const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("TeamsJS handshake timeout")), 4000));
+  let ctx = null;
+  try {
+    await Promise.race([initPromise, timeout]);
+    ctx = await microsoftTeams.app.getContext();
+  } catch (e) {
+    $("ctxLine").innerHTML = `<span class="bad">Not inside Teams</span> (${framed ? "framed" : "top-level"}). ${e.message}`;
+    $("shareLine").textContent = "Share-to-stage APIs only exist inside a Teams meeting.";
+    wireLocal();
+    return;
+  }
+
+  // ---------- Theme ----------
+  const applyTheme = (t) => document.body.dataset.theme = (t === "default" ? "light" : t); // "default" | "dark" | "contrast"
+  applyTheme(ctx.app.theme);
+  microsoftTeams.app.registerOnThemeChangeHandler(applyTheme);
+
+  // ---------- Context ----------
+  // Context shape per TeamsJS v2: page.frameContext, meeting.id, user.id, app.host.clientType
+  // https://learn.microsoft.com/en-us/microsoftteams/platform/tabs/how-to/using-teams-client-library#updates-to-the-context-interface
+  const frame = ctx.page?.frameContext;
+  $("ctxLine").innerHTML =
+    `frame=<b>${frame}</b> host=${ctx.app?.host?.clientType} meeting=${ctx.meeting?.id ?? "n/a"}<br>` +
+    `user=${ctx.user?.id ?? "n/a"} tenant=${ctx.user?.tenant?.id ?? "n/a"} role=${ctx.team?.userRole ?? "n/a"}`;
+
+  // If Teams put THIS url on the stage (native share), hand over to the game page.
+  if (frame === microsoftTeams.FrameContexts.meetingStage) {
+    location.replace(`stage.html?inTeams=1&goal=${params.get("goal") ?? "none"}`);
+    return;
+  }
+
+  // ---------- Gate the custom share button ----------
+  // getAppContentStageSharingCapabilities(callback) - callback(error: SdkError|null, caps: {doesAppHaveSharePermission}|null)
+  // doesAppHaveSharePermission is only ever true if the manifest tab context includes "meetingStage".
+  meeting.getAppContentStageSharingCapabilities((err, caps) => {
+    if (err || !caps) {
+      $("shareLine").innerHTML = `<span class="bad">capabilities error</span> ${JSON.stringify(err)}`;
+      return;
+    }
+    const can = !!caps.doesAppHaveSharePermission;
+    $("shareBtn").disabled = !can;
+    $("shareRoBtn").disabled = !can;
+    $("shareLine").innerHTML = can
+      ? `<span class="ok">You can share to stage</span> (presenter/organizer, manifest has meetingStage + MeetingStage.Write.Chat)`
+      : `<span class="bad">No share permission</span> - attendees and anonymous users cannot share; ask an organizer to make you a presenter.`;
+  });
+
+  const stageUrl = (protocol) => {
+    const goal = document.querySelector('input[name="goal"]:checked').value;
+    // The origin MUST be in manifest validDomains or shareAppContentToStage fails (Learn says a 501 error).
+    return `${location.origin}/stage.html?inTeams=1&goal=${goal}&proto=${protocol}`;
+  };
+
+  // Collaborative (default): every participant loads stage.html in their own client and they sync via Live Share.
+  $("shareBtn").onclick = () => {
+    meeting.shareAppContentToStage((err, ok) => {
+      $("shareLine").innerHTML = err ? `<span class="bad">share failed</span> ${JSON.stringify(err)}`
+                                     : `<span class="ok">sharing (collaborative)</span>`;
+    }, stageUrl("collab"), { sharingProtocol: meeting.SharingProtocol.Collaborative });
+  };
+
+  // ScreenShare: only the presenter's instance renders; others get a video of it (view-only).
+  // Not supported on Mac, classic Teams, mobile, web and VDI per Learn (build-apps-for-teams-meeting-stage).
+  $("shareRoBtn").onclick = () => {
+    meeting.shareAppContentToStage((err, ok) => {
+      $("shareLine").innerHTML = err ? `<span class="bad">share failed</span> ${JSON.stringify(err)}`
+                                     : `<span class="ok">sharing (screen share, view-only)</span>`;
+    }, stageUrl("screenshare"), { sharingProtocol: meeting.SharingProtocol.ScreenShare });
+  };
+
+  // ---------- Sharing state + stop ----------
+  // stopSharingAppContentToStage is documented on Learn (2026-07) but carries @hidden in the TeamsJS source
+  // (packages/teams-js/src/public/meeting/meeting.ts), so it may be missing from typings/docs; feature-detect it.
+  const hasStop = typeof meeting.stopSharingAppContentToStage === "function";
+  $("stopBtn").onclick = () => {
+    if (!hasStop) return;
+    meeting.stopSharingAppContentToStage((err, ok) => {
+      $("shareLine").innerHTML = err ? `<span class="bad">stop failed</span> ${JSON.stringify(err)}` : "stopped";
+    });
+  };
+  setInterval(() => {
+    // getAppContentStageSharingState(callback) - callback(error, {isAppSharing})
+    meeting.getAppContentStageSharingState((err, st) => {
+      if (err || !st) return;
+      $("stopBtn").hidden = !(st.isAppSharing && hasStop);
+      if (st.isAppSharing) $("shareBtn").textContent = "Re-share stage";
+    });
+  }, 2000);
+
+  wireLocal();
+
+  function wireLocal() {
+    $("localBtn").onclick = () => window.open(`stage.html?inTeams=0&goal=none`, "_blank");
+  }
+})();
+</script>
+</body>
+</html>

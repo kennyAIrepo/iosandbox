@@ -1,0 +1,49 @@
+# frameworks: SUMMARY (finished 2026-09-18)
+
+Topic question: how do AR-effect and game add-ons integrate into video calls today (Teams, Zoom, Meet, ACS, Snap, Banuba, Messenger, Discord), what does that mean for positioning hopeOS as a Teams add-on, and which shipped precedents teach cross-tile object handoff?
+
+## Version decision
+
+Both passes (`research/frameworks/` canonical, `research_draft1/frameworks/` draft) contain the same four docs/examples with the same section structure. The canonical versions are strictly newer, larger (comparison 30 KB vs 21 KB, positioning 16 KB vs 12 KB, precedents 15 KB vs 13 KB), carry "verified 2026-09-18" re-fetch notes on every cell, and add material the draft lacks (Google Meet Media API row, Live Share license note, Snap Connected Lenses web caveat, exact Zoom SDK version numbers). **All three canonical docs were kept; nothing was copied from the draft.** No `_src/` subfolder exists for this topic (sources are cited inline by URL); no verify script exists.
+
+## What the topic concluded
+
+1. **No meeting add-on surface gives a third party pixels of other participants' video.** Zoom Layers composes participants as opaque cutout layers (no frame method in the `Apis` union); Meet add-ons and Teams stage apps get no media; Teams video-effect apps get only your own outgoing frames. Remote frames exist only when you own the client (ACS `remoteVideoStream.getMediaStream()`, Zoom Video SDK, our own WebRTC twin) or in Google's Developer-Preview, receive-only Meet Media API. This confirms the memo's architecture: track locally, relay small landmark/state packets, render everyone locally; the Teams twin is the only place cross-tile tracking on remote frames runs today.
+2. **"Draw over everyone" survives only as host-controlled scene composition, and it is shrinking.** Zoom Immersive mode (host-only, one context) is the single live API. Teams Together mode retired 2026-06-30, Mesh in Teams 2025-12-01, Workrooms 2026-02-16, Games for Work pilot pulled 2024-05-24. Per-user effects (video filters, camera mode, avatars) and iframe apps (side panel, stage, activities) are what persists on every platform.
+3. **Every in-browser AR SDK converges on one output contract:** render to a canvas, `canvas.captureStream()` (or `VideoFrame` from an `OffscreenCanvas`), hand the track to the call (`replaceTrack`, ACS `LocalVideoStream`/`setMediaStream`, Banuba `MediaStreamCapture`, Snap `session.output.capture`, Zoom Video SDK `VideoProcessor`). hopeOS already renders three.js to a canvas, so "hopeOS as a Teams video effect" is a container/perf question, not a rendering one.
+4. **In Teams vocabulary hopeOS is a meeting extension (side panel controller + meeting stage shared surface, Live Share synced) bundled with a video-effect app (holohands + held object on your own tile).** The cross-tile ball inside real Teams tiles is not achievable by a third party today; it is achievable in the twin and, if interop permits raw media, in an ACS custom client.
+5. **Precedents reduce to one handoff model:** single writer per object (bgstaal per-window records, Snap owned `RealtimeStore`, Meet canonical-winner rule); handoff as a two-phase `release`/`accept` event with fallback to a host/server "table" that keeps gravity on; shared gallery-global coordinates with per-client tile offset; state crosses the wire, landmarks never do. Live Share = authority (`LiveState` holder, `LiveEvent` throw/catch, `LivePresence` roster), never per-frame landmarks (Teams Carnival's own verdict: fully synchronous play over Live Share was unacceptable; they shipped turn-based/scoreboard sync).
+6. **Layer API shape to copy for the twin:** Zoom's controller + rendered-app split, `run({view})` with `immersive` or `camera`, `drawParticipant({id,x,y,width,height,zIndex,cutout})`, `drawImage`/`drawWebView`/`clear*` with a clear-then-redraw rule, `renderTarget` sizing, plus Teams' dual `videoFrameHandler`/`videoBufferHandler` and Zoom Video SDK's worker-hosted processor. `examples/hopeos-layers-api.js` is the proposal; `layers.frames(id)` is where the twin exceeds every vendor.
+
+## Decisions that constrain design
+
+- Teams `videoEffects` is **Beta** ("Do not use this API in a production environment"), NV12 only, >= 22 fps at 720p, both handlers required, manifest `videoFilters[]` only in the `m365-app-prev` moniker, explicit user consent, tenant-admin toggle, desktop-only / EDU-off at launch. Pilot conversation must ask Microsoft whether third-party video filters are still accepted in the new Teams client.
+- Teams stage + Live Share are GA; free Azure Fluid Relay (24 h sessions), no published latency figure, own license terms; needs sideloading or store submission.
+- Together mode / custom scenes / Scene Studio: retired 2026-06-30, never a target. Keep only the idea (client-side composite of segmented participants) for the twin.
+- ACS raw media: public preview, no SLA; behaviour inside a Teams-interop meeting is undocumented (one Q&A answer says unsupported); the `acs` topic owns that question.
+- Zoom Immersive: host-only, no frame access, beta apps confined to the developer account until review. Zoom Video SDK (own client, per-minute) is the Zoom analogue of ACS.
+- Meet: add-ons GA but zero media; Co-Doing closed to new sign-ups; Meet Media API Developer Preview, receive-only, all participants must be enrolled.
+- Snap Connected Lenses: multi-user stores documented for Spectacles/Camera Kit native; Camera Kit *Web* support not stated. Snap and Banuba both require apply-for-access / licence keys.
+- Game-state protocol for the twin: `{holder, pos, vel, t}` with a single owner writer, `release`/`accept` events, host/server fallback that keeps gravity on (consistent with the PROP COLLISION DOCTRINE: pickup is detected locally by finger wrap / clip / cradle on the receiver's own camera; open hand = release).
+
+## Canonical files
+
+- `comparison.md`: 17-row table (Zoom Layers immersive/camera, Zoom Apps games, Zoom Video SDK, Meet Add-ons, Meet Media API, Snap Camera Kit Web, Banuba Web AR, Teams video filters, Games for Work, Live Share, Together mode, Mesh, ACS custom client, Zoom Avatars, Workrooms, Discord Activities) x (entry point, draw over own, draw over others, frame access, state sync, latency, gating, licence), then the three cross-cutting facts.
+- `positioning.md`: Teams manifest/TeamsJS vocabulary mapped to hopeOS parts; the concrete differentiator list (interaction-ready effects, cross-tile effects, one shared object, camera-optional participation); the Zoom-Layers-derived layer API to adopt; gating summary for the pilot deck.
+- `precedents.md`: nine precedents (bgstaal multipleWindow3dScene, multi-window pong, Messenger Beach Bump, Together mode, Zoom Immersive, Games for Work + Teams Carnival, Zoom Apps games + Houseparty, Meet co-doing + Discord Activities, Snap Connected Lenses) with what each teaches about ownership and handoff, ending in five design rules for the twin.
+- `examples/hopeos-layers-api.js`: PROPOSED twin layer API (ours), Zoom-shaped, with `frames()` and the Teams dual-handler pair.
+- `examples/zoom-layers-app.js`: Zoom Apps controller + rendered-app skeleton with verified SDK names/versions.
+- `examples/teams-video-effect.js`: TeamsJS `videoEffects.registerForVideoFrame` skeleton (both handlers, NV12, 22 fps note).
+- `examples/teams-liveshare-ball.js`: Live Share `LiveState`/`LiveEvent`/`LivePresence` ball ownership + handoff skeleton.
+- `examples/meet-addon.js`: Meet Add-ons side panel + main stage skeleton (co-doing noted as closed).
+- `examples/webar-to-call.js`: four "frames in, MediaStream out" variants (Snap, Banuba, Zoom Video SDK processor, plain hopeOS canvas).
+- `examples/multiwindow-ball-handoff.js`: bgstaal pattern generalized to BroadcastChannel + owner token; transport-swappable to WebSocket/RTCDataChannel.
+- `SUMMARY.md`: this file.
+
+## Verification
+
+No verify script exists in this folder and none of the examples claims to be runnable standalone (each is a vendor-SDK skeleton that needs `@microsoft/teams-js`, `@microsoft/live-share`, `@zoom/appssdk`, `@googleworkspace/meet-addons`, `@snap/camera-kit`, `@banuba/webar`, or a browser). As a substitute, all seven `examples/*.js` were parse-checked as ES modules with `node --check` (Node v25.2.1) on 2026-09-18: **7/7 OK**. No runtime behaviour was verified.
+
+## Sources (primary, all cited inline in the docs)
+
+Zoom: developers.zoom.us Layers API guides (overview, using, manipulating-ui, camera-mode), appssdk.zoom.us type docs (`DrawParticipantOptions`, `ParticipantCutoutShape`, `RunRenderingContextOptions`, `Apis`, `ZoomSdk` v0.16.41), Video SDK raw-data-video, sharing-private-and-beta-apps. Microsoft: learn.microsoft.com TeamsJS `videoEffects`, Live Share overview/capabilities, meetingExtensionDefinition schema (m365-app-1.20), what's-new deprecations, ACS raw media quickstart/overview and Q&A; techcommunity video-filters GA and Maybelline posts; microsoft.com Games for Work post; Teams Carnival educator blog; adoption.microsoft.com/mesh. Google: Meet add-ons quickstart/get-client/reference, Co-Doing guide, Meet Media API overview. Snap: Camera Kit web configuration + reference 1.21.0, npm README, Connected Lenses docs. Banuba: far-sdk web integration + `MediaStreamCapture` typedoc. Others: github bgstaal/multipleWindow3dScene (WindowManager.js, main.js), chunqiuyiyu/multi-window-pong-game, Meta Newsroom Beach Bump 2018, Microsoft Source Together mode 2020, Meta Workrooms retirement page, GlobeNewswire/Kahoot Zoom Apps launch, TechCrunch Houseparty shutdown, docs.discord.com Activities.

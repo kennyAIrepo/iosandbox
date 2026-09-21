@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS privacy notice (Teams pilot)</title>
+<!--
+  DRAFT for the manifests' privacyUrl (research/meeting-app/manifest.json:9 -> https://${{TAB_DOMAIN}}/privacy.html;
+  research/video-effects/manifest.json:10 -> https://h0p3.io/privacy). Serve at that exact path over HTTPS, without
+  sign-in, on the same domain as validDomains. Written from data-flow.md; every [bracket] is filled per deployment.
+  Not legal advice - counsel edits before the pilot. Teams Store policy 1140.3 items covered: storage, retention and
+  deletion (s.4-5), security controls (s.6), contact (s.9), no auth, no store links.
+-->
+<style>
+  :root { color-scheme: light dark; --fg:#242424; --bg:#fafafa; --muted:#616161; --line:#e0e0e0; --brand:#5b5fc7; --card:#ffffff; }
+  @media (prefers-color-scheme: dark) { :root { --fg:#f5f5f5; --bg:#1f1f1f; --muted:#adadad; --line:#3d3d3d; --brand:#9299f7; --card:#292929; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 20px 64px; }
+  h1 { font-size: 26px; margin: 0 0 4px; } h2 { font-size: 18px; margin: 32px 0 8px; } h3 { font-size: 15px; margin: 18px 0 6px; }
+  .meta { color: var(--muted); font-size: 13px; margin-bottom: 24px; }
+  .box { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; margin: 12px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; } th, td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  .wrap { overflow-x: auto; }
+  a { color: var(--brand); }
+  ul { padding-left: 20px; }
+</style>
+</head>
+<body>
+<main>
+<h1>hopeOS privacy notice</h1>
+<div class="meta">Applies to the hopeOS Ball Pass meeting app, the hopeOS HoloHands video effect and the hopeOS meeting sandbox used in the [PILOT-PARTNER] pilot. Version [1.0], effective [DATE]. Notice version shown in the app: [consentVersion].</div>
+
+<div class="box"><strong>The short version.</strong> Your camera picture is analysed on your own device to find your hands (and, if you switch it on, your body pose). What leaves your device while you play is a small stream of hand and body landmark numbers, sent only to the other people in the same meeting so their screens can draw your hands. Face data never leaves your device. hopeOS keeps none of the landmark data after the meeting. Voice and typed commands are sent to third-party AI services only when you press the talk button or type a command.</div>
+
+<h2>1. Who is responsible</h2>
+<p>[CONTROLLER LEGAL NAME], [address] ("hopeOS", "we") provides the software. In the pilot, [PILOT-PARTNER] decides why and how its participants' data is used inside its Microsoft Teams meetings and is the data controller for that use; hopeOS acts on its instructions as a processor for the relay and the command services described below. Data protection contact: <a href="mailto:[privacy@DOMAIN]">[privacy@DOMAIN]</a>. [PILOT-PARTNER] data protection officer: [DPO CONTACT].</p>
+
+<h2>2. What we process, and where it goes</h2>
+<div class="wrap"><table>
+<tr><th>Data</th><th>Where it comes from</th><th>Leaves your device?</th><th>Who receives it</th></tr>
+<tr><td>Camera video</td><td>Your webcam, with your permission</td><td><strong>No</strong> on the tracking path. If you use hopeOS as your Teams video (virtual camera, video effect or the hopeOS meeting page), the picture you choose to show goes into the Teams meeting exactly like any other camera video.</td><td>Nobody, for tracking. Meeting participants, for video you choose to show.</td></tr>
+<tr><td>Hand landmarks (21 points per hand, including a metric hand-shape model)</td><td>Computed on your device from the camera</td><td><strong>Yes</strong>, about 30 times a second while you play and sharing is on</td><td>The other participants of the same meeting, through the relay named in section 3</td></tr>
+<tr><td>Body pose (33 points)</td><td>Computed on your device; only if you switch on "Body"</td><td>Yes, as above</td><td>As above</td></tr>
+<tr><td>Face mesh and facial expressions</td><td>Computed on your device for your own avatar</td><td><strong>Never</strong></td><td>Nobody</td></tr>
+<tr><td>Game state (where the ball is, who holds it, scores) and a per-meeting seat number</td><td>The game</td><td>Yes</td><td>The other participants, through the relay</td></tr>
+<tr><td>Your display name and Teams user id</td><td>Microsoft Teams, when the app runs inside a meeting</td><td>Shown to the meeting; also passed through Microsoft's Live Share service as part of the roster</td><td>Meeting participants; Microsoft</td></tr>
+<tr><td>Voice recordings (a few seconds while you hold the talk button)</td><td>Your microphone, only while the button is held</td><td>Yes</td><td>OpenAI (speech-to-text), through a hopeOS server that keeps no copy</td></tr>
+<tr><td>Typed or transcribed commands plus a list of the objects in the scene and seat numbers (no names, no camera, no hand data)</td><td>The command bar</td><td>Yes</td><td>Anthropic (Claude), through a hopeOS server that keeps no copy</td></tr>
+<tr><td>Technical data: IP address, browser type, error and usage diagnostics</td><td>Your browser and the Microsoft SDKs the app uses</td><td>Yes</td><td>hopeOS hosting (Vercel), Microsoft</td></tr>
+<tr><td>Your consent choice and settings</td><td>The app</td><td>No - stored in this browser only</td><td>You</td></tr>
+</table></div>
+
+<h2>3. The relay: how hand data reaches the other participants</h2>
+<p>Depending on how the meeting is set up, the landmark stream travels through one of: (a) <strong>Microsoft Live Share</strong> (Azure Fluid Relay), a Microsoft service for Teams meeting apps - Microsoft states that data sent through it "might be accessible for up to 24 hours, though in most cases it's deleted within six hours"; (b) an <strong>Azure relay in [PILOT-PARTNER]'s own Microsoft cloud subscription</strong>, in [GEOGRAPHY]; or (c) for engineering demos, a <strong>relay operated by hopeOS</strong> that forwards packets in memory and stores nothing. The app tells you which one is in use. When hopeOS joins a meeting as an external participant, its video and any game data travel through <strong>Azure Communication Services</strong>, which processes calls in real time and, per Microsoft, retains no call content.</p>
+
+<h2>4. Why we process it (purposes and legal basis)</h2>
+<ul>
+<li>Hand and body landmarks: to draw your hands and avatar on every participant's screen and run the shared ball game. Legal basis in the pilot: [PILOT-PARTNER]'s legitimate interest in running a voluntary pilot (GDPR Art. 6(1)(f)), with your participation always optional and an on-device-only mode available; and, where a written release is required by law (for example the Illinois Biometric Information Privacy Act), the agreement you give in the app's first-run notice.</li>
+<li>Voice and text commands: to carry out the command you give. Legal basis: the same legitimate interest; you trigger every request yourself.</li>
+<li>Technical data: to run and secure the service.</li>
+</ul>
+<p>We do not use landmark data to identify or recognise you, to infer your emotions, or for any purpose other than drawing and gameplay. We do not sell data and we do not use it for advertising.</p>
+
+<h2>5. Retention and deletion (our biometric data retention policy)</h2>
+<div class="box">
+<ul>
+<li><strong>Hand and body landmark data:</strong> not stored by hopeOS at any time. It exists in participants' browsers only while the meeting runs and is discarded frame by frame. On Microsoft Live Share it is deleted by Microsoft within 24 hours of the session. On a [PILOT-PARTNER] relay or the hopeOS demo relay it is not stored at all.</li>
+<li><strong>Face data:</strong> never leaves the device; discarded frame by frame.</li>
+<li><strong>Voice recordings and transcripts:</strong> not stored by hopeOS. OpenAI's speech-to-text endpoint does not keep the recording or the transcript after it has answered (no abuse-monitoring or application-state retention by default for this endpoint, per OpenAI's API data documentation), and OpenAI does not use API data to train its models.</li>
+<li><strong>Command text and scene lists:</strong> not stored by hopeOS. Anthropic [deletes them within 30 days under its standard commercial policy | does not store them at rest, under a zero-data-retention arrangement with hopeOS] and does not use them to train its models. [Deployment: keep the option that is actually configured.]</li>
+<li><strong>Diagnostics and server logs:</strong> [N] days.</li>
+<li><strong>Your consent record:</strong> in your browser until you clear site data or withdraw consent in the app.</li>
+<li><strong>Should a face-profile feature ever be offered</strong> (it is not part of this pilot): profiles would be stored only on your device, deleted when you unenrol, and in any case within 3 years of your last use.</li>
+</ul>
+<p>Any biometric data is permanently destroyed when the purpose above is satisfied, and in every case no later than 3 years after your last interaction with hopeOS. This policy is public and applies to hopeOS and to anyone acting for it.</p>
+</div>
+
+<h2>6. Security</h2>
+<p>Tracking runs inside your browser; no server ever sees your camera picture. Landmark packets are sent over encrypted connections (HTTPS / WSS, or Microsoft's encrypted services) and are never written to disk by hopeOS. The hopeOS servers that forward voice and command requests add the service credentials and pass the request through without logging its content. Third-party code and models are hosted on the hopeOS domain with integrity checks. Access to hopeOS systems is limited to named engineers. We treat landmark data with at least the care we apply to other confidential information.</p>
+
+<h2>7. Your choices and rights</h2>
+<ul>
+<li><strong>Do not share:</strong> switch on "On-device only" at any time - tracking keeps working for you, nothing is sent. Or turn your camera off.</li>
+<li><strong>Withdraw consent:</strong> in the app's settings ("Forget my consent"); this clears the record in your browser and returns the app to on-device-only mode.</li>
+<li><strong>Access, correction, deletion, restriction, objection, portability:</strong> write to <a href="mailto:[privacy@DOMAIN]">[privacy@DOMAIN]</a> or to [PILOT-PARTNER]'s DPO. Because hopeOS stores no landmark data, there is usually nothing to hand over or delete beyond diagnostics; we will confirm within one month.</li>
+<li><strong>Complaints:</strong> you may complain to your data protection authority ([e.g. ICO, CNIL]).</li>
+</ul>
+
+<h2>8. Recordings and transcription in Teams</h2>
+<p>If the meeting organiser records or transcribes the meeting, whatever you show in your tile - including your avatar or holohands - becomes part of the organiser's recording, which is stored and governed by [PILOT-PARTNER]'s Microsoft 365 settings, not by hopeOS. The app shows a banner when recording or transcription is on.</p>
+
+<h2>9. Children, changes, contact</h2>
+<p>The pilot is for adult participants of [PILOT-PARTNER]. We will post changes to this notice here and the app will ask you to agree again if what it shares changes. Questions: <a href="mailto:[privacy@DOMAIN]">[privacy@DOMAIN]</a>, [postal address]. Terms of use: <a href="terms.html">terms.html</a>. Third-party licences: <a href="licenses.html">licenses.html</a>.</p>
+
+<p class="meta">Microsoft, Azure and Microsoft Teams are trademarks of the Microsoft group of companies. hopeOS is not affiliated with, endorsed by, or sponsored by Microsoft.</p>
+</main>
+</body>
+</html>

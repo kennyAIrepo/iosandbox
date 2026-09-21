@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS Ball Pass - stage</title>
+<!--
+  MEETING STAGE page (frameContext "meetingStage"), also runnable locally (?inTeams=0).
+
+  What it proves:
+    1. TeamsJS init + context on the stage (app.initialize, app.getContext, app.notifySuccess).
+    2. Live Share join: LiveShareClient(host).joinContainer(schema) with
+         host = microsoftTeams.LiveShareHost.create()   inside Teams
+         host = TestLiveShareHost.create()              outside Teams (tinylicious on localhost:7070)
+    3. A LiveEvent ("packets") broadcasting a hand packet at 30 Hz (switchable to 20/15/10),
+       with per-sender receive AGE measured on the host-synchronised clock
+       (joinContainer() returns a timestampProvider; the received callback also carries the sender timestamp).
+    4. A LivePresence roster with each participant's tile letter.
+    5. A LiveState ("ball") holding ball OWNERSHIP + goal tile. LiveState re-syncs late joiners and
+       supports allowedRoles; LiveEvent is lossy (Fluid signals) and must never carry ownership.
+       The pass itself in hopeOS happens by the PROP COLLISION DOCTRINE (finger wrap / clip / cradle
+       from the prop hull, open hand = release) inside the local 3D scene; the stage only publishes the
+       RESULT of that local decision ("tile B now owns the ball") through LiveState.set().
+    6. A camera probe (getUserMedia) so we know the iframe can see the camera before wiring MediaPipe.
+
+  Where the real hopeOS code plugs in:
+    window.hopeos.feedHand(landmarks21)        - 21 MediaPipe landmarks per frame (see SENDER below)
+    window.hopeos.claimBall() / passBall(tile) - called by the local doctrine pickup/release logic
+  Chirality / z-sign: NOT computed here. hand-views.js _zSign is the authority; send raw landmarks and
+  let every receiver run the same measured-chirality code on the packet.
+
+  Loading without a bundler:
+    - TeamsJS: Microsoft CDN UMD build -> global `microsoftTeams` (documented pattern; 2.56.0 URL verified to
+      return the UMD bundle - see _src/cdn-latest.js).
+    - Live Share: @microsoft/live-share@1.4.2 is CommonJS-only on npm ("main": "./bin/index.js"), so it is imported
+      through esm.sh, which converts it to an ES module and resolves its peers (fluid-framework ^1.2.3,
+      @fluidframework/azure-client ^1.0.0, uuid, buffer/events polyfills) - see _src/esm-live-share.js.
+      VERIFIED: esm.sh returns an ES module for this specifier.
+      NOT VERIFIED: a complete Teams meeting session through the esm.sh build. Microsoft's supported path is
+      npm + a bundler (their samples use Vite); swap the import for
+        import { LiveShareClient, LiveEvent, LivePresence, LiveState, TestLiveShareHost } from "@microsoft/live-share";
+      when you move to a bundled build.
+  Sources:
+    https://learn.microsoft.com/en-us/microsoftteams/platform/apps-in-teams-meetings/teams-live-share-capabilities
+    https://learn.microsoft.com/en-us/microsoftteams/platform/apps-in-teams-meetings/teams-live-share-overview
+    _src/LiveEvent.ts, _src/LiveEventScope.ts, _src/LivePresence.ts, _src/LiveState.ts,
+    _src/interfaces.ts, _src/TestLiveShareHost.ts, _src/ls-index.ts (exports list)
+-->
+<script src="https://res.cdn.office.net/teams-js/2.56.0/js/MicrosoftTeams.min.js" crossorigin="anonymous"></script>
+<style>
+  :root { --bg:#1f1f1f; --fg:#fff; --muted:#adadad; --card:#2b2b2b; --accent:#7f85f5; --ok:#6ccb5f; --warn:#f8d22a; --bad:#f1707b; }
+  body[data-theme="light"] { --bg:#f5f5f5; --fg:#242424; --muted:#616161; --card:#fff; }
+  body[data-theme="contrast"] { --bg:#000; --fg:#fff; --muted:#fff; --card:#000; --accent:#ffff00; }
+  html, body { height:100%; margin:0; }
+  body { background:var(--bg); color:var(--fg); font:13px system-ui,sans-serif; display:grid;
+         grid-template-columns: 1fr 300px; grid-template-rows: auto 1fr; gap:8px; padding:8px; box-sizing:border-box; }
+  /* Stage is 994x678 by default without the side panel, min 792x382; with side panel 918x540, min 472x382. */
+  header { grid-column: 1 / -1; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center; background:var(--card); border-radius:6px; padding:8px 12px; }
+  header b { color:var(--accent); }
+  #field { width:100%; height:100%; background:#000; border-radius:6px; display:block; }
+  aside { background:var(--card); border-radius:6px; padding:10px; overflow:auto; }
+  h3 { margin:6px 0; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-variant-numeric: tabular-nums; }
+  td, th { padding:3px 4px; text-align:right; border-bottom:1px solid #444; }
+  td:first-child, th:first-child { text-align:left; }
+  button, select { padding:6px 10px; border:0; border-radius:4px; background:var(--accent); color:#000; font-weight:600; cursor:pointer; }
+  button[disabled] { opacity:.4; cursor:not-allowed; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .bad { color:var(--bad); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; }
+  #log { font-family: ui-monospace, monospace; font-size:11px; white-space:pre-wrap; color:var(--muted); max-height:120px; overflow:auto; }
+</style>
+</head>
+<body>
+  <header>
+    <span>mode: <b id="mode">...</b></span>
+    <span>frame: <b id="frame">...</b></span>
+    <span>meeting: <b id="meetingId">...</b></span>
+    <span>container: <b id="containerId">...</b></span>
+    <span>me: <b id="me">...</b> tile <b id="myTile">?</b></span>
+    <span>ball: <b id="ballOwner">nobody</b> goal <b id="goal">none</b></span>
+    <button id="claimBtn" disabled>Take ball</button>
+    <button id="passBtn" disabled>Pass to next tile</button>
+    <label>send rate <select id="rate"><option value="30">30 Hz</option><option value="20">20 Hz (MS guidance: >= 50 ms)</option><option value="15">15 Hz</option><option value="10">10 Hz</option></select></label>
+    <span>packet <b id="bytes">0</b> B</span>
+    <button id="camBtn">Camera probe</button>
+    <span id="camLine"></span>
+  </header>
+
+  <canvas id="field"></canvas>
+
+  <aside>
+    <h3>Roster (LivePresence)</h3>
+    <table id="roster"><thead><tr><th>who</th><th>tile</th><th>state</th><th>roles</th></tr></thead><tbody></tbody></table>
+    <h3>Receive age per sender (LiveEvent)</h3>
+    <table id="stats"><thead><tr><th>sender</th><th>hz</th><th>age p50</th><th>p95</th><th>max</th><th>lost</th></tr></thead><tbody></tbody></table>
+    <div id="clock" class="muted"></div>
+    <h3>Ball (LiveState)</h3>
+    <div id="ballLine" class="muted">not joined</div>
+    <h3>Log</h3>
+    <div id="log"></div>
+  </aside>
+
+<script type="module">
+// See header comment for the esm.sh caveat. LiveState is exported from the package root (_src/ls-index.ts).
+import { LiveShareClient, LiveEvent, LivePresence, LiveState, TestLiveShareHost } from "https://esm.sh/@microsoft/live-share@1.4.2";
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { const el = $("log"); el.textContent = `${new Date().toISOString().slice(11,23)} ${m}\n` + el.textContent.slice(0, 4000); };
+const params = new URL(location.href).searchParams;
+const framed = window.self !== window.top;
+// inTeams: explicit ?inTeams=1|0 wins; otherwise assume Teams when we are framed.
+const inTeams = params.has("inTeams") ? params.get("inTeams") === "1" : framed;
+const goalParam = params.get("goal") ?? "none";
+$("goal").textContent = goalParam;
+
+// ---------- pick a tile letter for this participant (A/B/C...) ----------
+// In the real game the tile assignment is a LiveState keyed by userId; here it is a stable per-tab choice.
+const myTile = sessionStorage.getItem("hopeos.tile") ?? "ABCDEFGH"[Math.floor(Math.random() * 8)];
+sessionStorage.setItem("hopeos.tile", myTile);
+$("myTile").textContent = myTile;
+const colorFor = (tile) => `hsl(${(tile.charCodeAt(0) * 47) % 360} 80% 60%)`;
+
+// ---------- SENDER hook: hopeOS pushes 21 MediaPipe landmarks here ----------
+// landmarks21: Array<[x, y, z]> in normalized image coords, as MediaPipe HandLandmarker gives them.
+let latestHand = null;
+window.hopeos = {
+  feedHand(landmarks21) { latestHand = landmarks21; },
+  claimBall: null,   // wired after join
+  passBall: null,    // wired after join
+};
+// Synthetic hand when no tracker is attached: a 21-point blob orbiting a moving wrist.
+function syntheticHand(tSec) {
+  const wx = 0.5 + 0.35 * Math.sin(tSec * 0.9), wy = 0.5 + 0.25 * Math.cos(tSec * 1.3);
+  const pts = [];
+  for (let i = 0; i < 21; i++) pts.push([wx + 0.04 * Math.cos(i), wy + 0.04 * Math.sin(i), -0.02 * (i % 5)]);
+  return pts;
+}
+const round3 = (v) => Math.round(v * 1000) / 1000;
+
+async function main() {
+  let ctx = null, host;
+  $("mode").textContent = inTeams ? "Teams" : "local (TestLiveShareHost)";
+
+  if (inTeams) {
+    // ---------- TeamsJS ----------
+    await microsoftTeams.app.initialize();                 // Promise in TeamsJS v2
+    ctx = await microsoftTeams.app.getContext();
+    microsoftTeams.app.notifySuccess();                    // only matters if manifest showLoadingIndicator=true
+    const applyTheme = (t) => document.body.dataset.theme = (t === "default" ? "light" : t);
+    applyTheme(ctx.app.theme);
+    microsoftTeams.app.registerOnThemeChangeHandler(applyTheme);
+    $("frame").textContent = ctx.page?.frameContext ?? "?";
+    $("meetingId").textContent = ctx.meeting?.id ?? "n/a";
+    // Live Share supports FrameContexts meetingStage, sidePanel and content (desktop/web only for content).
+    if (!microsoftTeams.liveShare.isSupported()) {
+      log("liveShare.isSupported() = false in this host/context; cannot join a session");
+      return;
+    }
+    // LiveShareHost is exported at the TeamsJS package root (_src/teamsjs-index.ts).
+    host = microsoftTeams.LiveShareHost.create();
+  } else {
+    $("frame").textContent = "n/a";
+    $("meetingId").textContent = "n/a";
+    // Connects to http://localhost:7070 (tinylicious); container id lives in location.hash; all roles granted.
+    host = TestLiveShareHost.create();
+  }
+
+  // ---------- Live Share join ----------
+  const client = new LiveShareClient(host, {
+    // ILiveShareClientOptions: connection?, logger?, timestampProvider?, roleVerifier?, canSendBackgroundUpdates?
+    canSendBackgroundUpdates: true,
+  });
+  const schema = {
+    // initialObjects are FROZEN once the container exists (clear #containerId locally / new meeting in Teams).
+    initialObjects: {
+      packets: LiveEvent,      // lossy 30 Hz pose stream (Fluid signals)
+      presence: LivePresence,  // roster
+      ball: LiveState,         // { owner: tile|null, goal: tile|"none", n: number } - authoritative, re-synced to late joiners
+    },
+  };
+  // ILiveShareJoinResults = { container, services, timestampProvider, created }
+  const { container, timestampProvider, created } = await client.joinContainer(schema);
+  const now = () => timestampProvider.getTimestamp();    // host-synchronised clock shared by all clients
+  $("clock").textContent = `clock max error +/- ${timestampProvider.getMaxTimestampError()} ms`;
+  log(`joined container (created=${created})`);
+  try {
+    const info = await host.getFluidContainerId();        // ILiveShareHost.getFluidContainerId(): Promise<IFluidContainerInfo>
+    $("containerId").textContent = (info && (info.containerId ?? JSON.stringify(info))) || location.hash.slice(1) || "?";
+  } catch { $("containerId").textContent = location.hash.slice(1) || "?"; }
+
+  const packets = container.initialObjects.packets;
+  const presence = container.initialObjects.presence;
+  const ball = container.initialObjects.ball;
+
+  // ---------- Presence roster ----------
+  // Register listeners BEFORE initialize() (docs). presenceChanged(user: LivePresenceUser, local: boolean, clientId: string)
+  presence.on("presenceChanged", (user, local, clientId) => {
+    if (local) { $("me").textContent = user.displayName ?? user.userId ?? clientId; }
+    renderRoster();
+  });
+  // initialize(data?, state = PresenceState.online, allowedRoles?)
+  await presence.initialize({ tile: myTile, ua: navigator.userAgent.slice(0, 48) });
+
+  function renderRoster() {
+    const rows = presence.getUsers().map((u) => {
+      // LivePresenceUser: userId, displayName, state ("online"|"away"|"offline"), data, roles, isLocalUser, getConnections()
+      const tile = u.data?.tile ?? "?";
+      return `<tr><td><span class="dot" style="background:${colorFor(tile)}"></span>${u.isLocalUser ? "me " : ""}${u.displayName ?? u.userId ?? "?"}</td>` +
+             `<td>${tile}</td><td class="${u.state === "online" ? "ok" : "warn"}">${u.state}</td><td>${(u.roles ?? []).join(",")}</td></tr>`;
+    });
+    $("roster").querySelector("tbody").innerHTML = rows.join("");
+  }
+  const onlineTiles = () => [...new Set(presence.getUsers().filter((u) => u.state === "online").map((u) => u.data?.tile).filter(Boolean))].sort();
+
+  // ---------- Ball ownership (LiveState) ----------
+  // stateChanged(state, local, clientId, timestamp). Register before initialize(). Late joiners receive the current state.
+  let ballState = { owner: null, goal: goalParam, n: 0 };
+  ball.on("stateChanged", (state, local, clientId) => {
+    ballState = state ?? ballState;
+    renderBall(local ? "me" : clientId.slice(0, 6));
+  });
+  // initialize(initialState, allowedRoles?) - roles left open so attendees can pass; restrict to presenters if the pilot wants control.
+  await ball.initialize(ballState);
+  renderBall("init");
+
+  function renderBall(from) {
+    $("ballOwner").textContent = ballState.owner ?? "nobody";
+    $("goal").textContent = ballState.goal ?? "none";
+    const mine = ballState.owner === myTile;
+    $("claimBtn").disabled = mine;
+    $("passBtn").disabled = !mine;
+    $("ballLine").innerHTML = `owner <b>${ballState.owner ?? "nobody"}</b>, goal <b>${ballState.goal}</b>, changes ${ballState.n}, last from ${from}` +
+      (ballState.owner === ballState.goal && ballState.owner ? ` <span class="ok">GOAL</span>` : "");
+  }
+  // These are the ONLY writes to ball ownership. In hopeOS they are triggered by the doctrine pickup/release
+  // (finger wrap / clip / cradle on the prop hull; open hand releases) - never by a jointsWithin/pinch test.
+  async function setBall(owner) {
+    try { await ball.set({ owner, goal: ballState.goal, n: ballState.n + 1 }); }  // set(state): Promise<void>; throws on role denial
+    catch (e) { log(`ball.set failed: ${e.message ?? e}`); }
+  }
+  window.hopeos.claimBall = () => setBall(myTile);
+  window.hopeos.passBall = (tile) => { if (ballState.owner === myTile) return setBall(tile); };
+  $("claimBtn").onclick = () => window.hopeos.claimBall();
+  $("passBtn").onclick = () => {
+    const tiles = onlineTiles().filter((t) => t !== myTile);
+    if (!tiles.length) { log("no other online tile to pass to"); return; }
+    const next = tiles.find((t) => t > myTile) ?? tiles[0];   // round-robin by letter
+    window.hopeos.passBall(next);
+  };
+
+  // ---------- Packet stats ----------
+  const remote = new Map(); // clientId -> { tile, ages: number[], lastSeq, lost, times: number[], hand }
+  const myClientIds = new Set();
+
+  // received(evt, local, clientId, timestamp) - timestamp is the sender's host-synced clock at send time.
+  packets.on("received", (evt, local, clientId, timestamp) => {
+    if (local) { myClientIds.add(clientId); return; }
+    const age = now() - timestamp;                        // one-way age on the shared clock
+    let r = remote.get(clientId);
+    if (!r) { r = { tile: evt.tile, ages: [], lastSeq: evt.seq - 1, lost: 0, times: [], hand: null }; remote.set(clientId, r); log(`first packet from ${clientId} tile ${evt.tile}`); }
+    if (evt.seq > r.lastSeq + 1) r.lost += evt.seq - r.lastSeq - 1;   // gaps = signals dropped or reordered
+    if (evt.seq > r.lastSeq) { r.lastSeq = evt.seq; r.hand = evt.hand; } // latest-wins; ignore stale
+    r.ages.push(age); if (r.ages.length > 300) r.ages.shift();
+    r.times.push(performance.now()); if (r.times.length > 120) r.times.shift();
+  });
+  // initialize(allowedRoles?: UserMeetingRole[]) - leave open so attendees can send too.
+  await packets.initialize();
+
+  // ---------- SENDER loop ----------
+  let seq = 0, timer = null;
+  function startSender(hz) {
+    if (timer) clearInterval(timer);
+    timer = setInterval(async () => {
+      const hand = (latestHand ?? syntheticHand(performance.now() / 1000)).map((p) => p.map(round3));
+      const packet = { seq: ++seq, tile: myTile, hand };   // ~1.2 KB as JSON; quantise to int16+base64 if loss climbs
+      $("bytes").textContent = JSON.stringify(packet).length;
+      try { await packets.send(packet); }                   // send(evt): Promise<ILiveEvent<TEvent>>; throws on role denial
+      catch (e) { log(`send failed: ${e.message ?? e}`); }
+    }, 1000 / hz);
+  }
+  startSender(Number($("rate").value));
+  $("rate").onchange = () => startSender(Number($("rate").value));
+
+  // ---------- HUD ----------
+  const pct = (arr, p) => { if (!arr.length) return NaN; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
+  setInterval(() => {
+    const rows = [];
+    for (const [cid, r] of remote) {
+      const span = r.times.length > 1 ? (r.times[r.times.length - 1] - r.times[0]) / 1000 : 0;
+      const hz = span > 0 ? ((r.times.length - 1) / span).toFixed(1) : "-";
+      const p50 = pct(r.ages, 0.5), p95 = pct(r.ages, 0.95), mx = Math.max(...r.ages);
+      const cls = p95 < 80 ? "ok" : p95 < 150 ? "warn" : "bad";
+      rows.push(`<tr><td><span class="dot" style="background:${colorFor(r.tile)}"></span>${r.tile} ${cid.slice(0, 6)}</td><td>${hz}</td><td class="${cls}">${p50.toFixed(0)}</td><td class="${cls}">${p95.toFixed(0)}</td><td>${mx.toFixed(0)}</td><td>${r.lost}</td></tr>`);
+    }
+    $("stats").querySelector("tbody").innerHTML = rows.join("") || `<tr><td colspan="6">no remote senders yet</td></tr>`;
+  }, 500);
+
+  // ---------- Field: draw every hand; the ball sits on the owner's wrist (landmark 0) ----------
+  const canvas = $("field"), g = canvas.getContext("2d");
+  function draw() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+    g.clearRect(0, 0, w, h);
+    const drawHand = (hand, tile, isMe) => {
+      if (!hand) return;
+      g.fillStyle = colorFor(tile);
+      for (const [x, y] of hand) { g.beginPath(); g.arc(x * w, y * h, 3, 0, Math.PI * 2); g.fill(); }
+      const [wx, wy] = hand[0];
+      g.beginPath(); g.arc(wx * w, wy * h, 12, 0, Math.PI * 2); g.fill();
+      if (ballState.owner === tile) {                       // ball follows the authoritative owner
+        g.strokeStyle = "#fff"; g.lineWidth = 3; g.beginPath(); g.arc(wx * w, wy * h, 20, 0, Math.PI * 2); g.stroke();
+      }
+      g.fillStyle = "#fff"; g.font = "bold 14px system-ui"; g.fillText(tile + (isMe ? " (me)" : ""), wx * w + 24, wy * h + 5);
+    };
+    drawHand(latestHand ?? syntheticHand(performance.now() / 1000), myTile, true);
+    for (const r of remote.values()) drawHand(r.hand, r.tile, false);
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+// ---------- Camera probe ----------
+$("camBtn").onclick = async () => {
+  $("camLine").textContent = "asking...";
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+    const track = stream.getVideoTracks()[0];
+    $("camLine").innerHTML = `<span class="ok">camera ok:</span> ${track.label}`;
+    track.stop();
+  } catch (e) {
+    // Teams web: user must open the tab dropdown > App permissions > enable camera > reload.
+    // https://learn.microsoft.com/en-us/microsoftteams/platform/concepts/device-capabilities/browser-device-permissions
+    $("camLine").innerHTML = `<span class="bad">${e.name}</span> - in Teams web open the tab menu > App permissions, allow camera, then reload.`;
+  }
+};
+
+main().catch((e) => { log(`fatal: ${e?.message ?? e}`); console.error(e); });
+</script>
+</body>
+</html>

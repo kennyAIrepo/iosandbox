@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>B4 probe — voice -> real 3D model (model-fetch / prop-body)</title>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<style>html,body{margin:0;background:#1b1f26;color:#dfe5ee;font:13px system-ui} canvas{display:block} #log{position:fixed;left:8px;top:8px;white-space:pre;background:rgba(0,0,0,.45);padding:6px 8px;border-radius:6px;max-width:60vw}</style>
+</head>
+<body>
+<div id="log">booting…</div>
+<script type="module">
+import * as THREE from 'three';
+import { ModelFetcher, makePlaceholder } from '../sdk/game/model-fetch.js';
+import { PropBody } from '../sdk/game/prop-body.js';
+import { SceneExecutor } from '../sdk/game/scene-executor.js';
+import { PackGen } from '../sdk/game/pack-gen.js';
+import { HandBody } from '../sdk/core/game-physics.js';
+
+const url = Object.fromEntries(new URL(location.href).searchParams);
+const log = document.getElementById('log');
+const lines = [];
+const say = s => { lines.push(s); log.textContent = lines.slice(-14).join('\n'); };
+const W = innerWidth, H = innerHeight;
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(W, H); renderer.setPixelRatio(1); document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0x1b1f26);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334455, 1.2));
+const camera = new THREE.PerspectiveCamera(40, W / H, 0.01, 10); camera.position.set(0, 0.05, 0.42); camera.lookAt(0, 0, 0);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial({ color: 0x242a33 })); floor.rotation.x = -Math.PI / 2; floor.position.y = -0.08; scene.add(floor);
+
+// a fake local tile with an OPEN right hand at real scale (PackGen.open: palm span 0.204) so spawn_object seats into its pocket
+const packR = PackGen.open(0.11, -0.06, 0);
+const tile = { packs: { L: null, R: packR, hands: [] }, handL: new HandBody('left'), handR: new HandBody('right'), floorY: -0.08, center: { x: 0, y: 0, z: 0 } };
+tile.handR.update(packR, 1 / 60);
+const statuses = [];
+const proxy = url.proxy ? `http://localhost:${url.proxy}/api/sketchfab` : '/api/sketchfab';
+const fetcher = new ModelFetcher({ endpoint: proxy, onStatus: st => { statuses.push(st); say(`${st.kind}: ${st.phase} ${st.tier || ''} ${st.progress != null ? Math.round(st.progress * 100) + '%' : ''} ${st.name || ''} ${st.error || ''}`); } });
+await fetcher.preload();
+const props = new Map();
+const exec = new SceneExecutor({ scene, props, localTile: () => tile, me: () => ({ clientId: 'me', name: 'Probe', seat: 0 }), fetcher, announce: (t) => say('announce: ' + t) });
+const results = {};
+results.tennis = await exec.exec('spawn_object', { kind: 'tennis ball', size_m: null, attach: 'right_hand', physics: 'default' });
+results.duck = await exec.exec('spawn_object', { kind: url.word || 'rubber duck', size_m: null, attach: 'world_front', physics: 'default' });
+results.arrow = await exec.exec('spawn_object', { kind: 'arrow', size_m: 0.3, attach: 'table', physics: 'default' });
+say('spawned: ' + Object.values(results).map(r => r.id + '(' + (r.model ? r.model.status : 'kinds') + ')').join(', '));
+// lay them out for the camera (physics keeps running; the floor holds them)
+const lay = (id, x, y, z) => { const p = exec.resolve(id); if (p) { p.ball.sphere.reset(new THREE.Vector3(x, y, z)); p.ball.sphere.vel.set(0, 0, 0); } };
+lay(results.tennis.id, -0.12, 0.02, 0); lay(results.duck.id, 0.0, 0.02, 0); lay(results.arrow.id, 0.13, 0.02, 0);
+const t0 = performance.now();
+let frames = 0;
+window.__b4 = { ready: false, frames: 0, statuses, results, snapshot: () => exec.snapshot(), props: () => [...props.values()].map(p => ({ id: p.id, kind: p.kind, tier: p.model && p.model.tier, status: p.model && p.model.status, hull: p.ball.hull.segs.length, y: +p.ball.pos.y.toFixed(3), meshes: (() => { let n = 0; p.ball.mesh.traverse(m => { if (m.isMesh) n++; }); return n; })() })) };
+(function loop() {
+  exec.tick(1 / 60, tile.packs, { left: tile.handL, right: tile.handR });
+  for (const p of props.values()) p.ball.mesh.rotation.y += 0.01;
+  renderer.render(scene, camera);
+  window.__b4.frames = ++frames;
+  requestAnimationFrame(loop);
+})();
+await Promise.all([exec.whenReady(results.duck.id), exec.whenReady(results.arrow.id)]);
+say(`all settled in ${Math.round(performance.now() - t0)} ms`);
+window.__b4.ready = true;
+</script>
+</body>
+</html>

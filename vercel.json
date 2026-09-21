@@ -5,7 +5,9 @@
     { "source": "/worlds", "destination": "/graph.html" },
     { "source": "/you", "destination": "/graph.html" },
     { "source": "/build", "destination": "/world.html" },
-    { "source": "/world/:name", "destination": "/world.html" }
+    { "source": "/world/:name", "destination": "/world.html" },
+    { "source": "/teamslab", "destination": "/teamslab.html" },
+    { "source": "/join/:room", "destination": "/teamslab.html" }
   ],
   "headers": [
     {

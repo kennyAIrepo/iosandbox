@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ball visuals — fixture</title>
+<style>html,body{margin:0;height:100%;background:#1b1b1b;overflow:hidden;font:12px system-ui,sans-serif;color:#bbb}canvas{display:block}#lbl{position:fixed;left:8px;top:6px;pointer-events:none;display:flex;gap:0}#lbl span{width:400px}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="lbl"><span>2x zoom (follows the ball)</span><span>tile size (U = 1.865 m per 420 px)</span><span>small tile (240 px)</span></div>
+<script type="module">
+// Visual harness for sdk/game/ball-visuals.js + ball-fx.js — driven by tests/_ballvisprobe.mjs, handy in a browser too.
+//   ?kind=tennis|basketball|apple|glass   ?kinds=1 (static line-up of all four)   ?r=0.05   ?fixedstep=1
+// ONE WebGLRenderer, three scissored views of the same scene (every camera looks down -z like a tile camera):
+//   view 0: camera 0.23 m in front of the ball (~200 px diameter)   view 1: tile camera (D = 2, FOV 50, 400x420)
+//   view 2: the same tile camera in a 228x240 viewport (a small 4-up tile)
+import * as THREE from 'three';
+import { FOV, D, U } from '../sdk/game/court-space.js';
+import { makeBallMesh, seamSamples, seamDistance, TENNIS, BALL_KINDS } from '../sdk/game/ball-visuals.js';
+import { BallFx } from '../sdk/game/ball-fx.js';
+
+const q = new URLSearchParams(location.search);
+const KIND = q.get('kind') || 'tennis', KINDS = q.get('kinds') === '1', R = +(q.get('r') || 0.05), FIXED = q.get('fixedstep') === '1';
+const W = 1200, H = 420, SLOT = 400;
+const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H; document.body.appendChild(canvas);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true, alpha: false });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false); renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.autoClear = false; renderer.setScissorTest(true); renderer.info.autoReset = false;
+const scene = new THREE.Scene();
+const BG = new THREE.Color('#2b2b2b');   // a Teams tile surface (the real tile shows the webcam feed)
+
+// ── the ball(s) ──
+const t0 = performance.now();
+const balls = [];
+if (KINDS) {
+  BALL_KINDS.forEach((k, i) => { const m = makeBallMesh(k, R); m.position.set((i - 1.5) * R * 2.8, 0, -D); scene.add(m); balls.push(m); });
+} else {
+  const m = makeBallMesh(KIND, R); m.position.set(0, 0, -D); scene.add(m); balls.push(m);
+}
+const textureMs = performance.now() - t0;
+const ball = balls[0];
+const fx = KINDS ? null : new BallFx(scene, ball);
+
+// ── a shelf + walls so the FX have something to bounce on (mimics the tile: floor at the bottom edge) ──
+const floorY = -U / 2 + 0.06, wallX = U * 0.34;
+const shelf = new THREE.Mesh(new THREE.PlaneGeometry(U * 0.9, 0.012), new THREE.MeshBasicMaterial({ color: 0x3a3a3a }));
+shelf.position.set(0, floorY - 0.006, -D); scene.add(shelf);
+
+// ── cameras: every view looks down -z ──
+const cams = [
+  new THREE.PerspectiveCamera(FOV, SLOT / H, 0.01, 10),   // zoom: repositioned each frame to ball + (0,0,0.23)
+  new THREE.PerspectiveCamera(FOV, SLOT / H, 0.05, 10),   // tile
+  new THREE.PerspectiveCamera(FOV, 228 / 240, 0.05, 10),  // small tile
+];
+const ZOOM_DIST = 0.23;
+const vps = [ { x: 0, y: 0, w: SLOT, h: H }, { x: SLOT, y: 0, w: SLOT, h: H }, { x: SLOT * 2 + (SLOT - 228) / 2, y: (H - 240) / 2, w: 228, h: 240 } ];
+function placeCams() {
+  const c = KINDS ? new THREE.Vector3(0, 0, -D) : ball.position;
+  cams[0].position.set(c.x, c.y, c.z + (KINDS ? 0.75 : ZOOM_DIST)); cams[0].updateMatrixWorld();
+  cams[1].position.set(0, 0, 0); cams[2].position.set(0, 0, 0);
+}
+placeCams();
+
+// ── toy physics for the fixture (fixed step 1/60): bounce on the shelf, between the walls, a periodic catch + throw ──
+const S = { pos: new THREE.Vector3(-0.3, 0.4, -D), vel: new THREE.Vector3(1.3, 0, 0), held: false, onSurface: false, phase: 'flight', t: 0, holdUntil: 0, nextCatch: 3.0 };
+const G = -6.5;
+function step(dt) {
+  S.t += dt;
+  if (S.held) {
+    if (S.t >= S.holdUntil) { S.held = false; S.phase = 'flight'; S.vel.set(1.6 * (S.pos.x > 0 ? -1 : 1), 2.4, 0); }
+    else { S.vel.set(0, 0, 0); }
+  } else {
+    S.vel.y += G * dt;
+    S.pos.addScaledVector(S.vel, dt);
+    S.onSurface = false;
+    if (S.pos.y - R <= floorY) { S.pos.y = floorY + R; if (S.vel.y < 0) S.vel.y = -S.vel.y * 0.72; S.vel.x *= 0.995; S.onSurface = Math.abs(S.vel.y) < 0.6; if (S.onSurface) S.vel.y = 0; }
+    if (S.pos.x + R > wallX) { S.pos.x = wallX - R; S.vel.x = -Math.abs(S.vel.x) * 0.9; }
+    if (S.pos.x - R < -wallX) { S.pos.x = -wallX + R; S.vel.x = Math.abs(S.vel.x) * 0.9; }
+    if (S.onSurface && Math.abs(S.vel.x) < 0.5) S.vel.x = 1.3 * Math.sign(S.vel.x || 1);   // keep it moving
+    S.phase = S.onSurface ? 'floor' : 'flight';
+    if (S.t >= S.nextCatch) { S.held = true; S.phase = 'held'; S.holdUntil = S.t + 0.5; S.nextCatch = S.t + 3.5; S.pos.y = Math.max(S.pos.y, floorY + R + 0.25); }
+  }
+  ball.position.copy(S.pos);
+  fx.update(dt, { pos: S.pos, vel: S.vel, r: R, phase: S.phase, onSurface: S.onSurface, held: S.held, floorY });
+}
+
+// ── render ──
+function render() {
+  placeCams();
+  renderer.info.reset();
+  renderer.setViewport(0, 0, W, H); renderer.setScissor(0, 0, W, H); renderer.setClearColor(0x1b1b1b, 1); renderer.clear();
+  for (let i = 0; i < 3; i++) {
+    const v = vps[i];
+    renderer.setViewport(v.x, v.y, v.w, v.h); renderer.setScissor(v.x, v.y, v.w, v.h);
+    renderer.setClearColor(BG, 1); renderer.clear();
+    renderer.render(scene, cams[i]);
+  }
+}
+
+// ── probe API ──
+const HW = TENNIS.seamWidth * Math.PI, SEAM = seamSamples(512);
+const fib = []; for (let i = 0; i < 600; i++) { const y = 1 - 2 * (i + 0.5) / 600, rr = Math.sqrt(1 - y * y), a = i * 2.399963; fib.push(new THREE.Vector3(Math.cos(a) * rr, y, Math.sin(a) * rr)); }
+const feltDirs = fib.filter(d => seamDistance(d, SEAM) > HW * 1.5 + 0.1);
+const _n = new THREE.Vector3(), _p = new THREE.Vector3(), _e = new THREE.Vector3();
+function project(view, dirs, out) {   // visible surface points of the ball -> [{x, y (GL, bottom-left), lum}] via readPixels
+  const cam = cams[view], vp = vps[view], gl = renderer.getContext(), buf = new Uint8Array(4), res = [];
+  for (const d of dirs) {
+    _n.copy(d).applyQuaternion(ball.quaternion);
+    _p.copy(_n).multiplyScalar(R).add(ball.position);
+    _e.subVectors(cam.position, _p).normalize();
+    if (_n.dot(_e) < 0.5) continue;                         // front-facing enough (away from the darker rim)
+    _p.project(cam);
+    const x = Math.floor(vp.x + (_p.x + 1) / 2 * vp.w), y = Math.floor(vp.y + (_p.y + 1) / 2 * vp.h);
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    res.push({ x, y, r: buf[0], g: buf[1], b: buf[2], d: [d.x, d.y, d.z] });   // d = ball-local direction (for local contrast pairing)
+  }
+  return res;
+}
+let paused = false, frames = 0, last = performance.now(), fpsWin = [], msWin = [];
+window.__bv = {
+  ready: false, textureMs, kinds: KINDS, kind: KIND, r: R, vps,
+  get fps() { const n = fpsWin.length; if (n < 2) return 0; return (n - 1) / ((fpsWin[n - 1] - fpsWin[0]) / 1000); },
+  get frameMs() { const a = msWin.slice().sort((x, y) => x - y); return a.length ? { p50: a[a.length >> 1], p95: a[Math.floor(a.length * 0.95)], n: a.length } : null; },   // CPU ms per frame (step + render)
+  get frames() { return frames; },
+  resetStats() { fpsWin.length = 0; msWin.length = 0; frames = 0; },
+  get info() { return { calls: renderer.info.render.calls, triangles: renderer.info.render.triangles }; },
+  get fx() { return fx ? fx.state : null; },
+  get contexts() { return document.querySelectorAll('canvas').length; },
+  pause() { paused = true; }, resume() { paused = false; },
+  samples(view) {
+    render();
+    const seamDirs = []; for (let i = 0; i < SEAM.length; i += 3) seamDirs.push(new THREE.Vector3(SEAM[i], SEAM[i + 1], SEAM[i + 2]));
+    return { seam: project(view, seamDirs), felt: project(view, feltDirs), ballPx: (() => { const v = vps[view], cam = cams[view]; _p.copy(ball.position); _p.x += R; _p.project(cam); const x1 = (_p.x + 1) / 2 * v.w; _p.copy(ball.position); _p.project(cam); return 2 * (x1 - (_p.x + 1) / 2 * v.w); })() };
+  },
+  setState(o) {   // move the toy ball; fx.update(0) recomposes a mid-squash matrix at the new position (the game calls update every frame)
+    const { pos, vel, quat, ...rest } = o; Object.assign(S, rest); if (pos) S.pos.set(pos.x, pos.y, pos.z); if (vel) S.vel.set(vel.x, vel.y, vel.z);
+    ball.position.copy(S.pos);
+    if (quat === 'identity') ball.quaternion.identity();   // deterministic orientation: a seam crossing faces the camera (+z at t = pi/2)
+    if (fx) { fx.settle(); fx.update(0, { pos: S.pos, vel: S.vel, r: R, phase: S.phase, onSurface: S.onSurface, held: S.held, floorY }); }
+  },
+  stepOnce(dt = 1 / 60) { step(dt); render(); },
+  catchPulse() { if (fx) fx.catchPulse(); }, missPuff() { if (fx) fx.missPuff(); },
+};
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = FIXED ? 1 / 60 : Math.min(0.05, (now - last) / 1000); last = now;
+  const t0 = performance.now();
+  if (!paused && fx) step(dt);
+  render();
+  msWin.push(performance.now() - t0); if (msWin.length > 300) msWin.shift();
+  frames++;
+  fpsWin.push(now); if (fpsWin.length > 300) fpsWin.shift();
+}
+requestAnimationFrame(loop);
+window.__bv.ready = true;
+</script>
+</body>
+</html>

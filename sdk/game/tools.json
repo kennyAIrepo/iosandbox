@@ -1,0 +1,199 @@
+{
+  "$comment": "hopeOS CommandAgent tool set (2026-09-18). Every tool is strict: strict:true on the tool, additionalProperties:false on EVERY object (nested ones too), and `required` lists EVERY property; optional fields are nullable via anyOf [{type}, {type:'null'}]. Strict / structured-output schemas reject minimum/maximum/minLength, so numeric ranges are stated in descriptions and clamped by the executor. Verified 2026-09-18 against https://platform.claude.com/docs/en/build-with-claude/structured-outputs.md (strict tool use; supported: anyOf, null, enum, required, additionalProperties:false; unsupported: minimum/maximum/multipleOf, minLength/maxLength; first use of a schema compiles a grammar, cached 24 h; claude-opus-5 listed as supported) and https://platform.claude.com/docs/en/agents-and-tools/tool-use/overview.md (tool_choice auto, 286-token tool-use system prompt on Claude Opus 5). Descriptions say WHEN to call each tool because recent Opus models reach for tools conservatively (bundled claude-api reference, shared/tool-use-concepts.md).",
+  "version": "2026-09-18",
+  "catalog": {
+    "apple":      { "natural_size_m": 0.08, "mass_kg": 0.15,  "shape": "sphere", "hold": "cradle", "flyer": false, "default_physics": "default", "synonyms": ["apple", "fruit"] },
+    "ball":       { "natural_size_m": 0.10, "mass_kg": 0.20,  "shape": "sphere", "hold": "cradle", "flyer": false, "default_physics": "bouncy",  "synonyms": ["ball", "red ball", "small ball", "tennis ball"] },
+    "basketball": { "natural_size_m": 0.24, "mass_kg": 0.62,  "shape": "sphere", "hold": "cradle", "flyer": false, "default_physics": "bouncy",  "synonyms": ["basketball", "big ball", "b-ball"] },
+    "butterfly":  { "natural_size_m": 0.06, "mass_kg": 0.001, "shape": "hull",   "hold": "perch",  "flyer": true,  "default_physics": "light",   "synonyms": ["butterfly", "moth"] },
+    "bird":       { "natural_size_m": 0.15, "mass_kg": 0.03,  "shape": "hull",   "hold": "perch",  "flyer": true,  "default_physics": "light",   "synonyms": ["bird", "sparrow", "robin", "parrot"] },
+    "sword":      { "natural_size_m": 0.90, "mass_kg": 1.20,  "shape": "hull",   "hold": "grip",   "flyer": false, "default_physics": "heavy",   "synonyms": ["sword", "blade", "katana", "lightsaber"] },
+    "cube":       { "natural_size_m": 0.10, "mass_kg": 0.30,  "shape": "box",    "hold": "grip",   "flyer": false, "default_physics": "default", "synonyms": ["cube", "box", "block", "dice", "die"] },
+    "glass_ball": { "natural_size_m": 0.12, "mass_kg": 0.90,  "shape": "sphere", "hold": "cradle", "flyer": false, "default_physics": "heavy",   "synonyms": ["glass ball", "glass sphere", "crystal ball", "glass slime", "slime", "glass orb", "orb"], "note": "the mpbrowser glass ball (sdk/core/glass.js SoftBody); can melt into live point-cloud slime (sdk/core/slime-sim.js)" }
+  },
+  "tools": [
+    {
+      "name": "spawn_object",
+      "description": "Create a new physical object in the scene. Call this whenever the user asks for an object to appear, be given, handed, placed, dropped in, or says 'I want a ...' (e.g. 'give me an apple in my hand', 'put a basketball in front of me', 'I want a butterfly'). Pick the closest catalog kind. Every object has gravity and collision; 'attach' only says WHERE it first appears. left_hand / right_hand / either_hand place it INTO that open palm so the hand supports it from underneath (the user can then grip, drop, throw, pass, or two-hand-pinch-scale it). world_front releases it about 0.6 m in front of the user's chest so it falls to the nearest surface. table drops it onto the nearest table or the floor. Returns the new object's id; use 'last' or that id for follow-up tools in the same response (e.g. a glow).",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "What to spawn: a short plain noun phrase. Catalog kinds appear instantly: apple, ball, basketball, butterfly, bird, sword, cube, glass_ball (map synonyms: box/block/dice -> cube; blade/katana -> sword; crystal ball/orb/slime -> glass_ball; moth -> butterfly; big ball -> basketball). ANY other object name is valid too ('tennis ball', 'rubber duck', 'coffee mug', 'toy car'): a real 3D model is fetched (bundled or Sketchfab) and a labelled placeholder holds its place in the hand until it arrives. Use the object's plain name only: colour goes in transform_object, size in size_m."
+          },
+          "size_m": {
+            "anyOf": [{ "type": "number" }, { "type": "null" }],
+            "description": "Longest dimension in metres, or null for the natural size (catalog: apple 0.08, ball 0.10, basketball 0.24, butterfly 0.06, bird 0.15, sword 0.9, cube 0.10, glass_ball 0.12; fetched models: a sensible size for known words such as tennis ball 0.067 or mug 0.10, else 0.09). Use null unless the user said tiny/small/big/huge or gave a measurement. Executor clamps to 0.02-2.0."
+          },
+          "attach": {
+            "type": "string",
+            "enum": ["left_hand", "right_hand", "either_hand", "world_front", "table"],
+            "description": "Where it first appears. 'in my hand' with no side -> either_hand (executor picks the tracked open palm). 'in front of me' / 'here' -> world_front. 'on the table' / 'on the floor' -> table."
+          },
+          "physics": {
+            "type": "string",
+            "enum": ["default", "bouncy", "heavy", "light"],
+            "description": "Material preset (restitution and mass scale). Gravity is ALWAYS on regardless of this value. Use 'default' unless the user asks for bouncy / heavy / light."
+          }
+        },
+        "required": ["kind", "size_m", "attach", "physics"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "set_behavior",
+      "description": "Give an existing object a continuous behavior relative to a participant's hands or gaze. Call this for 'make the butterfly look for / find / come to my hand' (seek_hand), 'fly around my hand' (orbit_hand), 'follow where I look' (follow_gaze), 'run away from / avoid my hand' (flee_hand), 'land on / perch on my hand' (land_on_hand), 'stop / stay / calm down' (idle). A behavior keeps running until the next set_behavior on that object. Flyers (butterfly, bird) fly; ground objects roll or hop toward the target and still obey gravity and hand collision. Non-flyers cannot orbit or land; the executor returns an error you should relay in one sentence.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Object id from the scene snapshot (e.g. 'butterfly_1'), a kind name if exactly one of that kind exists, or 'last' for the most recently created object (including one created earlier in this same response)."
+          },
+          "behavior": {
+            "type": "string",
+            "enum": ["seek_hand", "orbit_hand", "follow_gaze", "flee_hand", "idle", "land_on_hand"]
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "hand": {
+                "type": "string",
+                "enum": ["left", "right", "either", "nearest"],
+                "description": "Which hand the behavior references. 'either' = whichever is tracked; 'nearest' = the hand closest to the object."
+              },
+              "speed": {
+                "anyOf": [{ "type": "number" }, { "type": "null" }],
+                "description": "Cruise speed in m/s, or null for the kind's default (butterfly 0.4, bird 0.9, rolling ball 0.6). Executor clamps to 0.05-3."
+              },
+              "radius_m": {
+                "anyOf": [{ "type": "number" }, { "type": "null" }],
+                "description": "Orbit radius or flee stand-off distance in metres, or null for the default (orbit 0.18, flee 0.5)."
+              },
+              "participant": {
+                "anyOf": [{ "type": "string" }, { "type": "null" }],
+                "description": "Whose hand: a participant id or name from the snapshot, or null for the speaker."
+              }
+            },
+            "required": ["hand", "speed", "radius_m", "participant"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["target", "behavior", "params"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "apply_effect",
+      "description": "Add a visual effect to one object or to the whole scene: glow (emissive halo), sparkle (particle glints), trail (motion ribbon), confetti (burst), bounce (a squash-and-stretch hop). Call this for 'make it glow', 'sparkles on the ball', 'confetti!', 'celebrate', and 'stop glowing' (duration_s 0). Effects are cosmetic and never change physics.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Object id, kind name, 'last', or 'scene' for a scene-wide effect (confetti and celebrations usually target 'scene')."
+          },
+          "effect": {
+            "type": "string",
+            "enum": ["glow", "sparkle", "trail", "confetti", "bounce"]
+          },
+          "duration_s": {
+            "anyOf": [{ "type": "number" }, { "type": "null" }],
+            "description": "Seconds the effect lasts, or null for the effect's default (glow/sparkle/trail: until removed; confetti 2.5; bounce 1.2). 0 stops an ongoing effect of that kind on that target."
+          }
+        },
+        "required": ["target", "effect", "duration_s"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "transform_object",
+      "description": "Change an existing object's size or colour. Call this for 'make it bigger / smaller / twice as big / half size' (scale, a multiplier on the current size), 'make the ball red / paint it gold' (color), or an absolute size ('make it 30 cm' -> size_m 0.3). Leave fields you are not changing as null. The collision hull and mass rescale with it. Do not use this to move objects; use set_behavior or pass_object.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "Object id, kind name, or 'last'." },
+          "scale": {
+            "anyOf": [{ "type": "number" }, { "type": "null" }],
+            "description": "Multiplier on the current size: bigger 1.5, much bigger / huge 2.5, twice / double 2, smaller 0.67, half 0.5, tiny 0.35. Null = unchanged. Executor clamps the result to 0.02-2.0 m."
+          },
+          "color": {
+            "anyOf": [{ "type": "string" }, { "type": "null" }],
+            "description": "CSS colour name (red, gold, sky blue) or #rrggbb. Null = unchanged."
+          },
+          "size_m": {
+            "anyOf": [{ "type": "number" }, { "type": "null" }],
+            "description": "Absolute longest dimension in metres; wins over scale if both are given. Null = unchanged."
+          }
+        },
+        "required": ["target", "scale", "color", "size_m"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "remove_object",
+      "description": "Remove one object, every object of a kind, or everything. Call this for 'remove / delete / get rid of the apple', 'take it away', 'clear everything', 'reset the scene'. Removing an object also cancels its behaviors and effects.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Object id, a kind name (removes all of that kind), 'last', or 'all'."
+          }
+        },
+        "required": ["target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "pass_object",
+      "description": "Send an object across the call to another participant's video tile: it leaves the current tile at the edge nearest the receiver's tile and arrives in the receiver's tile with matching velocity, where their tracked hands can catch it. Call this for 'pass the ball to Maya', 'throw it to the person on the left', 'give Sam the apple'. Use participant ids or names from the snapshot, or a layout word (left, right, top, bottom) relative to the speaker's tile.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "target": { "type": "string", "description": "Object id, kind name, or 'last'." },
+          "to_participant": {
+            "type": "string",
+            "description": "Participant id or display name from the snapshot (case-insensitive), or a layout word: 'left', 'right', 'top', 'bottom'."
+          }
+        },
+        "required": ["target", "to_participant"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "designate_goal",
+      "description": "Mark one participant's tile as the goal for the passing game: their tile gets a goal frame and a ball that arrives there scores. Call this for 'make Sam's window the goal', 'I'm the goal', 'switch the goal to the left tile', and 'no goal' / 'clear the goal' (participant 'none'). Only one goal exists at a time; designating a new one replaces the old.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "participant": {
+            "type": "string",
+            "description": "Participant id or name, 'me' for the speaker, a layout word ('left', 'right', 'top', 'bottom'), or 'none' to clear the goal."
+          }
+        },
+        "required": ["participant"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "list_scene",
+      "description": "Return the full live scene: every object (id, kind, size, position, who holds it, active behavior, effects), every participant (id, name, tile position, which hands are tracked, whether they are the goal), and who the speaker is. A compact snapshot is already attached to each command, so call this only when that snapshot cannot resolve an ambiguous target.",
+      "strict": true,
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

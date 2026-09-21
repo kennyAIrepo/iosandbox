@@ -1,0 +1,1592 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hopeOS Meeting Sandbox (Teams twin)</title>
+<!-- three.js via the lab importmap (CONTRACTS §5); T1's shell boot does not import it, T6's full boot does -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<link rel="stylesheet" href="sdk/ui/teams-tokens.css">
+<link rel="stylesheet" href="sdk/ui/teamslab.css">
+<link rel="stylesheet" href="sdk/ui/join.css">          <!-- B3: pre-join screen, invite dialog, connection chip (after teamslab.css) -->
+<link rel="stylesheet" href="sdk/ui/leaderboard.css">   <!-- B6: People-pane leaderboard, score chips, round-end card, goal confetti -->
+</head>
+<body>
+<!-- T8 — OutgoingSink: the C1 / C3 "as others see you" crop (CONTRACTS §4.2, SPEC §4 step 7). Two modes of this ONE page:
+       ?outgoing=1              the twin boots as usual; an OutgoingSink (sdk/net/video-sink.js) draws the un-mirrored camera +
+                                my tile's rect of the surface (flipped to match) into a 1280x720 2D canvas right after
+                                stage.render() (the wrapper below; the WebGL back buffer is only readable in that task).
+                                captureStream(30) = C3; More → "Outgoing video (OBS)" opens the popup = C1 (OBS window capture →
+                                virtual camera → Teams). window.__twin.outgoing = { enable, disable, openWindow, sink, canvas,
+                                stream, stats, open } for probes and the API tab. No second WebGL context: stage.contexts() is
+                                untouched.
+       ?outgoing=1&sinkview=1   the popup viewer: this classic script stops the parser BEFORE the twin's boot module is even
+                                parsed (no TwinUI, no consent dialog, no camera, no room member; window.__twin stays undefined)
+                                and paints the sink's ImageBitmaps from BroadcastChannel 'hopeos-outgoing' at w x h.
+     This block sits at the top of <body> for that reason; it must stay before the boot module. -->
+<script id="t8-sinkview">
+(function () {
+  const p = new URL(location.href).searchParams;
+  if (p.get('sinkview') !== '1') return;
+  window.stop();                                   // abort the parser: nothing after this script is parsed or run
+  document.title = 'hopeOS — Outgoing video (as others see you)';
+  const html = document.documentElement, body = document.body;
+  html.style.cssText = 'background:#000;height:100%;margin:0';
+  body.replaceChildren();
+  body.style.cssText = 'margin:0;height:100vh;display:grid;place-items:center;background:#000;color:#c8c8c8;font:14px system-ui,Segoe UI,sans-serif;overflow:hidden';
+  const canvas = document.createElement('canvas');
+  canvas.id = 'sinkview'; canvas.width = 1280; canvas.height = 720;
+  canvas.setAttribute('aria-label', 'Outgoing video as others see you');
+  canvas.style.cssText = 'display:block;max-width:100vw;max-height:100vh;width:auto;height:auto;aspect-ratio:16/9;object-fit:contain;background:#000';
+  const note = document.createElement('div');
+  note.id = 'sinkview-note';
+  note.style.cssText = 'position:fixed;left:12px;top:10px;padding:6px 10px;background:rgba(0,0,0,.6);border-radius:6px;pointer-events:none';
+  note.textContent = 'Waiting for the meeting page — open teamslab.html and pick More → Outgoing video (OBS)';
+  body.append(canvas, note);
+  window.__sinkview = { ready: false, viewer: null, canvas, stats: null, error: null };
+  import('./sdk/net/video-sink.js').then(({ OutgoingViewer }) => {
+    const viewer = new OutgoingViewer(canvas, { onState: (on) => { note.hidden = on; if (!on) note.textContent = 'Outgoing video paused — the meeting page stopped sending'; } });
+    window.__sinkview.viewer = viewer; window.__sinkview.stats = viewer.stats; window.__sinkview.ready = true;
+  }).catch((e) => { window.__sinkview.error = String(e); note.textContent = 'Viewer failed to load: ' + (e.message || e); });
+})();
+</script>
+<script type="module" id="t8-outgoing">
+import { OutgoingSink } from './sdk/net/video-sink.js';
+if (new URL(location.href).searchParams.get('sinkview') !== '1') {
+  // the boot module (later in the document) owns window.__twin; wait for it, then for the twin to be up
+  const twinUp = () => new Promise((res) => { const poll = () => { const t = window.__twin; if (t && t.S && t.ready) res(t); else setTimeout(poll, 50); }; poll(); });
+  twinUp().then(async (twin) => {
+    if (twin.shell) return;                                                 // T1's UI-only shell: no stage, nothing to crop
+    await twin.ready;
+    const { S, ui } = twin, stage = twin.stage;
+    if (!stage || !stage.render) return;                                    // boot failed
+    const me = () => S.tiles.get(S.me.clientId) || null;
+    let sink = null;
+    const wrapRender = () => {
+      if (stage.__t8render) return;
+      const orig = stage.render;
+      stage.__t8render = orig;
+      stage.render = function (list) { orig.call(this, list); if (sink) sink.draw(); };   // right after the surface, same task
+    };
+    const api = {
+      get sink() { return sink; },
+      get enabled() { return !!sink; },
+      get canvas() { return sink ? sink.canvas : null; },
+      get stream() { return sink ? sink.stream : null; },
+      get stats() { return sink ? sink.stats : null; },
+      get open() { return !!(sink && sink.open); },
+      enable() {
+        if (sink) return sink;
+        sink = new OutgoingSink({
+          stage,
+          video: () => { const t = me(); return t ? t.video : null; },
+          localVp: () => { const t = me(); return t && t.rect ? { x: t.rect.left, y: t.rect.top, w: t.rect.width, h: t.rect.height } : null; },
+        });
+        wrapRender();
+        return sink;
+      },
+      disable() { if (!sink) return; sink.dispose(); sink = null; },
+      openWindow(auto = false) {
+        const s = api.enable(), win = s.openWindow();
+        if (!win) ui.toast(auto ? 'Outgoing video is on (1280x720, as others see you). The popup was blocked — More → Outgoing video opens it' : 'Popup blocked — allow popups for this page, then More → Outgoing video again', { ms: 4500, level: auto ? 'info' : 'error' });
+        else if (auto) ui.toast('Outgoing video is on — the popup shows you as others see you (OBS: Window Capture it)', { ms: 4500 });
+        return win;
+      },
+      get viewerUrl() { return api.enable().viewerUrl; },
+    };
+    twin.outgoing = api;
+    // More → "Outgoing video (OBS)" (TwinUI emits `more` {id:'outgoing'} inside the click: window.open keeps the user gesture)
+    ui.addEventListener('more', (e) => { if (e.detail && e.detail.id === 'outgoing') api.openWindow(); });
+    if (S.url && S.url.outgoing) api.openWindow(true);                     // popup mode: the sink is on from boot; the popup needs no gesture only where the blocker allows it
+    addEventListener('pagehide', () => api.disable(), { once: true });
+  });
+}
+</script>
+<!-- /T8 -->
+<!-- DOM skeleton per SPEC §2.4 — ids are the contract between TwinUI, StageRenderer, HUD and the probes.
+     Layout: .tw-frame is container-type:size; tiles are position:absolute from fixed169() (rule B).
+     Stacking (layout-spec.patch.md): tile 0 < hands 5 < #surface 6 < tile chrome 7 < selfview 10 < controlbar 20 < panel 30 < dialog 40 < toast 50. -->
+<div class="tw-frame tw-meeting" data-theme="dark">
+
+  <header id="topbar">
+    <div id="title">
+      <span class="title__name">hopeOS Meeting Sandbox</span>
+      <span class="title__sub">&middot; not a Microsoft product</span>
+      <span id="timer" class="tw-numeric">00:00</span>
+    </div>
+    <div id="scoreboard" aria-label="Score" hidden></div>
+    <div id="hudChip" aria-label="Latency" hidden></div>
+    <div id="topbarBtns">
+      <button id="btnPanel" type="button" class="tw-btn tw-focusable" aria-label="Toggle side panel" aria-pressed="true" title="Side panel">
+        <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="12" rx="2"/><path d="M12.5 4v12"/></svg>
+      </button>
+      <button id="btnAbout" type="button" class="tw-btn tw-focusable" aria-label="About and privacy" title="About">
+        <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M10 9v5M10 6.5v.5"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="stage" aria-label="Meeting stage">
+    <section id="gallery" role="group" aria-label="Participants"></section>
+    <!-- ONE WebGL surface for rigs, props and the ball (T2 StageRenderer); arrivals: 2D rings / miss cues / potato fuse (T4) -->
+    <canvas id="surface" aria-hidden="true"></canvas>
+    <canvas id="arrivals" aria-hidden="true"></canvas>
+  </main>
+
+  <aside id="panel" role="complementary" aria-label="Side panel">
+    <div class="panel__tabs" role="tablist" aria-label="Side panel tabs">
+      <button id="tab-people" class="ptab tw-focusable" type="button" role="tab" data-tab="people" aria-selected="false" aria-controls="pane-people">People</button>
+      <button id="tab-chat"   class="ptab tw-focusable" type="button" role="tab" data-tab="chat"   aria-selected="false" aria-controls="pane-chat">Chat</button>
+      <button id="tab-game"   class="ptab tw-focusable" type="button" role="tab" data-tab="game"   aria-selected="true"  aria-controls="pane-game">Game</button>
+      <button id="tab-api"    class="ptab tw-focusable" type="button" role="tab" data-tab="api"    aria-selected="false" aria-controls="pane-api">API</button>
+    </div>
+    <div class="panel__body">
+
+      <section id="pane-people" role="tabpanel" aria-labelledby="tab-people" hidden>
+        <h2 class="panel__h">People <span id="rosterCount" class="tw-caption1">0</span></h2>
+        <ul id="roster"></ul>
+      </section>
+
+      <section id="pane-chat" role="tabpanel" aria-labelledby="tab-chat" hidden>
+        <h2 class="panel__h">Chat</h2>
+        <ul id="chatList"><li class="tw-caption1">Chat and captions are mock in the twin (accessibility R12); real chat happens in Teams.</li></ul>
+        <form id="chatForm" class="cmd__form"><input class="tw-input" type="text" placeholder="Message (local only)" aria-label="Chat message"><button class="tw-btn tw-btn--outline" type="submit">Send</button></form>
+      </section>
+
+      <section id="pane-game" role="tabpanel" aria-labelledby="tab-game">
+        <div class="panel__section">
+          <h2 class="panel__h">Layers</h2>
+          <div class="panel__row"><label><input type="checkbox" data-layer="hands" checked> Holohands</label></div>
+          <div class="panel__row"><label><input type="checkbox" data-layer="body"> Body + collide</label></div>
+          <div class="panel__row"><label><input type="checkbox" data-layer="props" checked> Props</label></div>
+          <div class="panel__row"><label><input type="checkbox" data-layer="game" checked> Ball game</label></div>
+          <div class="panel__row"><label><input type="checkbox" data-layer="agent" checked> Command agent</label></div>
+          <div class="panel__row"><label><input type="checkbox" data-layer="hud" checked> Latency HUD</label></div>
+          <div class="panel__row"><label><input type="checkbox" data-layer="sfx" checked> Sound</label></div>
+        </div>
+        <div class="panel__section">
+          <h2 class="panel__h">Game</h2>
+          <div class="panel__row"><label><input type="radio" name="mode" value="free"> Free pass</label></div>
+          <div class="panel__row"><label><input type="radio" name="mode" value="potato"> Hot potato</label></div>
+          <div class="panel__row"><label><input type="radio" name="mode" value="practice" checked> Practice: walls</label></div>
+          <div class="panel__row"><label for="goalSeat">Goal tile</label><select id="goalSeat" class="tw-input" aria-label="Goal tile"></select></div>
+          <div class="panel__btns">
+            <button id="btnPlay" type="button" class="tw-btn tw-btn--primary tw-focusable">Play together</button>
+            <button id="btnKickoff" type="button" class="tw-btn tw-btn--outline tw-focusable">Kick off</button>
+            <button id="btnReset" type="button" class="tw-btn tw-btn--outline tw-focusable">Reset</button>
+          </div>
+        </div>
+        <div class="panel__section">
+          <h2 class="panel__h">Command</h2>
+          <form id="cmdForm" class="cmd__form">
+            <input class="tw-input" type="text" aria-label="Command" autocomplete="off">
+            <button id="btnPtt" type="button" class="tw-btn tw-btn--outline ptt tw-focusable" aria-pressed="false" aria-label="Hold to talk">
+              <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7.5 17.5h5"/></svg>
+              <span class="ptt__label tw-visually-hidden">Hold to talk</span>
+            </button>
+          </form>
+          <div id="cmdStatus" class="cmd__status" data-status="idle" aria-live="off"></div>
+          <div id="cmdCard" class="cmd__card" hidden><p class="cmd__say"></p><div class="cmd__meta"></div></div>
+          <div id="c7notice" class="c7" hidden><span class="c7__text"></span><br><button type="button" class="tw-btn tw-btn--outline tw-focusable">Got it</button></div>
+        </div>
+        <div class="panel__section">
+          <h2 class="panel__h">HUD</h2>
+          <div id="hudPanel">—</div>
+        </div>
+      </section>
+
+      <section id="pane-api" role="tabpanel" aria-labelledby="tab-api" hidden>
+        <h2 class="panel__h">Teams API map</h2>
+        <p class="tw-caption1">One row per layer: twin implementation, the real return path (C1 virtual camera / C2 video effect / C3 ACS / D stage app + Live Share), status, live numbers, example scripts, blocker.</p>
+        <div id="apiRows"></div>
+      </section>
+
+    </div>
+  </aside>
+
+  <footer id="controlbar" role="toolbar" aria-label="Meeting controls" aria-orientation="horizontal">
+    <button id="btnCam" type="button" class="cbtn tw-focusable" aria-pressed="true" aria-label="Camera" title="Camera (Ctrl+Shift+O)">
+      <svg class="tw-icon on" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="M13.5 8.5l4-2v7l-4-2"/></svg>
+      <svg class="tw-icon off" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="5" width="11" height="10" rx="2"/><path d="M13.5 8.5l4-2v7l-4-2M3 3l14 14"/></svg>
+      <span class="cbtn__label">Camera</span>
+    </button>
+    <button id="btnMic" type="button" class="cbtn tw-focusable" aria-pressed="true" aria-label="Mic" title="Mic (Ctrl+Shift+M)">
+      <svg class="tw-icon on" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7.5 17.5h5"/></svg>
+      <svg class="tw-icon off" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7.5 17.5h5M3 3l14 14"/></svg>
+      <span class="cbtn__label">Mic</span>
+    </button>
+    <button id="btnDeviceOnly" type="button" class="cbtn tw-focusable" aria-pressed="false" aria-label="On-device only">
+      <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s3-5 7.5-5 7.5 5 7.5 5-3 5-7.5 5-7.5-5-7.5-5z"/><circle cx="10" cy="10" r="2.5"/><path d="M3 3l14 14"/></svg>
+      <span class="cbtn__label">On-device only</span>
+    </button>
+    <button id="btnShare" type="button" class="cbtn tw-focusable" aria-label="Share" aria-haspopup="menu" title="Share (Ctrl+Shift+E)">
+      <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="2.5" y="4" width="15" height="10" rx="2"/><path d="M7 17h6M10 8v4M8 10l2-2 2 2"/></svg>
+      <span class="cbtn__label">Share</span>
+    </button>
+    <button id="btnReact" type="button" class="cbtn tw-focusable" aria-label="React" aria-haspopup="menu">
+      <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.5"/><path d="M7 8h.5M12.5 8h.5M7 12a4 4 0 0 0 6 0"/></svg>
+      <span class="cbtn__label">React</span>
+    </button>
+    <button id="btnRaise" type="button" class="cbtn tw-focusable" aria-pressed="false" aria-label="Raise hand" title="Raise hand (Ctrl+Shift+K)">
+      <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M6 10V5.5a1 1 0 0 1 2 0V9M8 8V3.5a1 1 0 0 1 2 0V9M10 8V4.5a1 1 0 0 1 2 0V9M12 9V6a1 1 0 0 1 2 0v6a5 5 0 0 1-5 5H8.5a4 4 0 0 1-3.2-1.6L3 12.5a1 1 0 0 1 1.6-1.2L6 13"/></svg>
+      <span class="cbtn__label">Raise</span>
+    </button>
+    <button id="btnMore" type="button" class="cbtn tw-focusable" aria-label="More" aria-haspopup="menu">
+      <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/><circle cx="15" cy="10" r="1.2"/></svg>
+      <span class="cbtn__label">More</span>
+    </button>
+    <button id="btnLeave" type="button" class="cbtn tw-focusable" aria-label="Leave">
+      <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 11.5c4.5-4 10.5-4 15 0l-2 2.5-3-1.5v-2c-1.7-.6-3.3-.6-5 0v2l-3 1.5z"/></svg>
+      <span class="cbtn__label">Leave</span>
+    </button>
+  </footer>
+
+  <div id="strip" aria-label="Sandbox notice"></div>
+  <div id="live-polite" aria-live="polite" aria-atomic="true"></div>
+  <div id="live-assertive" aria-live="assertive" aria-atomic="true"></div>
+  <div id="toasts"></div>
+
+  <!-- C1 consent dialog: text is filled from STRINGS.c1 by TwinUI.openConsent() (single source of truth) -->
+  <dialog id="consent" aria-modal="true" aria-labelledby="c1-title">
+    <div class="dlg">
+      <h2 id="c1-title" class="dlg__title"></h2>
+      <div id="c1-body" class="dlg__body"></div>
+      <div class="dlg__btns">
+        <button id="c1-agree" type="button" class="tw-btn tw-btn--primary tw-focusable" autofocus></button>
+        <button id="c1-notnow" type="button" class="tw-btn tw-btn--outline tw-focusable"></button>
+        <button id="c1-deviceonly" type="button" class="tw-btn tw-btn--link tw-focusable"></button>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Ctrl+/ command popover (overlay-sketches §7) -->
+  <dialog id="cmdPopover" aria-labelledby="cmd-title">
+    <form class="dlg" method="dialog">
+      <h2 id="cmd-title" class="dlg__title">Ask hopeOS</h2>
+      <div class="dlg__body">
+        <div class="cmd__form">
+          <input class="tw-input" type="text" aria-label="Command" autocomplete="off">
+          <button type="button" class="tw-btn tw-btn--outline ptt tw-focusable" aria-pressed="false" aria-label="Hold to talk">
+            <svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M7.5 17.5h5"/></svg>
+            <span class="ptt__label tw-visually-hidden">Hold to talk</span>
+          </button>
+        </div>
+        <div class="cmd__status" data-status="idle"></div>
+        <div class="cmd__card" hidden><p class="cmd__say"></p><div class="cmd__meta"></div></div>
+        <p class="cmd__hint">Enter sends &middot; Esc closes &middot; hold <kbd>V</kbd> or the mic button to talk (Space is never push-to-talk)</p>
+      </div>
+      <div class="dlg__btns"><button type="submit" class="tw-btn tw-btn--primary tw-focusable">Send</button><button type="button" class="tw-btn tw-btn--outline tw-focusable" onclick="this.closest('dialog').close()">Close</button></div>
+    </form>
+  </dialog>
+
+  <!-- About: honest limits (R12), keyboard map (SPEC §5), outgoing video help (C1 via OBS), C10 trademark footnote -->
+  <dialog id="about" aria-labelledby="about-title">
+    <div class="dlg">
+      <h2 id="about-title" class="dlg__title">About the hopeOS Meeting Sandbox</h2>
+      <div class="dlg__body">
+        <p>A local test harness that imitates the Microsoft Teams meeting layout so hopeOS layers (holohands, props, the cross-tile ball game, the command agent) can be developed against a realistic surface. Nothing here is a Microsoft surface.</p>
+        <h3>Keyboard</h3>
+        <p><kbd>K</kbd> keyboard hand (arrows move it, hold <kbd>Space</kbd> to cup / release to throw) &middot; <kbd>G</kbd> kick off (host) &middot; <kbd>1</kbd>-<kbd>9</kbd> goal seat (host) &middot; <kbd>P</kbd> play/stop &middot; <kbd>M</kbd> mute cues &middot; <kbd>H</kbd> HoloHands (Auto &rarr; On &rarr; Off) &middot; <kbd>L</kbd> HUD &middot; hold <kbd>V</kbd> to talk &middot; <kbd>Ctrl</kbd>+<kbd>/</kbd> command popover &middot; <kbd>Esc</kbd> closes dialogs. Tab: top bar &rarr; gallery (arrows between tiles) &rarr; control bar (arrows) &rarr; side panel tabs.</p>
+        <h3>Honest limits</h3>
+        <p>Holohands drawn over other people are visual only; a blind participant gets the live-region narration of game events, not hand positions. Camera play needs a camera and a tracker that reads you well; the keyboard path exists so anyone can still throw and catch, but it is a lesser experience. Captions and reactions here are mock.</p>
+        <h3 id="about-outgoing" tabindex="-1">Outgoing video (C1)</h3>
+        <p>Open the More menu &rarr; Outgoing video, or add <code>?outgoing=1</code>: a 1280x720 popup shows your un-mirrored camera with the hopeOS overlay. In OBS add a <em>Window Capture</em> of that popup, start the Virtual Camera, and pick "OBS Virtual Camera" in Teams. Pixels only: no hand packets leave this page on that path.</p>
+        <p id="about-trademark" class="about__foot"></p>
+      </div>
+      <div class="dlg__btns"><button type="button" class="tw-btn tw-btn--primary tw-focusable" onclick="this.closest('dialog').close()">Close</button></div>
+    </div>
+  </dialog>
+
+  <!-- one participant tile (layout-spec §3 + privacy patch §1): media -> hands 2D -> avatar; chrome above the stage surface -->
+  <template id="tile-template">
+    <article class="tile" role="group" aria-label="" data-seat="0" data-client="">
+      <video class="tile__media" autoplay muted playsinline></video>
+      <canvas class="tile__hands" aria-hidden="true"></canvas>
+      <div class="tile__avatar" aria-hidden="true"><span class="tile__initials"></span></div>
+      <div class="tile__chrome">
+        <div class="tile__ring"></div>
+        <div class="tile__pills">
+          <span class="tile__raised"><svg class="tw-icon" width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" style="width:16px;height:16px;stroke:#000"><path d="M6 10V5.5a1 1 0 0 1 2 0V9M8 8V3.5a1 1 0 0 1 2 0V9M10 8V4.5a1 1 0 0 1 2 0V9M12 9V6a1 1 0 0 1 2 0v6a5 5 0 0 1-5 5H8.5a4 4 0 0 1-3.2-1.6L3 12.5a1 1 0 0 1 1.6-1.2L6 13"/></svg>Hand raised</span>
+          <span class="tile__goalchip"><span aria-hidden="true">&#127942;</span>Goal</span>
+        </div>
+        <span class="tile__chip" hidden></span>
+        <div class="tile__label">
+          <svg class="tile__mic" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><g class="mic-on"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5"/></g><g class="mic-off"><rect x="7" y="2.5" width="6" height="10" rx="3"/><path d="M4.5 9.5a5.5 5.5 0 0 0 11 0M10 15v2.5M3 3l14 14"/></g></svg>
+          <span class="tile__name"></span>
+          <span class="tile__pill" data-pill=""></span>
+          <span class="tile__age" hidden></span>
+          <span class="tile__ballchip" hidden>ball</span>
+        </div>
+        <div class="tile__btns">
+          <button type="button" class="tw-btn tile__pin tw-focus-on-video" aria-label="Pin" title="Pin"><svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><path d="M12 2.5l5.5 5.5-2 1-1 1-3 6-2.5-2.5L4 18.5 2.5 17l5-5-2.5-2.5 6-3 1-1z"/></svg></button>
+          <button type="button" class="tw-btn tile__more tw-focus-on-video" aria-label="More options" title="More"><svg class="tw-icon" viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="10" r="1.2"/><circle cx="10" cy="10" r="1.2"/><circle cx="15" cy="10" r="1.2"/></svg></button>
+        </div>
+      </div>
+    </article>
+  </template>
+</div>
+
+<!-- T6 boot + loop (CONTRACTS §5-§6). `?shell=1` keeps T1's UI-only shell (placeholder tiles, no tracking) for tests/_uiprobe.mjs.
+     T7 / T8 / T9 add their blocks in separate marked <script> blocks; this one owns window.__twin. -->
+<script type="module" id="boot">
+import * as THREE from 'three';
+import { TwinUI, fixed169, API_ROWS, STRINGS, computeHoloHandsShown, HOLOHANDS_FADE_MS } from './sdk/game/twin-ui.js';
+import { StageRenderer } from './sdk/game/stage-renderer.js';
+import { D, U, MIRRORED_INPUT, courtToStagePx, courtToWorld, tileWorldRect, worldToCourt } from './sdk/game/court-space.js';
+import { CourtMap, buildSeatMap, SEAT_NONE, DEFAULT_BALL_RADIUS_M, clampBallRadiusM } from './sdk/game/court-map.js';
+import { BallNet, SharedClock, HOLD } from './sdk/game/ball-net.js';
+import { Room } from './sdk/net/room.js';
+import { RemoteHands } from './sdk/net/remote-consumer.js';
+import { encodeHandStream, ROOM_CHANNEL, PK_REACTION, encodeReaction, decodeReaction, readHeader } from './sdk/net/hand-stream.js';
+import { GestureDetector } from './sdk/game/gesture-reactions.js';       // B5: raise / applause / like / wave / love from MY packs (measured palm side)
+import { ReactionFx } from './sdk/game/reaction-fx.js';                  // B5: floating emoji + "Hand raised" pill + live text, per tile
+import { Leaderboard, bindGame, mountLeaderboard, SectionView, ScoreChips, RoundCard, celebrateGoal } from './sdk/game/leaderboard.js';   // B6
+import { isScorePacket } from './sdk/net/score-packet.js';                // B6: SCORE 0x31 (host → everyone, reliable)
+import { LoopbackTransport, WsRelayTransport, gated } from './sdk/net/transports.js';
+import { JoinUI } from './sdk/game/join-ui.js';                                                   // B3: pre-join, invite, connection chip
+import { parseRoomFromUrl, resolveRelayInfo, roomWsUrl, RELAY_DEFAULT } from './sdk/net/room-link.js';   // B3: room codes / links / relay
+import { TilePipeline } from './sdk/game/tile-pipeline.js';
+import { RemoteTile } from './sdk/game/remote-tile.js';
+import { LocalCameraSource, CloneSource, ClipSource, KeyboardSource } from './sdk/game/hand-sources.js';
+import { PackGen, packToHands } from './sdk/game/pack-gen.js';
+import { BallGame, PHASE, FEEL, urlBallRadiusM } from './sdk/game/ball-game.js';
+import { makeTennisBallMesh } from './sdk/game/ball-visuals.js';          // B2: the tennis ball replaces the blue matcap sphere
+import { BallFx } from './sdk/game/ball-fx.js';                           // B2: trail / squash / catch pulse / dust, on the ONE stage
+import { ArrivalRing, MissCue, GhostBall, ArrivalPredictor } from './sdk/game/latency-cues.js';
+import { Sfx } from './sdk/game/sfx.js';
+import { BotTile } from './sdk/game/bot-tile.js';
+import { SceneExecutor } from './sdk/game/scene-executor.js';
+import { ModelFetcher } from './sdk/game/model-fetch.js';                 // B4: free-text kinds (catalog → bundled GLB → Sketchfab → placeholder)
+import { Hud } from './sdk/game/hud.js';
+import { CommandAgent, loadTools, loadSystemPrompt } from './sdk/game/command-agent.js';
+import { PushToTalk } from './sdk/game/push-to-talk.js';
+import { PropHull } from './sdk/core/prop-hull.js';
+import { HandBody, JOINT_RADII } from './sdk/core/game-physics.js';
+
+// ── URL params (CONTRACTS §5) ─────────────────────────────────────────────────────────────────────────────────
+const params = new URL(location.href).searchParams;
+const q = (k, d = null) => (params.has(k) ? params.get(k) : d);
+const flag = (k) => q(k) === '1';
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+// B3 link-based rooms: ?room= > /join/<CODE> > #room= (parseRoomFromUrl); the relay is ?relay= else the hosted RELAY_DEFAULT; the transport
+// is LOOPBACK when ?transport=loopback (every local probe) or when the page has no room (local flows: clones / bots / keyboard) and
+// the relay otherwise. Backward compatible: ?relay=<url> without a room still joins room 'lab' on that relay (the pre-v2 rule).
+const roomFromLink = parseRoomFromUrl();
+const relayInfo = resolveRelayInfo();
+const url = {
+  room: roomFromLink || 'lab', roomFromLink: !!roomFromLink, relay: relayInfo.relay, relaySource: relayInfo.source,
+  transport: q('transport') === 'loopback' ? 'loopback' : (roomFromLink || q('relay')) ? 'ws' : 'loopback',
+  name: q('name'), host: flag('host'), tiles: clamp(parseInt(q('tiles', '1')) || 1, 1, 9), clone: flag('clone'), clip: q('clip'),
+  bot: clamp(parseInt(q('bot', '0')) || 0, 0, 8), auto: flag('auto'), fixedstep: flag('fixedstep'), consent: flag('consent'),
+  agent: ['auto', 'local', 'claude'].includes(q('agent')) ? q('agent') : 'auto', proxy: q('proxy'), mode: ['free', 'potato', 'practice'].includes(q('mode')) ? q('mode') : null,
+  nosfx: flag('nosfx'), hud: q('hud', '1') !== '0', outgoing: flag('outgoing'), lat: +q('lat', 0) || 0, jit: +q('jit', 0) || 0, loss: +q('loss', 0) || 0,
+  wan: flag('wan'), shell: flag('shell'),
+};
+const frame = document.querySelector('.tw-frame');
+const ui = new TwinUI(frame);
+let resolveReady; const ready = new Promise(r => { resolveReady = r; });
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// T1 shell (`?shell=1`): TwinUI with placeholder tiles and NO tracking / no packets — tests/_uiprobe.mjs
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
+async function bootShell() {
+  const S = { url, boot: { consentOk: false, ready: false, error: null }, me: { clientId: 'c-000', name: url.name || 'Kenny', seat: 0, isHost: true, shareMode: 'share' }, roster: [], tiles: ui.tiles, ovPacks: {} };
+  window.__twin = { ready, S, ui, tiles: ui.tiles, fixed169, STRINGS, API_ROWS, ovPacks: S.ovPacks, shell: true,
+    step() {}, snapshot() { return { tiles: [...ui.tiles.values()].map(t => ({ clientId: t.clientId, seat: t.seat, kind: t.kind, state: t.state })), rects: Object.fromEntries([...ui.rects()].map(([k, r]) => [k, { x: r.x, y: r.y, w: r.width, h: r.height }])), layout: ui._layout }; } };
+  const n = url.tiles;
+  const names = [S.me.name, 'Hannah', 'Bot-1', 'Clone', 'Clip', 'Ana', 'Ben', 'Cy', 'Dee'];
+  const kinds = ['local', 'remote', 'bot', 'clone', 'clip', 'remote', 'remote', 'remote', 'remote'];
+  for (let i = 0; i < n; i++) {
+    const clientId = `c-${String(i).padStart(3, '0')}`;
+    ui.addTile({ clientId, name: names[i], kind: kinds[i], seat: i });
+    S.roster.push({ clientId, name: names[i], kind: kinds[i], seat: i, tracked: i !== 3, isHost: i === 0 });
+  }
+  ui.setTileState('c-000', { pill: 'camera-off' });
+  if (n > 1) ui.setTileState('c-001', { pill: 'landmarks', speaking: true, ring: 'incoming', chip: 'INCOMING', ageMs: 68 });
+  if (n > 2) ui.setTileState('c-002', { pill: 'landmarks', goal: true, muted: true, ageMs: 12 });
+  if (n > 3) ui.setTileState('c-003', { pill: 'no-data', alpha: 0.6 });
+  for (let i = 4; i < n; i++) ui.setTileState(`c-${String(i).padStart(3, '0')}`, { pill: 'landmarks', ageMs: 40 + i * 7 });
+  ui.setScore(n > 1 ? [2, 1] : [0], names);
+  ui.setHudChip(n > 1 ? 'you 34 · Hannah 68 · relay 9' : 'you 34 · relay —');
+  ui.renderRoster(S.roster, S.me);
+  ui.renderApiTab(API_ROWS);
+  const say = (t) => ui.toast(t, { ms: 1800 });
+  ui.bindControlBar({
+    onCam: (on) => say(`Camera ${on ? 'on' : 'off'} (shell)`), onMic: (on) => say(`Mic ${on ? 'on' : 'off'} (shell)`),
+    onShare: (id) => say(`Share: ${id} (shell)`), onReact: (e) => say(`Reaction ${e}`), onRaise: (on) => say(on ? 'Hand raised' : 'Hand lowered'), onMore: () => {},
+    onLeave: () => { for (const t of ui.tiles.values()) t.video.srcObject?.getTracks().forEach(tr => tr.stop()); say('Left (shell): consent kept'); },
+  });
+  ui.bindPanel({
+    onLayer: (name, on) => say(`Layer ${name}: ${on ? 'on' : 'off'} (shell)`), onMode: (m) => say(`Mode: ${m} (shell)`), onGoal: (s) => say(`Goal seat ${s} (shell)`),
+    onPlay: () => say('Play together (shell)'), onKickoff: () => say('Kick off (shell)'), onReset: () => say('Reset (shell)'),
+    onCommand: (text) => { ui.setAgentStatus('thinking'); setTimeout(() => ui.setAgentStatus('done', { say: `(shell) would run: ${text}`, source: 'local', rounds: 1, ms: 12, actions: [] }), 300); },
+    onPttDown: () => ui.setAgentStatus('listening'), onPttUp: () => ui.setAgentStatus('idle'), onTab: () => {},
+  });
+  ui.bindKeys({ onKey: (action, down) => { window.__twin.lastKey = { action, down, t: performance.now() }; } });
+  ui.addEventListener('deviceonly', (e) => { S.me.shareMode = e.detail.on ? 'device-only' : 'share'; });
+  const consent = ui.openConsent();
+  window.__twin.consent = consent;
+  S.boot.ready = true; window.__twin.ready = true; resolveReady();
+  const mode = await consent;
+  S.me.shareMode = mode === 'device-only' ? 'device-only' : 'share';
+  S.boot.consentOk = mode !== 'declined';
+  if (mode === 'declined') { ui.setTileState('c-000', { pill: 'camera-off' }); ui.toast('Camera stays off. Reload to see the notice again.', { ms: 4000 }); }
+  else {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 }, audio: false });
+      const t = ui.tiles.get('c-000'); t.video.srcObject = stream; await t.video.play().catch(() => {});
+      ui.setTileState('c-000', { pill: mode === 'device-only' ? 'device-only' : 'tracking' });
+      if (mode === 'device-only') ui.setDeviceOnly(true);
+    } catch (e) { S.boot.error = String(e); ui.setTileState('c-000', { pill: 'camera-off' }); ui.toast('Camera unavailable: ' + (e.message || e), { ms: 5000, level: 'error' }); }
+  }
+  const t0 = performance.now(); setInterval(() => ui.setTimer(performance.now() - t0), 1000);
+}
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// The twin: boot order (CONTRACTS §5) tokens/CSS → TwinUI → consent → transport (hello = identity) → camera → stage →
+// landmarkers (one at a time) → clock → BallNet → BallGame → Room.join → RemoteHands → bots → layers → loop
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
+const KB_SPAN_U = 0.2 / U;            // the keyboard hand advertises a nominal tracked-hand span (0.2 m at the hand plane ≈ an adult hand near the webcam)
+const DETECT_BUDGET_MS = 30;          // per-frame landmarker budget; clones beyond it keep last frame's packs (the primary tile always runs)
+const rand4 = () => Math.random().toString(36).slice(2, 6);
+const localId = () => url.host ? 'c-000000-' + rand4() : 'c-' + String(Date.now() % 1e10).padStart(10, '0') + '-' + rand4();
+
+const S = {
+  url, boot: { consentOk: false, ready: false, error: null, stage: 'init' },
+  me: { clientId: localId(), name: url.name || 'Kenny', seat: 0, isHost: url.host, shareMode: 'share', tracked: true },
+  clock: null, transport: null, room: null, net: null, court: null, roster: [], seatMap: null, stage: null,
+  tiles: new Map(), layers: { hands: true, body: false, props: true, game: true, agent: true, hud: url.hud, sfx: !url.nosfx },
+  props: new Map(), game: null, agent: { cmd: null, ptt: null, exec: null, status: 'idle', last: null }, hud: null,
+  a11y: { reducedMotion: false, lastPoliteAt: 0, lastAssertiveAt: 0, kb: { active: false, x: 0, y: 0, closed: false } },
+  ovPacks: {}, mode: url.mode || 'practice', modeUser: !!url.mode, bots: [], clones: [], frames: 0, fps: 0, paused: false,
+};
+const layers = S.layers;
+let stage = null, hud = null, sfx = null, game = null, exec = null, cmd = null, ptt = null, kb = null, remote = null, room = null, net = null, court = null, clock = null, transport = null;
+let cues = null, arrivalsCtx = null, localStream = null, localVideo = null, ballFx = null, ballHalo = null, join = null, gestures = null, rxFx = null, rxSeq = 0;
+let lb = null, lbCard = null, lbSection = null, lbChips = null, fetcher = null;
+/** Hook for the HoloHands mode control (built in parallel in sdk/game/twin-ui.js): what the local player is interacting with right now.
+ *  'ball' while the game ball is in my tile / arriving / held; 'prop:<id>' per spawned prop. Read with window.__twin.interactions.active(). */
+const interactions = (() => { const set = new Set(); return { add(tag) { set.add(tag); }, remove(tag) { set.delete(tag); }, has(tag) { return set.has(tag); }, active() { return [...set]; } }; })();
+const tileOf = (id) => S.tiles.get(id);
+const tileAtSeat = (seat) => { for (const t of S.tiles.values()) if (t.seat === seat) return t; return null; };
+const stageW = () => ui.el.stage.clientWidth, stageH = () => ui.el.stage.clientHeight, th = () => (ui._layout && ui._layout.th) || 1;
+let domRectsCache = [], domRectsKey = '';
+/** DOM rects by SEAT (relative to #stage): what the court maps through. Rebuilt on layout / seat map; a seat whose tile is not
+ *  in the DOM yet gets the grid slot it will occupy (rule B), so court->px never meets a missing rect. */
+function rebuildDomRects() {
+  const rects = ui.rects(), out = [], L = ui._layout;
+  const slot = (i) => { if (!L || !L.tw) return { left: 0, top: 0, width: stageW() || 1, height: stageH() || 1 }; const n = court.map.seats.length, row = Math.floor(i / L.cols), col = i % L.cols, lastRow = n - (L.rows - 1) * L.cols, k = row === L.rows - 1 ? lastRow : L.cols; const off = (L.cols - k) * (L.tw + L.gap) / 2; const pad = parseFloat(getComputedStyle(ui.el.gallery).left) || 0; return { left: pad + L.padX + off + col * (L.tw + L.gap), top: pad + L.padY + row * (L.th + L.gap), width: L.tw, height: L.th }; };
+  if (court) for (const s of court.map.seats) { const r = rects.get(s.clientId); out[s.seat] = r ? { left: r.x, top: r.y, width: r.width, height: r.height } : slot(s.seat); }
+  domRectsCache = out; domRectsKey = court ? `${court.map.v}:${court.map.seats.length}:${S.tiles.size}:${stageW()}x${stageH()}` : '';
+  return out;
+}
+const domRects = () => { if (court && domRectsKey !== `${court.map.v}:${court.map.seats.length}:${S.tiles.size}:${stageW()}x${stageH()}`) rebuildDomRects(); return domRectsCache; };
+const seatRectWorld = (seat) => (domRects()[seat] ? tileWorldRect(court, seat, domRects(), stageW(), stageH(), th()) : null);
+const c2w = (x, y, out = {}) => courtToWorld(court, x, y, domRects(), stageW(), stageH(), th(), out);
+const c2px = (x, y, out = {}) => courtToStagePx(court, x, y, domRects(), out);
+const announce = (text, level = 'polite') => { ui.announce(text, level); if (level === 'assertive') S.a11y.lastAssertiveAt = performance.now(); else S.a11y.lastPoliteAt = performance.now(); };
+const nameOfSeat = (seat) => { const s = court && court.map.seats[seat]; return (s && s.name) || `seat ${seat}`; };
+
+// ── transports ──────────────────────────────────────────────────────────────────────────────────────────────
+function makeRawTransport(id) {
+  if (url.transport === 'ws') return new WsRelayTransport(roomWsUrl(url.relay, url.room));
+  return new LoopbackTransport({ channel: `${ROOM_CHANNEL}:${url.room}`, id, latencyMs: url.lat, jitterMs: url.jit, lossPct: url.loss });
+}
+const selfMap = (me) => new CourtMap(buildSeatMap([{ clientId: me.clientId, name: me.name, tracked: !!me.tracked, aspect: 16 / 9, handSpan: me.handSpan ?? null }], { cols: 1, wrap: 'none', v: 0 }));
+
+// ── tiles ───────────────────────────────────────────────────────────────────────────────────────────────────
+let nextIdx = 0;
+function addTile({ clientId, name, kind, seat, local }) {
+  if (S.tiles.has(clientId)) return S.tiles.get(clientId);
+  const { el, video } = ui.addTile({ clientId, name, kind, seat });
+  const t = { clientId, name, kind, seat, idx: nextIdx++, el, video, local: !!local, source: null, pipe: null, remote: null, cam: null, uvCam: null, vp: null, layer: 0, rect: null,
+    packs: { L: null, R: null, hands: [] }, hands: { left: null, right: null }, handL: null, handR: null, alpha: 1, ageMs: Infinity, chip: null, ring: null,
+    seq: 0, lastSend: -Infinity, spanEma: null, detectMs: 0, lastDetect: -Infinity, camOk: false };
+  S.tiles.set(clientId, t);
+  if (stage) layoutTile(t);
+  if (!local && stage) {
+    t.remote = new RemoteTile(clientId, { scene: stage.scene, camera: t.cam, style: 'smooth', occluder: true });
+    stage.assignLayer(t.remote.rigR, t.layer); stage.assignLayer(t.remote.rigL, t.layer);
+    t.handL = t.remote.handL; t.handR = t.remote.handR;
+    applyHandsLayer(t);
+  }
+  return t;
+}
+function removeTile(clientId) {
+  const t = S.tiles.get(clientId); if (!t) return;
+  if (t.remote) t.remote.dispose();
+  if (t.pipe) { t.pipe.dispose(); if (stage) stage.registerContext(-1); }
+  if (t.source && t.source.stop) t.source.stop();
+  if (stage) stage.releaseTile(t.idx);
+  if (hud) hud.forget(clientId);
+  S.tiles.delete(clientId);
+  ui.removeTile(clientId);
+}
+function layoutTile(t) {
+  const r = ui.rects().get(t.clientId); if (!r || !stage) return;
+  const st = stage.tileCamera(t.idx, { left: r.x, top: r.y, width: r.width, height: r.height });
+  t.cam = st.cam; t.uvCam = st.uvCam; t.vp = st.vp; t.layer = st.layer; t.rect = { left: r.x, top: r.y, width: r.width, height: r.height };
+  if (t.pipe) t.pipe.setCover(r.width, r.height);
+  if (t.remote) t.remote.setCover(r.width, r.height);
+}
+// <!-- HH --> HoloHands mode: twin-ui owns the control (button / H key / Layers checkbox), the page owns the interaction
+// list (window.__twin.interactions: 'ball', 'prop:<id>', later 'draw' | 'hug' | 'handshake') and applies the result to the rigs.
+// AUTO = rigs only while an interaction needs collision/realism; ON = always; OFF = never. Physics keeps running on the
+// invisible rig (HandBody is fed regardless), and the gesture detector reads landmarks, never the rigs.
+const HH = { shown: null };
+function applyHoloHands() {
+  const shown = computeHoloHandsShown(ui.holoHandsMode, interactions.active());
+  if (shown === HH.shown) return; HH.shown = shown;
+  layers.hands = ui.holoHandsMode !== 'off';                                          // keep the old flag honest for anything still reading it
+  for (const t of S.tiles.values()) applyHandsLayer(t);
+  ui.setHoloHandsShown(shown);                                                        // aria-pressed + caption + '· hands hidden' pill suffix
+}
+function applyHandsLayer(t) {
+  const on = HH.shown === true;
+  for (const rig of [t.pipe && t.pipe.rigR, t.pipe && t.pipe.rigL, t.remote && t.remote.rigR, t.remote && t.remote.rigL]) if (rig && rig.grp) fadeRig(rig, on);
+}
+function hhEnforce() {                                                                // per frame, before render: HoloHandRig.pose() sets grp.visible = true whenever a hand is tracked
+  if (HH.shown !== false) return;                                                     // and the ghost shader clamps alpha >= 0.08, so a hidden rig must be vetoed after posing
+  for (const t of S.tiles.values()) for (const rig of [t.pipe && t.pipe.rigR, t.pipe && t.pipe.rigL, t.remote && t.remote.rigR, t.remote && t.remote.rigL]) if (rig && rig.grp && rig._hhAlpha === 0) rig.grp.visible = false;
+}
+function fadeRig(rig, on) {                                                           // 400 ms opacity ramp; reduced motion snaps
+  const ms = ui.reducedMotion ? 0 : HOLOHANDS_FADE_MS, t0 = performance.now(), from = rig._hhAlpha ?? (rig.grp.visible ? 1 : 0), to = on ? 1 : 0;
+  if (from === to) { rig.grp.visible = on; return; }
+  if (on) rig.grp.visible = true;
+  cancelAnimationFrame(rig._hhRaf);
+  const u = rig.uniforms && rig.uniforms.uAlpha;                                     // HoloHandRig ghost/flesh shader alpha (base ≈ 0.46)
+  if (u && rig._hhBase === undefined) rig._hhBase = u.value;
+  const step = () => {
+    const k = ms ? Math.min(1, (performance.now() - t0) / ms) : 1, a = from + (to - from) * k; rig._hhAlpha = a;
+    if (u) u.value = rig._hhBase * a;
+    else rig.grp.traverse(o => { if (o.material && 'opacity' in o.material) { o.material.transparent = true; o.material.opacity = a; } });
+    if (k < 1) rig._hhRaf = requestAnimationFrame(step); else if (!on) rig.grp.visible = false;
+  };
+  step();
+}
+function relayout() {
+  if (!stage) return;
+  // the ball lives in WORLD space; when tiles move (roster growth, resize, reorder) the owner's free ball keeps its COURT position
+  // (read through the OLD camera before the tiles move) and the PropBall's home / floor follow the tile
+  let keep = null;
+  if (game && net && net.isOwner && !net.inTransit && game.running) {
+    const sim = tileAtSeat(net.simSeat);
+    if (sim && sim.uvCam && !game.ball.hold && !game.ball.cradle) { try { keep = worldToCourt(court, net.simSeat, sim.uvCam, game.ball.pos, {}); } catch (_) { keep = null; } }
+  }
+  const W = stageW(), H = stageH(), L = ui._layout || ui.layout();
+  stage.resize(W, H, L.th, L.tw);
+  const arrivals = ui.el.arrivals; if (arrivals) { arrivals.width = W; arrivals.height = H; }
+  for (const t of S.tiles.values()) layoutTile(t);
+  rebuildDomRects();
+  if (game) game.relayout();                                                  // B1: floor re-read now, every seat's shelf re-placed next frame
+  if (game && net && net.isOwner && !net.inTransit) {
+    const rect = seatRectWorld(net.simSeat);
+    if (rect) {
+      const ball = game.ball;
+      ball.center.set((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2, -D); ball.floorY = rect.floorY;   // fields only: setHome() would recenter
+      if (keep && Number.isFinite(keep.x) && Number.isFinite(keep.y)) { const w = c2w(keep.x, keep.y, {}); ball.sphere.pos.set(w.x, w.y, -D); ball.mesh.position.copy(ball.sphere.pos); ball.mesh.updateMatrixWorld(true); }
+    }
+  }
+}
+
+// ── consent (C1) — the ONLY gate before getUserMedia ─────────────────────────────────────────────────────────
+async function bootTwin() {
+  window.__twin = { ready, S, ui, tiles: S.tiles, fixed169, STRINGS, API_ROWS, ovPacks: S.ovPacks, THREE, PackGen, shell: false, frames: 0, step, pause, snapshot, lastKey: null, beforeFrame: null, events: [], interactions };
+  ui.renderApiTab(API_ROWS);
+  ui.addEventListener('deviceonly', (e) => setDeviceOnly(e.detail.on));
+  ui.addEventListener('layout', () => relayout());
+  ui.addEventListener('motion', () => { S.a11y.reducedMotion = ui.reducedMotion; });
+  S.a11y.reducedMotion = ui.reducedMotion;
+  // B3: JoinUI owns the pre-join screen, the invite dialog (link + QR), the People-pane Invite row and the connection chip. It never
+  // touches the camera: the C1 consent dialog stays the only gate. A page opened from a link (room present) shows the pre-join screen
+  // first (name, room code, camera / mic toggles, Invite); ?auto=1 skips it (probes). Without a room the invite row makes a fresh code.
+  join = new JoinUI(frame, { room: url.roomFromLink ? url.room : null, relay: url.relay, name: url.name || (url.roomFromLink ? null : S.me.name),
+    strings: url.roomFromLink ? null : { inviteLead: 'Anyone who opens this link joins the same room, from any device. When you close this dialog you move into that room too (it runs on the shared relay).' } });
+  S.join = { room: join.room, relay: join.relay, relaySource: url.relaySource, inviteUrl: join.inviteUrl, fromLink: url.roomFromLink, prejoin: false, name: null, camera: true, mic: true };
+  window.__twin.join = join;
+  if (url.roomFromLink && !url.auto) {
+    S.boot.stage = 'prejoin'; S.join.prejoin = true;
+    const j = await join.open();                                             // resolves on "Join now" / Enter
+    join.close();
+    S.me.name = j.name || S.me.name; S.join.name = j.name; S.join.camera = j.camera; S.join.mic = j.mic;
+  }
+  const consent = ui.openConsent();
+  window.__twin.consent = consent;
+  const mode = await consent;
+  S.boot.consentOk = mode !== 'declined';
+  S.me.shareMode = mode === 'device-only' ? 'device-only' : 'share';
+  S.boot.stage = 'transport';
+
+  // transport + identity (the relay's hello names me; the tile is keyed by that id)
+  const raw = makeRawTransport(S.me.clientId);
+  transport = gated(raw, () => S.me.shareMode === 'share');
+  S.transport = transport;
+  if (url.transport === 'ws') { try { const hello = await raw.ready; S.me.clientId = hello.clientId; } catch (e) { S.boot.error = 'relay: ' + e; } }
+  clock = new SharedClock({ samples: 8 }); S.clock = clock;
+
+  // my tile + camera (ONE getUserMedia); clones / clip tiles after it
+  S.boot.stage = 'camera';
+  const me = addTile({ clientId: S.me.clientId, name: S.me.name, kind: 'local', seat: 0, local: true });
+  const clipPrimary = !!url.clip && url.tiles === 1;                       // reviewer (e): ?tiles=1&clip= makes MY tile the clip tile (real-hand probes)
+  if (clipPrimary) {
+    try { me.source = new ClipSource(url.clip, { video: me.video }); await me.source.start(); me.camOk = true; ui.setTileState(me.clientId, { pill: 'tracking' }, { immediate: true }); }
+    catch (e) { S.boot.error = 'clip: ' + (e.message || e); me.camOk = false; ui.setTileState(me.clientId, { pill: 'camera-off' }); }
+  } else if (mode !== 'declined') {
+    try {
+      me.source = new LocalCameraSource({ video: me.video });
+      const r = await me.source.start(); localStream = r.stream; localVideo = r.video; me.camOk = true;
+      ui.setTileState(me.clientId, { pill: mode === 'device-only' ? 'device-only' : 'tracking' }, { immediate: true });
+    } catch (e) { S.boot.error = 'camera: ' + (e.message || e); me.camOk = false; ui.setTileState(me.clientId, { pill: 'camera-off' }); ui.toast('Camera unavailable: ' + (e.message || e), { ms: 5000, level: 'error' }); }
+  } else { ui.setTileState(me.clientId, { pill: 'camera-off' }); ui.toast('Camera stays off. Reload to see the notice again.', { ms: 4000 }); }
+  for (let i = 1; i < url.tiles; i++) {
+    const id = `c-zc${i}-${S.me.clientId.slice(2)}`, kind = url.clip ? 'clip' : 'clone';   // sorts after every human id (host = lowest)
+    const t = addTile({ clientId: id, name: `${kind === 'clip' ? 'Clip' : 'Clone'}-${i}`, kind, seat: i, local: true });
+    try {
+      if (url.clip) t.source = new ClipSource(url.clip, { video: t.video });
+      else if (localStream) t.source = new CloneSource(localStream, { video: t.video });
+      if (t.source) { await t.source.start(); t.camOk = true; ui.setTileState(id, { pill: 'tracking' }, { immediate: true }); }
+      else ui.setTileState(id, { pill: 'camera-off' });
+    } catch (e) { ui.setTileState(id, { pill: 'camera-off' }); }
+  }
+  if (mode === 'device-only') ui.setDeviceOnly(true);
+  if (S.join.prejoin) {                                                      // pre-join toggles: camera off = tracks disabled (the Camera button re-enables), mic off = muted
+    if (!S.join.camera && localStream) { for (const tr of localStream.getVideoTracks()) tr.enabled = false; const b = document.getElementById('btnCam'); if (b) b.setAttribute('aria-pressed', 'false'); ui.setTileState(me.clientId, { pill: 'camera-off' }, { immediate: true }); }
+    if (!S.join.mic) { const b = document.getElementById('btnMic'); if (b) b.setAttribute('aria-pressed', 'false'); ui.setTileState(me.clientId, { muted: true }); }
+  }
+
+  // stage: ONE WebGL surface, one camera per tile
+  S.boot.stage = 'stage';
+  stage = new StageRenderer(ui.el.surface, { gap: (ui._layout && ui._layout.gap) || 8, maxDpr: 1.5 }); S.stage = stage;
+  stage.onContextLost(() => { relayout(); ui.toast('Graphics context lost — surface rebuilt', { ms: 3000 }); });
+  arrivalsCtx = ui.el.arrivals ? ui.el.arrivals.getContext('2d') : null;
+  ui.layout(); relayout();
+  for (const t of S.tiles.values()) layoutTile(t);
+
+  // landmarkers, one at a time (each holds a WebGL context; stage.contexts() tracks the sum)
+  S.boot.stage = 'landmarkers';
+  for (const t of S.tiles.values()) {
+    if (!t.local || !t.camOk) continue;
+    try {
+      ui.setTileState(t.clientId, { loading: true });                        // B7: skeleton "Starting the tracker…" instead of a black tile
+      t.loading = true;
+      t.pipe = new TilePipeline(t.clientId, t.video, { scene: stage.scene, camera: t.cam, withPose: false, predMs: 40, style: 'smooth', occluder: true });
+      stage.assignLayer(t.pipe.rigR, t.layer); stage.assignLayer(t.pipe.rigL, t.layer);
+      t.handL = t.pipe.handL; t.handR = t.pipe.handR;
+      await t.pipe.init(); stage.registerContext(1);
+      t.pipe.setCover(t.rect.width, t.rect.height);
+      applyHandsLayer(t);
+    } catch (e) { console.warn('[twin] landmarker failed for', t.clientId, e); t.pipe = null; ui.setTileState(t.clientId, { loading: false }); t.loading = false; }
+  }
+  for (const t of S.tiles.values()) if (t.local && !t.pipe) { t.handL = t.handL || new HandBody('left#' + t.clientId); t.handR = t.handR || new HandBody('right#' + t.clientId); }
+  // warm-up: the FIRST inference compiles the tracker's GPU shaders and blocks the main thread for seconds; run it here, inside boot,
+  // so the live loop (and a solo kickoff 1.5 s after ready) never stalls on it
+  S.boot.stage = 'warmup';
+  for (const t of S.tiles.values()) if (t.pipe) { try { t.pipe.detect(performance.now(), 1 / 60, []); } catch (e) { console.warn('[twin] warm-up detect', t.clientId, e); } }
+
+  // court (provisional self map) → BallNet → BallGame (its hooks) → Room (wraps the hooks object; never replaced afterwards)
+  S.boot.stage = 'net';
+  court = selfMap(S.me); S.court = court;
+  // provisional seat: the host is seat 0 of its own map (it publishes at join); everyone else is SEAT_NONE until the host's first
+  // SEAT_MAP (bot-tile.js waitForSeatMap) — a page must never claim / send as seat 0 while its roster is still unknown
+  const seat0 = url.host ? 0 : SEAT_NONE;
+  net = new BallNet({ transport, clock, court, seat: seat0, clientId: S.me.clientId, isHost: url.host, rateHz: url.transport === 'ws' ? 20 : 30, hooks: {} }); S.net = net;
+  sfx = new Sfx({ muted: url.nosfx || !layers.sfx, volume: 0.35 });
+  const unlock = () => { sfx.unlock(); window.removeEventListener('pointerdown', unlock); window.removeEventListener('keydown', unlock); };
+  window.addEventListener('pointerdown', unlock); window.addEventListener('keydown', unlock);
+  cues = {
+    ring: arrivalsCtx ? new ArrivalRing(arrivalsCtx, (x, y) => c2px(x, y)) : null,
+    miss: arrivalsCtx ? new MissCue(arrivalsCtx) : null,
+    ghost: new GhostBall(stage.scene, court.R * U, 0xff4d4d),
+    predictor: new ArrivalPredictor({ court, mySeat: url.host ? 0 : SEAT_NONE, minLeadMs: FEEL.CUE_LEAD_MIN_MS }),
+    sfx,
+  };
+  cues.ghost.mesh.frustumCulled = false; cues.ghost.mesh.layers.set(0);
+  // ball radius: ?ballr= (metres) > the persisted Game-tab slider (localStorage hopeos.ballsize, written only when moved) > DEFAULT 0.06
+  const ballRadiusM = clampBallRadiusM(urlBallRadiusM() ?? storedBallSize() ?? DEFAULT_BALL_RADIUS_M);
+  game = new BallGame({
+    scene: stage.scene, stage, court, net, clock, seat: seat0, clientId: S.me.clientId, isHost: url.host, mode: S.mode,
+    ballRadiusM, mesh: (R) => makeTennisBallMesh(R),                          // B1 radius + B2 look (felt map + seam, matcap, no lights)
+    tileWorldRect: (seat) => seatRectWorld(seat), courtToWorld: (x, y, out) => c2w(x, y, out), uvCamOf: (seat) => { const t = tileAtSeat(seat); return t && t.uvCam ? t.uvCam : me.uvCam; },
+    domRects, cues, announce,
+    packsOf: (seat) => { const t = tileAtSeat(seat); return t ? { L: t.packs.L, R: t.packs.R, ageMs: t.local ? 0 : t.ageMs } : null; },
+    colorOf: (seat) => getComputedStyle(frame).getPropertyValue(`--tw-seat-${seat % 9}`).trim() || '#ff4d4d',
+  });
+  S.game = game;
+  game.ball.mesh.frustumCulled = false;
+  if (url.wan) game.setLatencyBand(400);
+  ballFx = new BallFx(stage.scene, game.ball.mesh, { shadow: false });      // the shelf owns the contact shadow (shelf.js); trail / squash / pulse / dust here
+  ballHalo = makeHalo(stage.scene);                                          // reviewer (d): soft additive glow so a 6 cm ball reads in a small tile
+  S.ballFx = ballFx;
+  wireGameEvents();
+  wireSizeControls();
+  // B6: the leaderboard model follows the game's events (goal / launch / ring miss / release drop / mode / seatmap); the host broadcasts
+  // SCORE 0x31 after every change and every 2 s; clients apply the newest table. Views: People-pane section, top-bar chips, round card.
+  lb = new Leaderboard({ isHost: url.host, clock, mode: S.mode, colourOf: (seat) => seat % 9 });
+  bindGame(lb, game);
+  lb.addEventListener('broadcast', (e) => { try { transport.send(e.detail.bytes, { reliable: true }); } catch (_) { /* gated / closed */ } });
+  lb.addEventListener('goal', (e) => {
+    if (e.detail.potato) return;
+    const t = tileAtSeat(e.detail.seat);
+    if (t) { const u = ui.tiles.get(t.clientId); if (u) celebrateGoal({ tile: u.el, colour: e.detail.row ? e.detail.row.colour : e.detail.seat % 9, reducedMotion: ui.reducedMotion }); }
+  });
+  lb.addEventListener('change', () => { const o = {}; for (const [seat, r] of lb.rows) o[seat] = r.goals; if (Object.keys(o).length) ui.setScore(o, seatNames()); });   // chips from the table (BallGame.score goes negative on potato bursts)
+  lb.addEventListener('round', (e) => { if (e.detail.state === 'ended' && lbCard) lbCard.show(lb.viewState({ meSeat: S.me.seat })); announce(e.detail.state === 'ended' ? 'Round over' : e.detail.state === 'live' ? 'Round started' : 'Back to the lobby'); });
+  lbSection = new SectionView(mountLeaderboard(document.getElementById('pane-people')), lb, { meSeat: () => S.me.seat });
+  lbChips = new ScoreChips(ui.el.scoreboard, lb, { meSeat: () => S.me.seat });
+  lbCard = new RoundCard(ui.el.stage, { canPlayAgain: () => S.me.isHost, reducedMotion: () => ui.reducedMotion, onPlayAgain: () => { lb.playAgain(); game.reset(); kickoff(); } });
+  S.lb = lb;
+  Object.assign(window.__twin, { lb, lbCard });
+  rxFx = new ReactionFx({ ui });                                              // pill via ui.setTileState({raised}), text via ui.announce
+  gestures = new GestureDetector({ camera: me.cam, onEvent: (ev) => onGesture(ev) });
+  S.gestures = { events: 0, last: null, raised: false };
+  Object.assign(window.__twin, { gestures, rxFx });
+  room = new Room({ transport, clock, net, court, me: { clientId: S.me.clientId, name: S.me.name, tracked: true, aspect: 16 / 9, handSpan: null, kind: 'local' },
+    isRelay: url.transport === 'ws', pingMs: url.transport === 'ws' ? 1000 : 250 });
+  S.room = room;
+  wireRoomEvents();
+  wireJoinChrome(raw);
+  remote = new RemoteHands({ localNow: () => clock.local() });
+  transport.onMessage((buf) => { remote.onMessage(buf); onPacket(buf); });   // onPacket: REACTION 0x32 (B5) and SCORE 0x31 (B6); everything else is BallNet / Room / RemoteHands
+  window.addEventListener('pagehide', () => { try { room.leave(); } catch (_) {} });
+  await room.join();
+  S.me.clientId = room.me.clientId;
+  // reviewer (a) SOLO BOOT: Room publishes only on a roster CHANGE, so a lone participant never got a seat map (net.seat stayed
+  // SEAT_NONE and autoPlay never kicked off). The host publishes its one-seat map now; every later join republishes anyway.
+  if (room.isHost && !S.seatMap) room.publish({ mode: S.mode });
+  if (join) join.chip.setPeers(room.roster.length);                         // the chip's count before the first roster event (a lone participant = 1)
+  // clones / clip tiles: roster members of their own (PRESENCE from their own transport; tracked:false → the host proxies their seat with THEIR local hands)
+  for (const t of S.tiles.values()) {
+    if (!t.local || t === me) continue;
+    const tr = makeRawTransport(t.clientId), ck = new SharedClock({ samples: 8 });
+    const r = new Room({ transport: tr, clock: ck, net: null, court: null, me: { clientId: t.clientId, name: t.name, tracked: false, aspect: 16 / 9, handSpan: null, kind: t.kind }, isRelay: url.transport === 'ws', pingMs: 5000 });
+    await r.join(); t.transport = tr; t.room = r; S.clones.push(t);
+  }
+  // in-page bots: full BallNet clients on their own transports
+  for (let i = 1; i <= url.bot; i++) await addBot(i);
+
+  // agent + executor + push-to-talk
+  S.boot.stage = 'agent';
+  hud = new Hud(ui.el.hudChip, document.getElementById('hudPanel'), { hz: 2 }); S.hud = hud; hud.setVisible(layers.hud);
+  // B4: the executor's free-text spawn path. /api/sketchfab on Vercel (SKETCHFAB_TOKEN there), ?proxy=PORT locally (tools/sandbox-proxy.mjs);
+  // ball kinds (ball / tennis / basketball / apple / glass) are routed through the fetcher's catalog so they get the B2 makeBallMesh looks.
+  const proxyBase = url.proxy ? `http://localhost:${url.proxy}` : '';
+  fetcher = new ModelFetcher({ endpoint: proxyBase + '/api/sketchfab', onStatus: (st) => modelStatus(st) });
+  fetcher.preload();
+  S.fetcher = fetcher;
+  exec = new SceneExecutor({
+    scene: stage.scene, stage, props: S.props, fetcher, modelKinds: ['ball', 'basketball', 'apple'], onModelStatus: (prop, st) => modelStatus({ id: prop.id, ...st }),
+    localTile: () => { const t = tileOf(S.me.clientId); return t ? { packs: t.packs, handL: t.handL, handR: t.handR, views: t.pipe ? t.pipe.views : null, cam: t.uvCam || t.cam, floorY: (seatRectWorld(t.seat) || {}).floorY } : null; },
+    roster: () => S.roster, seatOf: (id) => court.seatOfClient(id), game: () => (layers.game ? game : null), isHost: () => S.me.isHost, me: () => S.me, announce,
+  });
+  S.agent.exec = exec;
+  try {
+    const [{ tools, catalog }, system] = await Promise.all([loadTools(), loadSystemPrompt()]);
+    cmd = new CommandAgent({ endpoint: proxyBase + '/api/claude', tools, catalog, system, executor: (n, i) => exec.exec(n, i), mode: S.me.shareMode === 'device-only' ? 'local' : url.agent, speaker: S.me.name, timeoutMs: 20000 });
+    cmd.on('status', (s) => { if (s && s.state === 'thinking') { S.agent.status = 'thinking'; ui.setAgentStatus('thinking', { ms: 0 }); } });
+    cmd.on('refusal', (r) => announce(r && r.text ? r.text : 'The agent refused the command', 'assertive'));
+    S.agent.cmd = cmd;
+    ptt = new PushToTalk({ endpoint: proxyBase + '/api/openai', onTranscript: (t) => runCommand(t), onState: (st) => { if (st === 'recording') ui.setAgentStatus('listening'); if (st === 'denied') ui.toast('Microphone denied — type the command instead', { ms: 3000 }); } });
+    S.agent.ptt = ptt;
+  } catch (e) { S.boot.error = 'agent: ' + (e.message || e); console.warn('[twin] agent unavailable', e); }
+
+  // keyboard hand (K) through the ovPacks seam — one keymap: TwinUI fires the actions, KeyboardSource owns the arrows/Space
+  kb = new KeyboardSource({ S, clientId: S.me.clientId, tileWorldRect: () => seatRectWorld(S.me.seat), speedMps: 0.6, toggleKey: null }).bind(window);
+  S.a11y.kb = kb.state;
+  bindControls();
+  ui.renderRoster(rosterView(), S.me);
+  ui.setScore(game.score, seatNames());
+
+  // go
+  S.boot.stage = 'loop'; S.boot.ready = true; S.boot.readyAt = performance.now(); window.__twin.ready = true;
+  Object.assign(window.__twin, { stage, room, net, court, game, agent: S.agent, hud, clock, transport, kb, remote, sfx, cues, exec, cmd });
+  startLoop();
+  if (url.auto) autoPlay();
+  // B7 coach: 3 dismissible marks (cup / throw toward <neighbour> / hold V) once per COACH_VERSION, anchored inside my tile's safe area;
+  // skipped under ?auto=1 (probes) unless ?coach=1; catch / miss / goal toasts for MY seat come from the game's events
+  ui.coach.attach(game, { nameOfSeat, mySeat: () => S.me.seat });
+  if (!url.auto || q('coach') === '1') setTimeout(() => { try { const n = tileAtSeat((S.me.seat + 1) % Math.max(1, S.tiles.size)); ui.startCoach({ neighbour: n && n !== tileOf(S.me.clientId) ? n.name : null }); } catch (e) { console.warn('[twin] coach', e); } }, 800);
+  resolveReady();
+}
+
+// ── bots ────────────────────────────────────────────────────────────────────────────────────────────────────
+async function addBot(i) {
+  const id = `c-zb${i}-${S.me.clientId.slice(2)}`, name = `Bot-${i}`;                       // sorts after every human id (host = lowest)
+  const tr = makeRawTransport(id), ck = new SharedClock({ samples: 8 });
+  const bme = { clientId: id, name, tracked: true, handSpan: null };
+  const bcourt = selfMap(bme);
+  const bot = new BotTile({ transport: tr, clock: ck, court: bcourt, seat: 0, clientId: id, name, holdMs: 800, throwEvery: 6000, rateHz: 30 });
+  const r = new Room({ transport: tr, clock: ck, net: bot.net, court: bcourt, me: { clientId: id, name, tracked: true, aspect: 16 / 9, handSpan: null, kind: 'bot' }, isRelay: url.transport === 'ws', pingMs: url.transport === 'ws' ? 1000 : 250 });
+  await r.join();
+  const rec = { id, name, bot, room: r, transport: tr, clock: ck };
+  S.bots.push(rec);
+  return rec;
+}
+function removeBot(rec) {
+  rec.room.leave(); rec.bot.dispose(); try { rec.transport.close(); } catch (_) {}
+  S.bots = S.bots.filter(b => b !== rec);
+}
+
+// ── room / seat map / roster → tiles ────────────────────────────────────────────────────────────────────────
+function rosterView() { return room.roster.map(p => ({ ...p, seat: court.seatOfClient(p.clientId), isHost: p.clientId === room.hostId })); }
+function seatNames() { const o = {}; if (court) for (const s of court.map.seats) o[s.seat] = s.name; return o; }
+function wireRoomEvents() {
+  room.on('roster', (roster) => {
+    S.roster = roster;
+    for (const p of roster) if (!S.tiles.has(p.clientId)) addTile({ clientId: p.clientId, name: p.name || p.clientId, kind: (!p.kind || p.kind === 'local') ? 'remote' : p.kind, seat: S.tiles.size, local: false });   // a peer's PRESENCE kind is its own view ('local'): here it is a remote
+    for (const [id, t] of [...S.tiles]) if (!t.local && !roster.some(p => p.clientId === id)) removeTile(id);   // local tiles (me, clones) are never pruned by the wire
+    ui.renderRoster(rosterView(), S.me);
+    if (!S.modeUser && room.isHost) { const want = roster.length > 1 ? 'free' : 'practice'; if (want !== S.mode) setMode(want, false); }
+  });
+  room.on('peer-joined', (p) => { if (p.clientId !== S.me.clientId) announce(`${p.name || p.clientId} joined`); });
+  room.on('peer-left', (p) => { announce(`${p.name || p.clientId} left`); });
+  room.on('host', ({ isHost }) => { S.me.isHost = isHost; game.isHost = isHost; if (lb) { if (isHost) lb.becomeHost(); else lb.resign(); } ui.renderRoster(rosterView(), S.me); });
+  game.addEventListener('seatmap', (e) => onSeatMap(e.detail.map));
+}
+function onSeatMap(map) {
+  S.seatMap = map;
+  const order = map.seats.map(s => s.clientId);
+  for (const s of map.seats) { const t = S.tiles.get(s.clientId); if (t) t.seat = s.seat; }
+  ui.reorder(order);
+  S.me.seat = court.seatOfClient(S.me.clientId);
+  net.seat = S.me.seat >= 0 ? S.me.seat : SEAT_NONE;
+  cues.predictor.mySeat = S.me.seat;
+  relayout();
+  if (!room.isHost) { if (map.mode && map.mode !== S.mode) { S.mode = map.mode; game.setMode(map.mode); const r = ui.el.panel.querySelector(`input[name=mode][value=${map.mode}]`); if (r) r.checked = true; } }
+  else if (map.mode !== S.mode) room.publish({ mode: S.mode });   // host: a roster republish (Room.buildMap) dropped the mode patch — put it back once
+  const goalSel = document.getElementById('goalSeat'), gv = String(map.goal ?? -1);
+  if (goalSel && [...goalSel.options].some(op => op.value === gv)) goalSel.value = gv;   // a value with no option (goal -1) would blank the select
+  for (const t of S.tiles.values()) ui.setTileState(t.clientId, { goal: t.seat === (map.goal ?? -1) });
+  ui.setScore(game.score, seatNames());
+  ui.renderRoster(rosterView(), S.me);
+}
+/** The persisted Game-tab "Ball size" slider value (metres), or null when the user never moved it (the game's default wins then). */
+function storedBallSize() { try { const v = localStorage.getItem('hopeos.ballsize'); return v == null ? null : (Number.isFinite(+v) ? +v : null); } catch { return null; } }
+/**
+ * B1 + B7: the Game-tab sliders drive the game (host publishes ballR / shelf in the seat map; a client's sliders follow the map),
+ * the shelf guide line shows on the local tile while the game runs (chromeFrame), the hand-state chip is fed by game.handState.
+ */
+function wireSizeControls() {
+  ui.setBallSize(game.radiusM, { emit: false });
+  ui.setShelf(Math.round(game.shelfFrac * 100), { emit: false });
+  ui.addEventListener('ballsize', (e) => { if (!S.me.isHost) { ui.toast('Only the host sets the ball size', { ms: 1500 }); return; } game.setBallRadiusM(e.detail.value); });
+  ui.addEventListener('shelf', (e) => { if (!S.me.isHost) { ui.toast('Only the host sets the shelf height', { ms: 1500 }); return; } game.setShelfFrac(e.detail.pct / 100); });
+  game.addEventListener('ballsize', (e) => { ui.setBallSize(e.detail.radiusM, { emit: false }); });                      // followed from the wire / clamped
+  game.addEventListener('shelf', (e) => { ui.setShelf(Math.round(e.detail.frac * 100), { emit: false }); });
+  game.addEventListener('release', (e) => { if (e.detail && e.detail.kind === 'throw') throwUntil = performance.now() + 600; });
+}
+/** ONE additive glow sprite (canvas radial gradient, layer 0, no extra context) under the ball: ~1.8 r in the sim seat's colour. */
+function makeHalo(scene) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const g = cv.getContext('2d'), grad = g.createRadialGradient(64, 64, 6, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,0.65)'); grad.addColorStop(0.42, 'rgba(255,255,255,0.28)'); grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({ map: tex, color: 0xffffff, transparent: true, opacity: 0.85, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, toneMapped: false });
+  const sp = new THREE.Sprite(mat); sp.name = 'ballGlow'; sp.frustumCulled = false; sp.renderOrder = 29; sp.layers.set(0); sp.visible = false;
+  scene.add(sp);
+  return sp;
+}
+let haloSeat = -2, throwUntil = 0;
+/** per frame after game.tick: BallFx from the ball state, the glow under the ball (seat colour), the hand-state chip every 6 frames */
+function ballVisualsFrame(dt, now, sim) {
+  const b = game.ball, r = b.sphere.radius, vis = layers.game && b.mesh.visible;
+  if (ballFx) {
+    ballFx.setVisible(vis);
+    if (vis) ballFx.update(dt, { pos: b.pos, vel: b.vel, r, phase: game.phase, onSurface: b.pos.y <= b.floorY + r + 1e-3, quat: b.quat, held: !!(b.hold || b.cradle), floorY: b.floorY });
+  }
+  if (ballHalo) {
+    ballHalo.visible = vis;
+    if (vis) {
+      const seat = net.owner >= 0 ? net.ownerSimSeat : (net.simSeat >= 0 ? net.simSeat : 0);
+      if (seat !== haloSeat) { haloSeat = seat; ballHalo.material.color.set(getComputedStyle(frame).getPropertyValue('--tw-seat-' + (seat % 9)).trim() || '#ffe66d'); }
+      ballHalo.position.copy(b.pos); const d = 3.6 * r; ballHalo.scale.set(d, d, 1);
+    }
+  }
+  if (S.frames % 6 === 0) { handChipFrame(now, sim); interactionsFrame(); }
+}
+/** B7 hand-state chip on the tile whose hands the game reads (mine, or a clone / clip seat I proxy as host); mine is cleared otherwise. */
+function handChipFrame(now, sim) {
+  const me = tileOf(S.me.clientId), t = sim || me; if (!t) return;
+  const chip = (h) => { if (!h || h.state === 'absent') return null; if (h.hold) return { kind: 'holding', how: h.hold }; if (now < throwUntil) return 'throwing'; return h.state === 'closed' ? 'cupped' : h.state; };
+  ui.setHandStates([chip(game.handState('left')), chip(game.handState('right'))], { clientId: t.clientId });
+  if (t !== me && me) ui.setHandStates([null, null], { clientId: me.clientId });
+}
+/** Advertised hand span (court units) = EMA of the tracker's wrist→middle-MCP span; keyboard hand → nominal; nothing → null. */
+let spanAdvertised = null, spanLastAt = -Infinity;
+function updateHandSpan(now) {
+  const me = tileOf(S.me.clientId); if (!me) return;
+  let span = null;
+  const pk = me.pipe && (me.pipe.packs.R || me.pipe.packs.L);
+  if (pk && pk[0] && pk[9]) { const s = Math.hypot(pk[9].x - pk[0].x, pk[9].y - pk[0].y, pk[9].z - pk[0].z) / U; me.spanEma = me.spanEma == null ? s : me.spanEma * 0.9 + s * 0.1; span = me.spanEma; }
+  else if (kb && kb.state.active) span = KB_SPAN_U;
+  else if (me.spanEma != null && now - me.lastDetect < 2000) span = me.spanEma;
+  if (span === spanAdvertised) return;
+  const changed = span == null || spanAdvertised == null || Math.abs(span - spanAdvertised) / spanAdvertised > 0.1;
+  if (changed && now - spanLastAt >= 2000) { spanAdvertised = span; spanLastAt = now; room.setHandSpan(span); }
+}
+
+// ── B3: connection chip, invite row, reconnect states ───────────────────────────────────────────────────────
+function wireJoinChrome(raw) {
+  join.mountChip(ui.el.topbar);                                              // top bar, before #topbarBtns: Connecting… / Connected · n / Reconnecting… / Offline
+  join.chip.attach(transport, { room });                                     // WsRelayTransport 'state' + Room 'roster'; loopback → connected
+  join.mountPeopleInvite(document.getElementById('roster'));                 // People pane: "Invite people · Room CODE · link or QR"
+  join.addEventListener('copy', (e) => ui.toast(e.detail.ok ? 'Invite link copied' : 'Copy failed — select the link and copy it', { ms: 2000, level: e.detail.ok ? 'info' : 'warn' }));
+  if (!url.roomFromLink && url.transport === 'loopback') {
+    // no room yet: Invite made a fresh code on the shared relay; when the dialog closes this page moves into that room (the invitees'
+    // link only meets a page that is on the relay in that room — a loopback page cannot be joined from another device)
+    let invited = false;
+    join.addEventListener('invite', () => { invited = true; });
+    join.dlg.addEventListener('close', () => {
+      if (!invited || url.auto) return;
+      const u = new URL(join.inviteUrl); if (S.me.name) u.searchParams.set('name', S.me.name);
+      ui.toast(`Moving you into room ${join.room}…`, { ms: 2500 }); announce(`Moving into room ${join.room}`);
+      setTimeout(() => { location.assign(u.toString()); }, 600);
+    });
+  }
+  if (raw && typeof raw.on === 'function') {                                // WsRelayTransport only: surface reconnects (the chip shows the state; a toast says why)
+    let wasOpen = false;
+    raw.on('state', (st) => {
+      if (st.state === 'open') { if (st.reconnected || wasOpen) { ui.toast('Reconnected to the relay', { ms: 2000 }); announce('Reconnected'); } wasOpen = true; }
+      else if (st.state === 'closed' && st.willReconnect) { ui.toast(`Connection lost — reconnecting in ${Math.round((st.delayMs || 0) / 1000)} s (attempt ${st.attempt})`, { ms: 2500, level: 'warn' }); if (wasOpen) announce('Connection lost, reconnecting'); }
+      else if (st.state === 'closed') { ui.toast('Offline — the relay connection closed; reload to rejoin', { ms: 6000, level: 'error' }); announce('Offline', 'assertive'); }
+      S.join.state = st.state;
+    });
+  }
+}
+
+// ── game events → chrome / live regions ─────────────────────────────────────────────────────────────────────
+function wireGameEvents() {
+  const seatTile = (seat) => tileAtSeat(seat);
+  for (const ev of ['phase', 'owner', 'launch', 'claim', 'goal', 'wall', 'respawn', 'release', 'grab', 'mode', 'seatmap', 'respawnLocal']) game.addEventListener(ev, (e) => { const L = window.__twin.events; L.push({ ev, t: clock.now(), tl: performance.now(), d: ev === 'seatmap' ? { v: e.detail.map && e.detail.map.v } : (e.detail && e.detail.claim ? { seat: e.detail.claim.seat, reason: e.detail.claim.reason, tState: e.detail.claim.tState, mine: e.detail.mine } : e.detail) }); if (L.length > 200) L.shift(); });
+  game.addEventListener('chip', (e) => { const t = seatTile(e.detail.seat); if (t) ui.setTileState(t.clientId, { chip: e.detail.text }); });
+  game.addEventListener('ring', (e) => {
+    const t = seatTile(e.detail.seat); if (!t) return;
+    const kind = e.detail.kind === 'predicted' || e.detail.kind === 'confirmed' ? 'incoming' : e.detail.kind;
+    ui.setTileState(t.clientId, { ring: kind });
+    setTimeout(() => { const cur = ui.tiles.get(t.clientId); if (cur && cur.state.ring === kind) ui.setTileState(t.clientId, { ring: null }); }, kind === 'incoming' ? 600 : 400);
+  });
+  game.addEventListener('owner', () => refreshOwnerChrome());
+  game.addEventListener('claim', () => refreshOwnerChrome());
+  game.addEventListener('launch', () => refreshOwnerChrome());
+  game.addEventListener('goal', () => { ui.setScore(game.score, seatNames()); if (!S.a11y.reducedMotion && sfx) { /* cue already played by the game */ } });
+  game.addEventListener('phase', (e) => { if (e.detail.to === PHASE.RESPAWN || e.detail.to === PHASE.IDLE) refreshOwnerChrome(); });
+  game.addEventListener('grab', (e) => { if (e.detail.seat === S.me.seat) announce(`You picked up the ball (${e.detail.type})`); });
+  game.addEventListener('wall', (e) => { if (!ballFx) return; const n = e.detail.edge === 0 ? { x: 1, y: 0, z: 0 } : e.detail.edge === 1 ? { x: -1, y: 0, z: 0 } : e.detail.edge === 2 ? { x: 0, y: -1, z: 0 } : { x: 0, y: 1, z: 0 }; ballFx.bounce(n, 1); });   // B2: squash on the wall's normal (EDGE L/R/T/B)
+}
+function refreshOwnerChrome() {
+  const owner = net.owner >= 0 && !net.inTransit ? net.ownerSimSeat : -1;
+  for (const t of S.tiles.values()) ui.setTileState(t.clientId, { ball: t.seat === owner });
+}
+
+// ── B5: gestures → Raise control / reactions; REACTION 0x32 on the wire; remote reactions play on the right tile ─────────────
+const EMOJI_KIND = { '\u{1F44D}': 'like', '❤️': 'love', '\u{1F602}': 'laugh', '\u{1F62E}': 'surprised', '\u{1F44F}': 'applause' };
+function sendReaction(kind, { on = true, slot = 0 } = {}) {
+  if (!transport || S.me.seat < 0) return false;
+  try { transport.send(encodeReaction(S.me.seat, kind, clock.now(), rxSeq++ & 0xffff, clock.now(), { on, slot }), { reliable: true }); return true; }
+  catch (e) { console.warn('[twin] reaction send', e); return false; }
+}
+/** the detector's event on MY tile: raise goes through the Raise BUTTON (one code path: TwinUI toggle → pill → onRaise → wire); the rest float + wire */
+function onGesture(ev) {
+  S.gestures.events++; S.gestures.last = { kind: ev.kind, on: ev.on, slot: ev.slot, t: ev.t };
+  const me = tileOf(S.me.clientId);
+  if (ev.kind === 'raise') {
+    const btn = document.getElementById('btnRaise'), pressed = btn && btn.getAttribute('aria-pressed') === 'true';
+    if (btn && pressed !== !!ev.on) btn.click();                             // → ui.setTileState({raised}) + 'raise' event + raiseChanged(on)
+    return;
+  }
+  if (me && rxFx) rxFx.react(me.el, ev, S.me.name);                           // emoji on my tile + live text
+  sendReaction(ev.kind, { on: true, slot: ev.slot === 'right' ? 1 : 0 });
+}
+function raiseChanged(on) {
+  S.gestures.raised = !!on;
+  if (gestures) { gestures.raised = !!on; if (!on) gestures.raisedSlot = null; }   // the button lowered / raised: the detector's latch follows
+  announce(on ? 'Hand raised' : 'Hand lowered');
+  sendReaction('raise', { on: !!on });
+}
+/** React menu (TwinUI already floats the emoji on my tile): announce + wire only */
+function reactFromMenu(emoji) {
+  const kind = EMOJI_KIND[emoji] || 'like';
+  announce(`${S.me.name} reacted ${emoji}`);
+  sendReaction(kind, { on: true });
+}
+/** REACTION 0x32 from a peer → the tile of that seat (never my own echo); the raise pill through the same ReactionFx.setRaised path */
+function onReactionPacket(buf) {
+  let r; try { r = decodeReaction(buf); } catch { return; }
+  if (r.seat === S.me.seat) return;
+  const t = tileAtSeat(r.seat); if (!t || !rxFx) return;
+  rxFx.react(t.el, { kind: r.name, on: !!r.on }, t.name || nameOfSeat(r.seat));
+}
+function onPacket(buf) {
+  if (!(buf instanceof ArrayBuffer) || buf.byteLength < 8) return;
+  const type = new Uint8Array(buf)[0];
+  if (type === PK_REACTION) onReactionPacket(buf);
+  else if (type === 0x31 && lb && isScorePacket(buf)) lb.apply(buf);
+}
+/** B4 progress toasts: one toast per prop id, updated in place (searching → downloading N % → ready / no model found) */
+const modelToasts = new Map();
+function modelStatus(st) {
+  if (!st || !st.phase || !(st.id || st.kind || st.name)) return;                 // the fetcher's bare terminal echo carries neither: the executor's (with id) is the one shown
+  const prop = st.id ? S.props.get(st.id) : null, kind = st.kind || (prop && prop.kind) || null;
+  const key = String(kind || st.name || st.id).toLowerCase(), name = st.name || kind || 'model';
+  if (!st.kind && kind) st = { ...st, kind };
+  const stamp = key + ':' + st.phase; if (modelStatus.last && modelStatus.last.stamp === stamp && performance.now() - modelStatus.last.at < 1500) return;   // fetcher + executor both report a phase
+  modelStatus.last = { stamp, at: performance.now() };
+  const text = st.phase === 'searching' ? `Looking for a ${st.kind || name} model…`
+    : st.phase === 'downloading' ? `Downloading ${name} ${Math.round((st.progress || 0) * 100)} %`
+    : st.phase === 'parsing' ? `Preparing ${name}…`
+    : st.phase === 'ready' ? `${name} is ready${st.tier && st.tier !== 'catalog' ? ` (${st.tier})` : ''}`
+    : st.phase === 'fallback' ? `No ${st.kind || name} model found — the placeholder stays${st.error ? ' (' + String(st.error).slice(0, 60) + ')' : ''}`
+    : st.phase === 'cancelled' ? `${name} cancelled` : null;
+  if (!text) return;
+  const done = st.phase === 'ready' || st.phase === 'fallback' || st.phase === 'cancelled';
+  let el = modelToasts.get(key);
+  if (el && el.isConnected && !done) { const span = el.querySelector('span'); if (span) span.textContent = text; return; }
+  if (el && el.isConnected) el.remove();
+  el = ui.toast(text, { ms: done ? 3000 : 15000, level: st.phase === 'fallback' ? 'warn' : 'info' });
+  if (el && !done) modelToasts.set(key, el); else modelToasts.delete(key);
+  if (done) announce(text);
+}
+/** the interactions hook: 'ball' while the ball is in my tile / arriving / held; 'prop:<id>' per spawned prop (every 6 frames) */
+function interactionsFrame() {
+  const b = game.ball, vis = layers.game && b.mesh.visible;
+  const mine = net.isOwner && net.simSeat === S.me.seat && !net.inTransit;
+  const ballHere = vis && (mine || game.phase === PHASE.ARRIVING || (mine && !!(b.hold || b.cradle)));
+  if (ballHere) interactions.add('ball'); else interactions.remove('ball');
+  for (const tag of interactions.active()) if (tag.startsWith('prop:') && !S.props.has(tag.slice(5))) interactions.remove(tag);
+  for (const id of S.props.keys()) interactions.add('prop:' + id);
+  applyHoloHands();
+}
+
+// ── controls ────────────────────────────────────────────────────────────────────────────────────────────────
+function setMode(mode, user = true) {
+  if (user) S.modeUser = true;
+  S.mode = mode;
+  if (room.isHost) room.publish({ mode });                          // first: BallGame.setMode -> setGoal(-1) republishes {...court.map} with this mode
+  game.setMode(mode);
+  const r = ui.el.panel.querySelector(`input[name=mode][value=${mode}]`); if (r) r.checked = true;
+}
+function setDeviceOnly(on) {
+  S.me.shareMode = on ? 'device-only' : 'share';
+  if (cmd) cmd.mode = on ? 'local' : url.agent;
+  if (on && ptt) ptt.stop();
+}
+async function runCommand(text) {
+  if (!cmd) { ui.setAgentStatus('error', { text: 'agent unavailable' }); return null; }
+  ui.setAgentStatus('thinking'); S.agent.status = 'thinking';
+  try {
+    const r = await cmd.command(text, { speaker: S.me.name });
+    S.agent.last = { text, actions: r.actions, say: r.say, source: r.source, rounds: r.rounds ?? null, ms: r.ms, status: r.status };
+    S.agent.status = r.status === 'error' ? 'error' : 'done';
+    ui.setAgentStatus(S.agent.status, { ...S.agent.last, text: r.say || text });
+    return r;
+  } catch (e) { S.agent.status = 'error'; ui.setAgentStatus('error', { text: e.message || String(e) }); announce(e.message || String(e), 'assertive'); return null; }
+}
+async function pttDown() { if (!ptt || S.me.shareMode === 'device-only') return; if (!ptt.stream && !(await ptt.arm())) return; sfx.duck(true); ptt.start(); }
+function pttUp() { if (!ptt) return; ptt.stop(); sfx.duck(false); }
+function kickoff() { if (!S.me.isHost) { ui.toast('Only the host kicks off', { ms: 2000 }); return false; } if (net.seat === SEAT_NONE) { ui.toast('Waiting for the seat map…', { ms: 2000 }); return false; } game.running = true; const r = game.start(); if (r && lb) lb.startRound(); return r; }
+function play(on = !game.running) {
+  if (on) { if (!room.clockReady()) { ui.toast('Waiting for the clock to sync…', { ms: 2000 }); return false; } game.start(); if (lb && lb.isHost) lb.startRound(); refreshOwnerChrome(); return true; }
+  game.stop(); if (lb && lb.isHost) lb.endRound(); refreshOwnerChrome(); return false;
+}
+/**
+ * ?auto=1: run (mirror / claim) as soon as the clock is ready; a HOST kicks off only once it holds a real seat, nobody owns the
+ * ball, and — unless ?host=1 said so — two presence periods have passed since join (a late joiner is host of its own
+ * one-member room until the peers' PRESENCE arrives; kicking off then would claim as SEAT_NONE and fight the real host).
+ */
+function autoPlay() {
+  const joinedAt = performance.now();
+  const tick = () => {
+    if (!game.running && room.clockReady()) { game.running = true; refreshOwnerChrome(); }
+    if (!S.me.isHost || !game.running || net.owner >= 0 || net.inTransit || net.seat === SEAT_NONE || S.me.seat < 0) return;
+    // a late joiner is host of its own one-member room until the peers' PRESENCE arrives: peers REPLY to a newcomer's PRESENCE at
+    // once (Room._onPresence), so one round trip — 1.5 s covers a cold relay — is enough; a lone participant then kicks off in practice
+    if (!url.host && performance.now() - joinedAt < Math.min(1500, 2 * room.presenceMs)) return;
+    if (game.start() && lb) lb.startRound();
+  };
+  tick();
+  setInterval(tick, 200);
+}
+function bindControls() {
+  ui.addEventListener('holohands', applyHoloHands);                                  // button / H key / Layers checkbox / ui.setHoloHands()
+  applyHoloHands();
+  ui.bindControlBar({
+    onCam: (on) => { if (localStream) for (const tr of localStream.getVideoTracks()) tr.enabled = on; const me = tileOf(S.me.clientId); if (me) ui.setTileState(me.clientId, { pill: on ? (S.me.shareMode === 'device-only' ? 'device-only' : 'tracking') : 'camera-off' }, { immediate: true }); },
+    onMic: () => {}, onShare: (id) => { if (id === 'play') play(true); }, onReact: (emoji) => reactFromMenu(emoji), onRaise: (on) => raiseChanged(on), onMore: () => {},
+    onLeave: () => leave(),
+  });
+  ui.bindPanel({
+    onLayer: (name, on) => setLayer(name, on),
+    onMode: (m) => setMode(m), onGoal: (seat) => { if (S.me.isHost) game.setGoal(seat); else ui.toast('Only the host sets the goal', { ms: 2000 }); },
+    onPlay: () => play(), onKickoff: () => kickoff(), onReset: () => { game.reset(); if (lb && lb.isHost) lb.resetScores(); ui.setScore(game.score, seatNames()); },
+    onCommand: (text) => runCommand(text),
+    onPttDown: () => pttDown(), onPttUp: () => pttUp(),
+    onTab: () => {},
+  });
+  ui.bindKeys({ onKey: (action, down) => {
+    window.__twin.lastKey = { action, down, t: performance.now() };
+    switch (action) {
+      case 'kbhand': kb.toggle(down); S.a11y.kb = kb.state; if (down) announce('Keyboard hand on: arrows move, hold Space to grab'); else announce('Keyboard hand off'); break;
+      case 'kickoff': if (down) kickoff(); break;
+      case 'play': if (down) play(); break;
+      case 'mute': if (down) { sfx.mute(!sfx.muted); layers.sfx = !sfx.muted; ui.toast(sfx.muted ? 'Sound off' : 'Sound on', { ms: 1200 }); } break;
+      case 'hud': if (down) setLayer('hud', !layers.hud); break;
+      case 'ptt': if (down) pttDown(); else pttUp(); break;
+      default: if (action.startsWith('goal:') && down) { const seat = +action.slice(5) - 1; if (S.me.isHost && court.rectOf(seat)) game.setGoal(seat); }
+    }
+  } });
+}
+function setLayer(name, on) {
+  layers[name] = !!on;
+  const box = ui.el.panel.querySelector(`input[data-layer=${name}]`); if (box && box.checked !== !!on) box.checked = !!on;
+  if (name === 'hands') for (const t of S.tiles.values()) applyHandsLayer(t);
+  if (name === 'hud') hud.setVisible(on);
+  if (name === 'sfx') sfx.mute(!on);
+  if (name === 'game') { game.ball.mesh.visible = on && game.ball.mesh.visible; if (!on) game.stop(); else if (room.clockReady()) game.start(); }
+  if (name === 'props' && !on) { for (const p of [...S.props.values()]) exec.exec('remove_object', { target: p.id }); }
+  if (name === 'body' && !window.__twin.bodyOn) ui.toast('Body layer is a T9 stretch seam in this build', { ms: 2500 });   // T9 block owns the toggle
+}
+function leave() {
+  try { room.leave(); } catch (_) {}
+  for (const c of S.clones) { try { c.room.leave(); } catch (_) {} }
+  for (const b of [...S.bots]) removeBot(b);
+  if (localStream) for (const tr of localStream.getTracks()) tr.stop();
+  for (const t of S.tiles.values()) if (t.source && t.source.stop) t.source.stop();
+  try { transport.close(); } catch (_) {}
+  stopLoop();
+  ui.toast('Left the meeting — consent kept', { ms: 3000 }); announce('You left the meeting');
+}
+
+// ── the loop (CONTRACTS §6) ─────────────────────────────────────────────────────────────────────────────────
+let loopHandle = 0, lastNow = 0, fpsAcc = 0, fpsN = 0, fpsAt = 0, lastAutotest = 0, lastChrome = 0, detectRR = 0;
+const EMPTY = { L: null, R: null, hands: [] };
+function startLoop() {
+  lastNow = performance.now(); fpsAt = lastNow;
+  if (url.fixedstep) loopHandle = setInterval(() => { if (!S.paused) frameOnce(); }, 16);
+  else { const raf = () => { loopHandle = requestAnimationFrame(raf); if (!S.paused) frameOnce(); }; loopHandle = requestAnimationFrame(raf); }
+}
+function stopLoop() { if (url.fixedstep) clearInterval(loopHandle); else cancelAnimationFrame(loopHandle); loopHandle = 0; }
+function pause(on) { S.paused = on === undefined ? !S.paused : !!on; return S.paused; }
+/** one manual frame (probes; independent of the interval — pause() first for determinism) */
+function step(dt = 1 / 60) { frameOnce(dt); }
+function frameOnce(forcedDt) {
+  const now = performance.now(), t0 = now;
+  let dt = forcedDt ?? (now - lastNow) / 1000; lastNow = now;
+  dt = clamp(Number.isFinite(dt) ? dt : 1 / 60, FEEL.DT_MIN, FEEL.DT_MAX);
+  S.frames++; window.__twin.frames = S.frames;
+  if (typeof window.__twin.beforeFrame === 'function') { try { window.__twin.beforeFrame(dt, now); } catch (e) { console.warn('[twin] beforeFrame hook', e); } }   // probe seam: drive S.ovPacks per frame
+  fpsN++; if (now - fpsAt >= 500) { S.fps = fpsN * 1000 / (now - fpsAt); fpsN = 0; fpsAt = now; }
+  const nowS = clock.now();
+
+  // [0] room cadence, clones' presence, bots (remotes on the wire)
+  room.tick(now);
+  for (const c of S.clones) c.room.tick(now);
+  for (const b of S.bots) { b.bot.tick(now); b.room.tick(now); }
+
+  // colliders the rigs conform to: the game ball + every local prop
+  const cols = [];
+  if (layers.game && game.ball.collider.active && game.ball.mesh.visible) cols.push(game.ball.collider);
+  for (const p of S.props.values()) if (p.ball.collider.active) cols.push(p.ball.collider);
+
+  // [2] local tiles: detect (budgeted round-robin, the primary always) → [5] ovPacks seam → [3] HAND_STREAM
+  let detectMs = 0;
+  if (kb) { kb.tick(dt); kbReach(); }                              // the keyboard hand writes S.ovPacks[me] BEFORE the seam is read
+  const locals = [...S.tiles.values()].filter(t => t.local);
+  const order = locals.length > 1 ? [locals[0], ...locals.slice(1).slice(detectRR % (locals.length - 1)), ...locals.slice(1).slice(0, detectRR % (locals.length - 1))] : locals;
+  detectRR++;
+  for (const t of order) {
+    if (t.pipe) {
+      if (t === locals[0] || detectMs < DETECT_BUDGET_MS) {
+        const d0 = performance.now();
+        const r = t.pipe.detect(now, dt, cols);
+        t.detectMs = performance.now() - d0; detectMs += t.detectMs;
+        t.packs = r.packs; t.hands = t.pipe.hands; t.handL = r.handL; t.handR = r.handR;
+        if (t.packs.hands.length) t.lastDetect = now;
+        if (t.loading) { t.loading = false; ui.setTileState(t.clientId, { loading: false }); }   // B7: the tracker runs — skeleton off
+      }
+    } else if (!t.pipe) { t.packs = EMPTY; t.hands = { left: null, right: null }; }
+    applyOverride(t, dt, cols);
+  }
+  updateHandSpan(now);
+  for (const t of locals) sendHands(t, now, nowS);
+  // HoloHands mode is applied in interactionsFrame() (every 6 frames) and on the 'holohands' event — see applyHoloHands().
+  if (gestures) { const meT = locals[0]; if (meT) { try { gestures.update(nowS, meT.packs, (window.__twin.body && window.__twin.body.rig && window.__twin.body.pts && window.__twin.body.pts.length >= 33) ? window.__twin.body.pts : null); } catch (e) { console.warn('[twin] gestures', e); } } }
+
+  // [4] remote tiles: RemoteHands.read → RemoteTile.feed (its own HandViews measures chirality) → alpha → HUD age
+  for (const t of S.tiles.values()) {
+    if (t.local || !t.remote) continue;
+    const seat = t.seat;
+    const rd = seat >= 0 ? remote.read(seat, nowS) : null;
+    if (rd && seat >= 0) t.remote.setSlotsToDrop(remote.slotsToDrop(seat, nowS));
+    const r = t.remote.feed(rd, now, dt, cols);
+    t.packs = r.packs; t.hands = t.remote.hands; t.handL = r.handL; t.handR = r.handR;
+    t.ageMs = rd ? rd.ageMs : Infinity; t.alpha = rd ? rd.alpha : 0;
+    t.remote.setAlpha(rd && Number.isFinite(rd.ageMs) ? rd.alpha : 1);
+    if (hud) hud.remoteAge(t.clientId, t.name, t.ageMs);
+    applyOverride(t, dt, cols);
+  }
+
+  // [6] local props (agent) — the executor runs PropBall.update per prop with MY packs
+  const me = tileOf(S.me.clientId);
+  if (exec && layers.props) exec.tick(dt, me ? me.packs : EMPTY, me ? { left: me.handL, right: me.handR } : null);
+
+  // [7] the game ball: the sim tile is mine, or the untracked seat I proxy as host (a clone / clip tile on this page)
+  let simTile = me;
+  if (layers.game) {
+    const simSeat = net.simSeat;
+    let sim = tileAtSeat(simSeat); if (!sim || !sim.local) sim = me;
+    simTile = sim;
+    game.tick(now, dt, sim ? sim.packs : EMPTY, sim ? { left: sim.handL, right: sim.handR } : null);
+  }
+  ballVisualsFrame(dt, now, simTile);                               // B2 fx + glow, B7 hand-state chip (every 6 frames)
+  if (lb && lb.isHost) lb.tick(nowS, (seat) => (seat === net.simSeat && net.isOwner) ? !!(game.ball.hold || game.ball.cradle) : (seat >= 0 ? ((remote.read(seat, nowS) || {}).hold || {}).mode > 0 : null));
+
+  // [8] render: one surface, one scissored viewport per tile
+  hhEnforce();                                                      // HoloHands hidden: the rigs re-show themselves in pose(); veto that after the fade
+  const list = []; for (const t of S.tiles.values()) if (t.cam && t.vp) list.push({ cam: t.cam, vp: t.vp });
+  stage.render(list);
+
+  // [9] 2D cues, HUD, chrome, AUTOTEST
+  if (arrivalsCtx) {
+    arrivalsCtx.clearRect(0, 0, ui.el.arrivals.width, ui.el.arrivals.height);
+    if (cues.ring && !S.a11y.reducedMotion) cues.ring.draw(nowS); else if (cues.ring) cues.ring.draw(nowS);
+    if (cues.miss) cues.miss.draw(now);
+  }
+  const scriptMs = performance.now() - t0;
+  if (hud) {
+    hud.frame({ scriptMs, detectMs, fps: S.fps });
+    hud.ownAge(me && me.pipe && me.packs.hands.length ? now - me.lastDetect + me.detectMs : (me ? me.detectMs : 0));
+    hud.relay({ rttMs: clock.rtt, offsetMs: clock.offset, samples: clock.samples.length, errMs: clock.samples.length ? Math.abs(clock.rtt) / 2 : NaN });
+    hud.ball(net.getStats(), game.phase, game.leadMs);
+    hud.contexts(stage.contexts());
+    hud.render(now);
+  }
+  if (now - lastChrome >= 250) { lastChrome = now; chromeFrame(now); }
+  if (url.auto && now - lastAutotest >= 1000) { lastAutotest = now; console.log(hud.autotestLine({ tiles: S.tiles.size, ball: ballLine(), owner: net.owner, inTransit: net.inTransit, phase: game.phase })); }
+}
+/**
+ * Keyboard-hand REACH + GRIP. KeyboardSource has no depth axis (its pack sits on the hand plane z = -D) and its closed shape
+ * (PackGen.cup, a 10 cm anatomical cup) cannot wrap the court ball nor survive a carry (the lane's depth bias moves a free ball
+ * behind a cup that sits on its centre plane, where _wrapGrab's inner-side gate never fires). So while Space is held the page
+ * gives the keyboard hand (a) a DEPTH latched to the ball it is over: palm (r + 2.2 cm) in front of the ball's depth, kept while
+ * closed, and (b) a GRIP shape: the doctrine-true wrap of tests/ball-game-smoke.mjs (`around`) re-based on the PALM point, so
+ * the fingers curl around a sphere of that ball's radius (r + 2.2 cm) behind the palm. The open / flat hand stays on the plane.
+ * The hand reaches to and closes around the ball — the ball is never moved toward the hand; contacts stay hull-vs-joint-spheres
+ * and the pickup is still _wrapGrab: closing with the palm off the ball grabs nothing (tests/_twinprobe.mjs #9).
+ */
+const KB_REACH_M = 0.12, KB_DEFAULT_R = 0.06, KB_SKIN = 0.003;
+let kbDepth = null, kbR = KB_DEFAULT_R;
+const GRIP_DIR = (() => { const l = Math.hypot(0.1, 1); return { x: 0, y: 0.1 / l, z: 1 / l }; })();   // the palm point p[9] sits on B + GRIP_DIR·(r + JOINT_RADII[9] + skin)
+/**
+ * r-AWARE wrap grip (reviewer (b)): the doctrine-true `around(B, r)` of tests/ball-game-smoke.mjs — every joint sphere on the surface of a
+ * sphere of radius r (r + JOINT_RADII[i] + 3 mm from B, inside the lane's 6 mm skin), palm joints on the +z face, the four fingers curling
+ * over the top to the far side (PIP ~70°, DIP ~110°, TIP ~150° from the palm contact: DIP/TIP normals > 72° from the palm normal = the
+ * wrap gate's "opposite" test), real-scale palm (span 0.204 so packRadii k = 1). The old fixed-offset cup (fingers at x ±4 cm, z -(r+1.3 cm))
+ * left every finger joint 1.5-2.5 cm off a 5-6 cm ball: no far-side contact, no wrap.
+ */
+function gripPack(P, r) {
+  const V = (x, y, z) => ({ x, y, z });
+  const d9 = r + JOINT_RADII[9] + KB_SKIN;
+  const B = V(P.x - GRIP_DIR.x * d9, P.y - GRIP_DIR.y * d9, P.z - GRIP_DIR.z * d9);
+  const p = new Array(21).fill(0).map(() => V(B.x, B.y - 0.3, B.z + 0.5));
+  const at = (i, dx, dy, dz, skin = KB_SKIN) => { const l = Math.hypot(dx, dy, dz), d = r + JOINT_RADII[i] + skin; return V(B.x + dx / l * d, B.y + dy / l * d, B.z + dz / l * d); };
+  p[9] = at(9, 0, 0.1, 1); p[5] = at(5, 0.35, 0.1, 1); p[13] = at(13, -0.35, 0.1, 1); p[17] = at(17, -0.7, 0.05, 1, 0.01);
+  p[0] = V(p[9].x, p[9].y - 0.204, p[9].z + 0.01);
+  const cols = [[5, 6, 7, 8, 0.3], [9, 10, 11, 12, 0.0], [13, 14, 15, 16, -0.3], [17, 18, 19, 20, -0.6]];
+  for (const [, pip, dip, tip, x] of cols) { p[pip] = at(pip, x, 0.94, 0.34); p[dip] = at(dip, x, 0.64, -0.77); p[tip] = at(tip, x, 0.17, -0.98); }
+  for (const i of [1, 2, 3, 4]) p[i] = V(B.x + r + 0.08, B.y - 0.05, B.z + 0.02);
+  return p;
+}
+/**
+ * At the Space press the keyboard hand REACHES for the nearest hull within KB_REACH_M on screen (a hand's width): the grip sphere is
+ * centred on that ball (the hand moves to it — the ball is never moved toward the hand) and its depth is latched while closed; with
+ * nothing in reach the hand closes on empty space at the hand plane and grabs nothing. Contacts stay hull-vs-joint-spheres, the
+ * pickup is still _wrapGrab.
+ */
+function kbReach() {
+  const me = tileOf(S.me.clientId), ov = me && S.ovPacks[me.clientId];
+  if (!kb.state.active || !ov || !ov.R || !kb.state.closed) { kbDepth = null; return; }
+  if (kbDepth === null) {                                            // latch at the Space press: the nearest hull on screen
+    let best = null, bd = KB_REACH_M;
+    const cands = [];
+    if (layers.game && game.ball.mesh.visible && game.ball.collider.active) cands.push(game.ball);
+    for (const p of S.props.values()) cands.push(p.ball);
+    for (const b of cands) { const d = Math.hypot(b.pos.x - kb.state.x, b.pos.y - kb.state.y); if (d < bd) { bd = d; best = b; } }
+    kbR = best ? best.sphere.radius : KB_DEFAULT_R;
+    const d9 = kbR + JOINT_RADII[9] + KB_SKIN;
+    if (best) { kb.state.x = best.pos.x + GRIP_DIR.x * d9; kb.state.y = best.pos.y + GRIP_DIR.y * d9; }   // the hand reaches: palm point on the ball's +z face
+    kbDepth = (best ? best.pos.z : -D) + GRIP_DIR.z * d9;
+  }
+  ov.R = gripPack({ x: kb.state.x, y: kb.state.y, z: kbDepth }, kbR);
+}
+/** ovPacks seam [5]: the override replaces the tile's packs BEFORE rigs and physics read them (rigs re-posed, HandBodies re-fed). */
+function applyOverride(t, dt, cols) {
+  const ov = S.ovPacks[t.clientId];
+  if (!ov) return;
+  const L = ov.L && ov.L[0] ? ov.L : null, R = ov.R && ov.R[0] ? ov.R : null;
+  const hands = [];
+  if (L) hands.push({ mesh: 'L', slot: 'left', points: L, img: null });
+  if (R) hands.push({ mesh: 'R', slot: 'right', points: R, img: null });
+  t.packs = { L, R, hands };
+  if (t.local) t.lastDetect = performance.now();
+  const rigs = t.pipe || t.remote;
+  if (rigs) {
+    if (rigs.rigR) { if (!t.pipe) rigs.rigR.tick(performance.now() * 0.001); rigs.rigR.pose(R, cols); }
+    if (rigs.rigL) { if (!t.pipe) rigs.rigL.tick(performance.now() * 0.001); rigs.rigL.pose(L, cols); }
+  }
+  if (t.handL) { if (L) t.handL.update(L, dt); else t.handL.drop(); }
+  if (t.handR) { if (R) t.handR.update(R, dt); else t.handR.drop(); }
+}
+/** [3] HAND_STREAM at 30 Hz per local tile: the RAW PlayerPipeline shape (never flipped / relabelled), synthetic packs via packToHands. */
+function sendHands(t, now, nowS) {
+  if (now - t.lastSend < 1000 / 30) return;
+  const seat = court.seatOfClient(t.clientId);
+  if (seat < 0 || seat === SEAT_NONE || !S.seatMap) return;
+  const tr = t === tileOf(S.me.clientId) ? transport : t.transport;
+  if (!tr) return;
+  let hands = null;
+  const ov = S.ovPacks[t.clientId];
+  if (ov && t.uvCam) {
+    hands = { left: null, right: null };
+    if (ov.L && ov.L[0]) hands.left = packToHands(ov.L, t.uvCam, { slot: 'left', mirrorDist: D }).left;
+    if (ov.R && ov.R[0]) hands.right = packToHands(ov.R, t.uvCam, { slot: 'right', mirrorDist: D }).right;
+  } else if (t.pipe) hands = t.hands || { left: null, right: null };
+  else hands = { left: null, right: null };
+  let hold = null;
+  if (t.seat === net.simSeat && net.isOwner && (game.ball.hold || game.ball.cradle)) {
+    const b = game.ball;
+    hold = { mode: b.hold ? (b.hold.type === 'clip' ? HOLD.CLIP : HOLD.WRAP) : HOLD.CRADLE, slot: b.hold ? b.hold.slot : b.cradle };
+  }
+  t.lastSend = now;
+  try { tr.send(encodeHandStream(seat, hands, t.seq++ & 0xffff, nowS, { hold }), { reliable: false }); } catch (e) { /* a malformed synthetic pack never stops the loop */ }
+}
+function chromeFrame(now) {
+  for (const t of S.tiles.values()) {
+    if (t.local) {
+      const patch = { ageMs: null, alpha: 1 };
+      if (t === tileOf(S.me.clientId)) patch.pill = !t.camOk ? 'camera-off' : S.me.shareMode === 'device-only' ? 'device-only' : 'tracking';
+      else patch.pill = t.camOk ? 'tracking' : 'camera-off';
+      ui.setTileState(t.clientId, patch);
+    } else {
+      const fresh = Number.isFinite(t.ageMs) && t.ageMs < 2000;
+      ui.setTileState(t.clientId, { pill: fresh ? 'landmarks' : 'no-data', ageMs: fresh ? Math.round(t.ageMs) : null, alpha: fresh ? t.alpha : 0.6 });
+    }
+  }
+  ui.showShelf(layers.game && game.running);                                   // B7: dashed "BALL SHELF" guide on my tile while the game runs
+  if (game.mode === 'potato' && game.potato && net.owner >= 0) ui.setPotato(net.ownerSimSeat, Math.max(0, game.potato.untilMs - clock.now()));
+  else ui.setPotato(-1, null);
+  ui.setTimer(now - bootAt);
+}
+const bootAt = performance.now();
+function ballLine() { const b = game.ball; return { x: +b.pos.x.toFixed(3), y: +b.pos.y.toFixed(3), z: +b.pos.z.toFixed(3), held: b.hold ? b.hold.type : (b.cradle ? 'cradle' : null), vis: !!b.mesh.visible }; }
+function snapshot() {
+  const g = game ? game.snapshot() : null;
+  return {
+    me: { ...S.me }, mode: S.mode, boot: { ...S.boot }, roster: S.roster.map(p => ({ clientId: p.clientId, name: p.name, kind: p.kind, tracked: p.tracked })),
+    seatMap: S.seatMap ? { v: S.seatMap.v, goal: S.seatMap.goal, kickoff: S.seatMap.kickoff, mode: S.seatMap.mode ?? null, seats: S.seatMap.seats.map(s => s.clientId) } : null,
+    court: court ? { R: court.R } : null, phase: game ? game.phase : null, ball: g ? g.ball : null, game: g ? { owner: g.owner, inTransit: g.inTransit, score: g.score, goal: g.goal, potato: g.potato, leadMs: g.leadMs, isOwner: g.isOwner, stats: g.stats } : null,
+    net: net ? net.getStats() : null, hud: hud ? hud.toJSON() : null, contexts: stage ? stage.contexts() : 0, frames: S.frames, fps: S.fps,
+    tiles: [...S.tiles.values()].map(t => ({ clientId: t.clientId, seat: t.seat, kind: t.kind, local: t.local, hands: t.packs.hands.length, ageMs: Number.isFinite(t.ageMs) ? Math.round(t.ageMs) : null, idx: t.idx, layer: t.layer, rect: t.rect })),
+    props: [...S.props.keys()], bots: S.bots.map(b => ({ id: b.id, stats: b.bot.stats })), transport: transport && transport.stats ? { ...transport.stats } : null,
+    agent: { status: S.agent.status, last: S.agent.last, mode: cmd ? cmd.mode : null }, shareMode: S.me.shareMode, kb: kb ? { ...kb.state, shape: kb.shape, depth: kbDepth, gripR: kbR } : null,
+    gestures: S.gestures ? { ...S.gestures, detectorRaised: gestures ? gestures.raised : null } : null, interactions: interactions.active(), join: S.join ? { ...S.join } : null,
+    leaderboard: lb ? { isHost: lb.isHost, round: { ...lb.round }, rows: [...lb.rows.values()].map(r => ({ seat: r.seat, name: r.name, goals: r.goals, catches: r.catches, passes: r.passes, streak: r.streak })), stats: { ...lb.stats } } : null,
+  };
+}
+
+// ── go ──────────────────────────────────────────────────────────────────────────────────────────────────────
+if (url.shell) bootShell().catch(e => { console.error(e); });
+else bootTwin().catch(e => { S.boot.error = String(e && e.stack || e); console.error('[twin] boot failed', e); ui.toast('Boot failed: ' + (e.message || e), { ms: 8000, level: 'error' }); window.__twin.ready = true; resolveReady(); });
+</script>
+<!-- T9 — body layer (stretch): pose on the LOCAL tile + body support for props (CONTRACTS §3.11, §3.15, §6 [D7]; SPEC §3 layer toggles).
+     Separate block per the merge rule: the T6 loop is not edited — this hooks in through window.__twin: TwinUI 'layer' events for the
+     "Body + collide" checkbox, and per frame through game.tick / exec.tick / stage.render wrappers (one body tick per S.frames, whichever
+     runs first — loop order [6] props -> [7] game -> [8] render), so the BodyBody reaches the game ball as game.tick(..., extraBodies)
+     and every local prop as prop.ball.extraBodies. Seams: S.ovBody (>= 33 world-space points of the local tile replace the pose BEFORE
+     the rig and the BodyBody read them — the S.ovPacks idea for the body), window.__twin.body (the BodyLayer), window.__twin.bodyOn(on).
+     ?body=1 turns the layer on at boot: stage.contexts() 4 -> 5 (one pose landmarker on the local tile only). Nothing of the pose goes on
+     the wire in this build (POSE33 0x31 reserved): the body collides with MY ball / props; peers see the ball's motion as BALL_STATE. -->
+<script type="module" id="t9">
+import { BodyLayer } from './sdk/game/body-layer.js';
+(async () => {
+  const T = window.__twin; if (!T || !T.ready) return;
+  await T.ready;
+  if (T.shell || !T.S || !T.stage || T.S.boot.error) return;
+  const { S, ui, stage } = T;
+  const params = new URL(location.href).searchParams;
+  const flag = k => params.has(k) && !['0', 'false', 'off'].includes(params.get(k));
+  const wantBoot = flag('body');
+  const preConsented = flag('consent') || wantBoot;                       // ?consent=1 / ?body=1 = the explicit ask (test + URL modes)
+  const BODY_ASK = 'Share your body pose with this meeting as well? It is covered by the notice you agreed to.';   // C11 (About text, T7)
+  const BODY_OK = 'tw-body-ok';
+  const meTile = () => S.tiles.get(S.me.clientId);
+  const box = () => ui.el.panel && ui.el.panel.querySelector('input[data-layer=body]');
+  const syncBox = (on) => { const b = box(); if (b && b.checked !== !!on) b.checked = !!on; S.layers.body = !!on; };
+  const bodies = [];                                                       // extraBodies for the ball lane: [BodyBody] while present, else []
+  let layer = null, pending = null, lastFrame = -1, lastNow = performance.now();
+  S.ovBody = null;
+  Object.defineProperty(T, 'ovBody', { get: () => S.ovBody, set: (v) => { S.ovBody = v; }, configurable: true });
+
+  /** one body tick per frame: pipe.body (this frame's detect) or S.ovBody -> rig -> BodyBody; then the bodies list the lane reads */
+  function bodyFrame(dt, now) {
+    if (lastFrame === S.frames) return; lastFrame = S.frames; lastNow = now;
+    bodies.length = 0;
+    if (!layer || !layer.ready) return;
+    const t = meTile();
+    const bb = layer.tick(t && t.pipe ? t.pipe.body : null, dt, now, S.ovBody);
+    if (bb && bb.present) bodies.push(bb);
+    for (const p of S.props.values()) if (p.ball && p.ball.extraBodies !== bodies) p.ball.extraBodies = bodies;   // [D7] props too
+  }
+  const nowDt = (now) => Math.min(0.05, Math.max(1 / 240, (now - lastNow) / 1000));
+  if (T.exec && typeof T.exec.tick === 'function') { const o = T.exec.tick.bind(T.exec); T.exec.tick = (dt, packs, hb) => { bodyFrame(dt, performance.now()); return o(dt, packs, hb); }; }
+  if (T.game && typeof T.game.tick === 'function') {
+    const o = T.game.tick.bind(T.game);
+    T.game.tick = (now, dt, packs, hb, extra) => { bodyFrame(dt, now); const eb = bodies.length ? (extra && extra.length ? [...bodies, ...extra] : bodies) : (extra || []); return o(now, dt, packs, hb, eb); };
+  }
+  { const o = stage.render.bind(stage); stage.render = (list) => { const now = performance.now(); bodyFrame(nowDt(now), now); return o(list); }; }   // both layers off: still pose the rig
+
+  async function enable() {
+    if (pending) return pending;
+    if (layer && layer.ready) return layer;
+    const t = meTile();
+    if (!t || !t.local || !t.pipe) { ui.toast('Body: no local tracking tile to attach the pose to', { ms: 3000, level: 'warn' }); syncBox(false); return null; }
+    pending = (async () => {
+      try {
+        if (!layer) layer = new BodyLayer({ scene: stage.scene, tile: t, stage, look: 'ghost', style: 'lite', hands: false });
+        else layer.tile = t;
+        ui.toast('Body: loading the pose model on your tile…', { ms: 2500 });
+        await layer.init();                                                // re-creates t.pipe with withPose:true (+1 context), forges the rig once
+        T.body = layer;
+        syncBox(true);
+        ui.toast(`Body on: pose on your tile only (${stage.contexts()} contexts)`, { ms: 2500 }); ui.announce('Body layer on: your body now supports the ball');
+        return layer;
+      } catch (e) {
+        console.warn('[t9] body layer failed', e); ui.toast('Body layer failed: ' + (e && e.message || e), { ms: 5000, level: 'error' });
+        syncBox(false); return null;
+      } finally { pending = null; }
+    })();
+    return pending;
+  }
+  function disable() {
+    if (pending) return pending.then(disable);
+    if (!layer) { syncBox(false); return null; }
+    layer.disable();                                                       // the pose landmarker stays loaded (fast re-enable); rig hidden, body absent
+    bodies.length = 0;
+    syncBox(false); ui.toast('Body off', { ms: 1500 }); ui.announce('Body layer off');
+    return null;
+  }
+  /** C11: ask once per session before the first enable (skipped under ?consent=1 / ?body=1, which are the explicit ask). */
+  function askOnce() {
+    if (preConsented) return true;
+    try { if (sessionStorage.getItem(BODY_OK) === '1') return true; } catch (_) {}
+    const ok = typeof window.confirm === 'function' ? window.confirm(BODY_ASK) : true;
+    if (ok) { try { sessionStorage.setItem(BODY_OK, '1'); } catch (_) {} }
+    return ok;
+  }
+  T.bodyOn = (on) => { if (on) { if (!askOnce()) { syncBox(false); return Promise.resolve(null); } return enable(); } return Promise.resolve(disable()); };
+  ui.addEventListener('layer', (e) => { if (e.detail && e.detail.name === 'body') T.bodyOn(!!e.detail.on); });
+  T.bodyStats = () => (layer ? { ...layer.stats, ready: layer.ready, source: layer.source, contexts: stage.contexts(), bodies: bodies.length, snapshot: layer.snapshot() } : null);
+  if (wantBoot) await enable();
+})().catch(e => console.error('[t9] body block failed', e));
+</script>
+<!-- T7 — privacy chrome finish: About dialog sections (voice/text notice C7, consent status, Body C11, bug report C13, links to the
+     served privacy / terms / licences pages) and the API tab's live numbers (TwinUI.setApiLive -> API_LIVE per layer).
+     Owns nothing in the loop: every getter reads window.__twin at call time (1 Hz, only while the API tab is visible). -->
+<template id="t7-about">
+  <h3 id="about-privacy" tabindex="-1">Privacy</h3>
+  <p id="about-consent" class="tw-caption1"></p>
+  <p>Your camera picture never leaves this device on the tracking path. What is shared while you play is hand landmark data (and body pose if Body is on), only with the people in this meeting, through the relay named in the consent notice. Turn sharing off at any time with <strong>On-device only</strong> in the control bar; the tile pill always says what is happening.</p>
+  <p id="about-c7"></p>
+  <p id="about-c11">Body (control bar, off by default): <em>Also track and share your body pose (33 points) for the avatar body and body collisions.</em> Turning it on asks once - "Share your body pose with this meeting as well? It is covered by the notice you agreed to." - and is covered by the same notice.</p>
+  <p id="about-c13">Bug reports: <em>Send a bug report (text and technical details only - no screenshot, no camera, no hand data)</em>. The screenshot field is never populated.</p>
+  <p id="about-links" class="tw-caption1"></p>
+</template>
+<script type="module" id="t7">
+import { PRIVACY_URL, LICENSES_URL, CONSENT_VERSION } from './sdk/game/twin-ui.js';
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const num = (v, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
+const ms = (v) => (Number.isFinite(v) ? Math.round(v) + ' ms' : '—');
+const tw = () => window.__twin || {};
+
+// ── About dialog: insert the T7 sections before the C10 trademark footnote ────────────────────────────────────
+function finishAbout() {
+  const about = $('#about'), foot = $('#about-trademark'), tpl = $('#t7-about');
+  if (!about || !foot || !tpl || $('#about-privacy')) return;
+  foot.before(tpl.content.cloneNode(true));
+  const { STRINGS } = tw(), c7 = STRINGS && STRINGS.c7;
+  const c7El = $('#about-c7');
+  if (c7 && c7El) { c7El.textContent = c7.notice; const a = document.createElement('a'); a.href = PRIVACY_URL; a.target = '_blank'; a.rel = 'noopener'; a.textContent = c7.noticeLink; c7El.append(a, c7.noticeTail); }
+  const links = $('#about-links');
+  if (links) {
+    const add = (label, href) => { const a = document.createElement('a'); a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = label; links.appendChild(a); };
+    links.append('Served copies: '); add('privacy notice', PRIVACY_URL); links.append(' · '); add('terms of use', 'docs/teams/terms.html'); links.append(' · '); add('licences', LICENSES_URL);
+    links.append(' · '); add('consent copy', 'docs/teams/consent-copy.md'); links.append(' · '); add('data flow', 'docs/teams/data-flow.md'); links.append(' · run book: '); add('TEAMSLAB.md', 'TEAMSLAB.md');
+  }
+  refreshConsent();
+}
+function consentRecord() { try { return JSON.parse(localStorage.getItem('hopeos.consent') || 'null'); } catch { return null; } }
+function shareMode() { const S = tw().S; return (S && S.me && S.me.shareMode) || 'share'; }
+function refreshConsent() {
+  const el = $('#about-consent'); if (!el) return;
+  const rec = consentRecord(), S = tw().S, url = S && S.url;
+  const when = rec && rec.at ? new Date(rec.at).toLocaleString() : (url && url.consent ? 'skipped by ?consent=1' : 'not recorded');
+  el.textContent = `Consent: version ${rec && rec.version ? rec.version : CONSENT_VERSION} · recorded ${when} · sharing mode now: ${shareMode()} (recorded on this device only; not sent to hopeOS).`;
+}
+
+// ── API tab live numbers (SPEC §8 "Live numbers" column) ─────────────────────────────────────────────────────
+const LIVE = {
+  'Holohands overlay': () => { const { hud, S, stage } = tw(); if (!hud) return S && S.boot ? 'boot: ' + S.boot.stage : '—';
+    const local = S ? [...S.tiles.values()].filter(t => t.local && t.pipe).length : 0;
+    return `detect ${num(hud.detectMs, 1)} ms (p50 ${num(hud.detectP50, 1)}) · rig ${num(hud.fps, 1)} fps · ${local} local landmarker${local === 1 ? '' : 's'} · ${stage ? stage.contexts() : 0} ctx`; },
+  'Outgoing video': () => { const o = tw().outgoing, S = tw().S; if (o && o.stats) return `${num(o.stats.fps, 1)} fps · ${o.stats.width || '—'}x${o.stats.height || '—'}${o.open ? ' · popup open' : ''}`;
+    return S && S.url && S.url.outgoing ? 'popup requested (?outgoing=1) · sink not attached' : 'off (More -> Outgoing video, or ?outgoing=1)'; },
+  'Body + collision': () => { const S = tw().S, b = tw().body; if (b && b.stats) return `pose ${ms(b.stats.poseMs)} · ${b.stats.tracked ? 'tracked' : 'no pose'}`;
+    return S && S.layers && S.layers.body ? 'on · pose — (layer not attached)' : 'off (seam: body-layer.js)'; },
+  'Multi-person ids': () => { const { S, room } = tw(); if (!S) return '—';
+    const map = S.seatMap, n = S.roster ? S.roster.length : 0, tiles = S.tiles ? S.tiles.size : 0;
+    const host = room && room.isHost ? 'me' : (map && map.seats[0] ? (map.seats[0].name || map.seats[0].clientId) : '—');
+    return `roster ${n} · tiles ${tiles} · seat map v${map ? map.v : '—'} · host ${host} · my seat ${S.me ? S.me.seat : '—'}`; },
+  'Game objects (doctrine)': () => { const { game, S } = tw(); if (!game) return S && S.props ? `props ${S.props.size}` : '—';
+    const b = game.ball, snap = b.snapshot ? b.snapshot() : {};
+    const hold = b.hold ? `${String(b.hold.type).toUpperCase()} slot ${b.hold.slot}` : (b.cradle != null && b.cradle !== false ? 'CRADLE slot ' + b.cradle : 'free');
+    const hands = S ? [...S.tiles.values()].reduce((a, t) => a + (t.packs && t.packs.hands ? t.packs.hands.length : 0), 0) : 0;
+    return `hold ${hold} · onFloor ${snap.onFloor ? 'yes' : 'no'} · hands in scene ${hands} · props ${S && S.props ? S.props.size : 0} · pos ${num(snap.pos && snap.pos.x, 2)},${num(snap.pos && snap.pos.y, 2)}`; },
+  'Cross-tile ball': () => { const { net, game, hud } = tw(); if (!net) return '—';
+    const st = net.getStats(), lead = game && game.snapshot ? game.snapshot().leadMs : null;
+    return `owner ${st.owner} seq ${st.ownerSeq} · ${st.inTransit ? 'IN TRANSIT' : 'held'} · phase ${game ? game.phase : '—'} · conflicts ${st.conflicts} · stretches ${st.stretches} · handoff p95 ${ms(hud ? hud.handoffP95 : NaN)} · one-way ${ms(st.oneWayMs)} · lead ${ms(lead)} · pkt age ${ms(st.packetAgeMs)} · sent ${net.seq}`; },
+  'Remote hands': () => { const { hud } = tw(); if (!hud) return '—';
+    const r = hud.remoteStats(), ids = Object.keys(r); if (!ids.length) return 'no remote tiles';
+    return ids.map(id => { const x = r[id]; return `${x.name}: ${x.hz} pkt/s · age ${ms(x.ageMs)} (p50 ${ms(x.p50)} p95 ${ms(x.p95)}) · ${x.band}`; }).join(' | '); },
+  'Command agent': () => { const { S, cmd } = tw(); if (!S || !S.agent) return '—';
+    const a = S.agent, last = a.last || {}; const usage = last.usage ? ` · usage ${last.usage.input_tokens ?? '?'}/${last.usage.output_tokens ?? '?'}` : '';
+    return `state ${a.status} · mode ${cmd ? cmd.mode : (S.url && S.url.agent) || '—'} · rounds ${last.rounds ?? '—'} · ${ms(last.ms)} · source ${last.source || '—'}${usage}`; },
+  'Latency HUD': () => { const { hud } = tw(); if (!hud) return '—';
+    const r = hud.remoteStats(), rem = Object.values(r).map(x => `${x.name} ${ms(x.ageMs)}`).join(' · ');
+    return `own age ${ms(hud.ownAgeMs)} · ${rem || 'no remote'} · relay rtt ${ms(hud.relayRttMs)} · clock err ${ms(hud.clockErrMs)} (${hud.clockSamples} samples) · script p50 ${num(hud.scriptP50, 1)} ms · fps ${num(hud.fps, 1)}`; },
+  'Relay': () => { const { transport, hud, S, room } = tw(); if (!transport) return '—';
+    const st = transport.stats || {}, kind = S && S.url ? S.url.transport : '—', inner = transport.inner && transport.inner.stats;
+    const loss = inner && inner.sent ? ` · loss ${num(100 * (inner.dropped || 0) / inner.sent, 1)} %` : (S && S.url && S.url.loss ? ` · loss ${S.url.loss} % (injected)` : '');
+    return `${kind} · rtt ${ms(hud ? hud.relayRttMs : NaN)} · sent ${st.sent ?? '—'} · suppressed ${st.suppressed ?? 0}${loss} · pings ${room && room.stats ? room.stats.pings : '—'} · pruned ${room && room.stats ? room.stats.pruned : '—'}`; },
+  'Privacy chrome': () => { const rec = consentRecord(); return `consentVersion ${rec && rec.version ? rec.version : CONSENT_VERSION} · shareMode ${shareMode()} · recorded ${rec && rec.at ? 'yes' : 'no'}`; },
+  'Tenant / packaging': () => 'no live data (manifests only: meeting-app v1.30 RSC x4, video-effects DevPreview)',
+};
+
+async function start() {
+  const t = tw(); if (t.ready && t.ready !== true && t.ready.then) await t.ready;
+  const ui = tw().ui; if (!ui) return;
+  finishAbout();
+  ui.setApiLive(LIVE);
+  ui.addEventListener('deviceonly', refreshConsent);
+  ui.el.about?.addEventListener('toggle', refreshConsent);
+  $('#btnAbout')?.addEventListener('click', refreshConsent);
+  window.__twin.t7 = { LIVE, refreshConsent };
+}
+start().catch(e => console.error('[t7]', e));
+</script>
+</body>
+</html>

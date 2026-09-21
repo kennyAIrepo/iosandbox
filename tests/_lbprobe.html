@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="dark"><head><meta charset="utf-8"><title>leaderboard probe (B6)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- tests/_lbprobe.html — visual probe for sdk/game/leaderboard.js + sdk/ui/leaderboard.css. NOT a product page: the
+     minimal SPEC §2.4 skeleton (top bar chips as TwinUI.setScore builds them, two gallery tiles from the tile template,
+     the People pane) so the score UX can be screenshotted without a camera, a relay, or a WebGL stage. -->
+<link rel="stylesheet" href="../sdk/ui/teams-tokens.css">
+<link rel="stylesheet" href="../sdk/ui/teamslab.css">
+<link rel="stylesheet" href="../sdk/ui/leaderboard.css">
+<style>html, body { margin: 0; height: 100%; background: #000; }</style>
+</head><body>
+<div class="tw-frame tw-meeting" data-theme="dark" data-reduced-motion="false" id="frame">
+  <header id="topbar">
+    <div id="title"><span class="title__name">hopeOS Meeting Sandbox</span><span class="title__sub">&middot; not a Microsoft product</span><span id="timer" class="tw-numeric">02:14</span></div>
+    <div id="scoreboard" aria-label="Score"></div>
+    <div id="topbarBtns"></div>
+  </header>
+  <div id="stage">
+    <div id="gallery" style="--tile-w: 420px; --tile-h: 236px;">
+      <article class="tile tile--local" role="group" aria-label="Kenny" data-seat="0" data-client="c-a" style="left: 20px; top: 40px; --seat-color: var(--tw-seat-0);">
+        <div class="tile__avatar" aria-hidden="true" style="display:flex"><span class="tile__initials">KE</span></div>
+        <div class="tile__chrome"><div class="tile__ring"></div><div class="tile__label"><span class="tile__name">Kenny</span><span class="tile__pill" data-pill="tracking">Tracking</span></div></div>
+      </article>
+      <article class="tile" role="group" aria-label="Bot-1" data-seat="1" data-client="c-b" style="left: 460px; top: 40px; --seat-color: var(--tw-seat-1);">
+        <div class="tile__avatar" aria-hidden="true" style="display:flex"><span class="tile__initials">B1</span></div>
+        <div class="tile__chrome"><div class="tile__ring"></div><div class="tile__label"><span class="tile__name">Bot-1</span><span class="tile__pill" data-pill="landmarks">Landmarks</span></div></div>
+      </article>
+      <article class="tile" role="group" aria-label="Zoë" data-seat="2" data-client="c-c" style="left: 240px; top: 300px; --seat-color: var(--tw-seat-2);">
+        <div class="tile__avatar" aria-hidden="true" style="display:flex"><span class="tile__initials">ZO</span></div>
+        <div class="tile__chrome"><div class="tile__ring"></div><div class="tile__label"><span class="tile__name">Zoë</span><span class="tile__pill" data-pill="landmarks">Landmarks</span></div></div>
+      </article>
+    </div>
+  </div>
+  <aside id="panel">
+    <div class="panel__tabs"><button class="ptab" type="button" role="tab" aria-selected="true">People</button><button class="ptab" type="button" role="tab">Chat</button><button class="ptab" type="button" role="tab">Game</button></div>
+    <div class="panel__body">
+      <section id="pane-people" role="tabpanel">
+        <h2 class="panel__h">People <span id="rosterCount" class="tw-caption1">3</span></h2>
+        <ul id="roster">
+          <li class="roster__row"><span class="roster__avatar">KE</span><span class="roster__name">Kenny (you)</span><span class="roster__meta tw-caption1">seat 0 · host</span></li>
+          <li class="roster__row"><span class="roster__avatar">B1</span><span class="roster__name">Bot-1</span><span class="roster__meta tw-caption1">bot · seat 1</span></li>
+          <li class="roster__row"><span class="roster__avatar">ZO</span><span class="roster__name">Zoë</span><span class="roster__meta tw-caption1">seat 2</span></li>
+        </ul>
+      </section>
+    </div>
+  </aside>
+  <div id="controlbar" role="toolbar" aria-label="Meeting controls"></div>
+  <div id="strip" class="tw-caption1"></div>
+</div>
+<script type="module">
+import { Leaderboard, render, mountLeaderboard, SectionView, ScoreChips, RoundCard, celebrateGoal, SCORE_RULES } from '../sdk/game/leaderboard.js';
+const clock = { T: 1000, now: () => clock.T };
+const lb = new Leaderboard({ isHost: true, clock });
+lb.setRoster([{ seat: 0, name: 'Kenny', clientId: 'c-a' }, { seat: 1, name: 'Bot-1', clientId: 'c-b' }, { seat: 2, name: 'Zoë', clientId: 'c-c' }]);
+lb.startRound();
+// TwinUI.setScore look-alike (the real one rebuilds #scoreboard the same way)
+function setScore() {
+  const sb = document.getElementById('scoreboard'); sb.replaceChildren(); sb.hidden = false;
+  [...lb.rows.values()].sort((a, b) => a.seat - b.seat).forEach((r, i) => {
+    if (i) sb.appendChild(Object.assign(document.createElement('span'), { className: 'sb__sep', textContent: '–' }));
+    const w = document.createElement('span'); w.className = 'sb__seat'; w.style.setProperty('--seat-color', `var(--tw-seat-${r.seat % 9})`);
+    const dot = document.createElement('i'); dot.className = 'sb__dot'; const nm = document.createElement('span'); nm.className = 'sb__name'; nm.textContent = r.name;
+    const sc = document.createElement('b'); sc.className = 'sb__score tw-numeric'; sc.textContent = String(r.goals);
+    w.append(dot, nm, sc); sb.appendChild(w);
+  });
+}
+const section = mountLeaderboard(document.getElementById('pane-people'));
+const chips = new ScoreChips(document.getElementById('scoreboard'), lb, { meSeat: () => 0 });
+const card = new RoundCard(document.getElementById('stage'), { canPlayAgain: () => true, onPlayAgain: () => lb.playAgain() });
+const view = new SectionView(section, lb, { meSeat: () => 0 });
+const draw = () => view.render();
+lb.addEventListener('change', () => setScore());
+lb.addEventListener('goal', e => { if (e.detail.potato) return; const tile = document.querySelector(`.tile[data-seat="${e.detail.seat}"]`); celebrateGoal({ tile, colour: e.detail.row.colour, rng: mulberry(7) }); });
+lb.addEventListener('round', e => { if (e.detail.state === 'ended') card.show(lb.viewState({ meSeat: 0 })); });
+function mulberry(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+setScore(); draw();
+window.__lb = {
+  lb, card, chips,
+  seed() { lb.goal(1); lb.goal(1); lb.throw(1, 0); lb.observeHold(0, true); lb.observeHold(0, false); lb.throw(1, 0); lb.observeHold(0, true); lb.observeHold(0, false); lb.throw(1, 0); lb.observeHold(0, true); lb.observeHold(0, false); lb.goal(2, { potato: true }); clock.T += 66000; draw(); },
+  goal(seat) { lb.goal(seat); },
+  advance(ms) { clock.T += ms; },
+  finish() { while (lb.round.state !== 2) lb.goal(1); },
+  reduced(on) { document.getElementById('frame').dataset.reducedMotion = on ? 'true' : 'false'; },
+  state() { return { rows: lb.viewState({ meSeat: 0 }).rows.map(r => `${r.rank}:${r.name}:${r.goals}G${r.catches}C${r.streak}S`), chips: [...document.querySelectorAll('#scoreboard .sb__seat')].map(c => c.textContent + (c.classList.contains('lb-pulse') ? '*' : '')), flash: [...document.querySelectorAll('.tile.lb-goal-flash')].map(t => t.dataset.seat), confetti: document.querySelectorAll('.lb-confetti i').length, card: !!card.open, cardFocus: document.activeElement && document.activeElement.className, round: lb.round.state, sectionRows: section.querySelectorAll('.lb__row').length, scoredRows: section.querySelectorAll('.lb__row.is-scored').length }; },
+};
+document.documentElement.dataset.ready = '1';
+</script>
+</body></html>

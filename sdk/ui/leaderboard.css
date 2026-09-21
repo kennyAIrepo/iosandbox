@@ -1,0 +1,99 @@
+/* leaderboard.css — score UX for the Teams-twin (B6): top-bar chip pulse + streak flame, the People-pane
+ * "Leaderboard" section, the round-end card and the goal celebration. Every colour / size is a token from
+ * teams-tokens.css or a seat colour from teamslab.css (--tw-seat-N); motion multiplies --tw-motion (0 under
+ * reduced motion) so nothing here animates when the frame says not to. Loaded after teamslab.css. */
+
+/* ---------- (a) top-bar chips: scored pulse + streak flame ---------- */
+.sb__seat { position: relative; border-radius: var(--borderRadiusMedium); padding: 0 4px; margin: 0 -4px; }
+.sb__seat.lb-pulse { animation: lb-chip-pulse calc(600ms * var(--tw-motion) + 1ms) var(--curveDecelerateMid) 1; }
+.sb__seat.lb-pulse .sb__score { color: var(--colorPaletteMarigoldForeground2); }
+@keyframes lb-chip-pulse {
+  0%   { background: var(--colorPaletteMarigoldBackground2); transform: scale(1); }
+  30%  { background: var(--colorPaletteMarigoldBackground2); transform: scale(1.08); }
+  100% { background: transparent; transform: scale(1); }
+}
+.lb-flame { font-size: var(--fontSizeBase200); line-height: 1; margin-left: 2px; filter: saturate(1.1); animation: lb-flame-in calc(400ms * var(--tw-motion) + 1ms) var(--curveDecelerateMax) 1; }
+@keyframes lb-flame-in { from { transform: scale(.4) translateY(4px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ---------- (b) People pane section ---------- */
+.lb { margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--tw-panel-border); }
+.lb__head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; min-width: 0; }
+.lb__head .lb__title { margin: 0 0 8px; }
+.lb__round { color: var(--colorNeutralForeground3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.lb__rows { list-style: none; margin: 0; padding: 0; }
+.lb__row { display: grid; grid-template-columns: 16px 8px minmax(0, 1fr) auto auto; grid-template-areas: "rank dot name goals catches" ". . bar bar bar"; column-gap: 8px; row-gap: 3px;
+  align-items: center; min-height: 32px; padding: 5px 4px; border-radius: var(--borderRadiusMedium); transition: background calc(200ms * var(--tw-motion)) linear; }
+.lb__row:has(.lb__stat--drops) { grid-template-columns: 16px 8px minmax(0, 1fr) auto auto auto; grid-template-areas: "rank dot name goals catches drops" ". . bar bar bar bar"; }
+.lb__row.is-me { background: var(--colorNeutralBackground1); }
+.lb__row.is-scored { background: var(--colorPaletteMarigoldBackground2); }
+.lb__rank { grid-area: rank; color: var(--colorNeutralForeground3); font-size: var(--fontSizeBase200); font-variant-numeric: tabular-nums; text-align: right; }
+.lb__row.is-leader .lb__rank { color: var(--colorPaletteMarigoldForeground2); font-weight: var(--fontWeightSemibold); }
+.lb__dot { grid-area: dot; width: 8px; height: 8px; border-radius: 50%; background: var(--seat-color, var(--colorNeutralForeground3)); }
+.lb__name { grid-area: name; display: flex; align-items: center; gap: 6px; min-width: 0; }
+.lb__nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lb__row.is-leader .lb__nm { font-weight: var(--fontWeightSemibold); }
+.lb__you { color: var(--colorNeutralForeground3); }
+.lb__stat { display: inline-flex; align-items: baseline; gap: 2px; font-variant-numeric: tabular-nums; min-width: 2.4ch; justify-content: flex-end; }
+.lb__stat--goals { grid-area: goals; font-weight: var(--fontWeightSemibold); }
+.lb__stat--catches { grid-area: catches; color: var(--colorNeutralForeground2); }
+.lb__stat--drops { grid-area: drops; color: var(--colorNeutralForeground3); }
+.lb__stat small { font-size: var(--fontSizeBase100); color: var(--colorNeutralForeground3); font-weight: var(--fontWeightRegular); }
+.lb__bar { grid-area: bar; display: block; height: 3px; border-radius: 2px; background: var(--colorNeutralStroke2); opacity: .9; overflow: hidden; }
+.lb__bar i { display: block; height: 100%; border-radius: 2px; background: var(--seat-color, var(--colorBrandBackground)); transition: width calc(400ms * var(--tw-motion)) var(--curveDecelerateMid); }
+.lb__empty { margin: 0; color: var(--colorNeutralForeground3); }
+
+/* ---------- (c) round-end card: centred over the gallery, under the panel / dialogs (z 25) ---------- */
+.lb-card { position: absolute; inset: 0; z-index: 25; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .35); outline: none; }
+.lb-card__inner { position: relative; width: clamp(280px, 60%, 420px); max-height: calc(100% - 32px); overflow: hidden; display: flex; flex-direction: column; padding: 16px 20px 14px;
+  border-radius: var(--borderRadiusXLarge); background: var(--colorNeutralBackground1); color: var(--colorNeutralForeground1); box-shadow: var(--shadow28);
+  animation: lb-card-in calc(240ms * var(--tw-motion) + 1ms) var(--curveDecelerateMax) 1; }
+@keyframes lb-card-in { from { transform: translateY(12px) scale(.98); opacity: 0; } to { transform: none; opacity: 1; } }
+.lb-card__eyebrow { margin: 0; color: var(--colorNeutralForeground3); }
+.lb-card__title { margin: 2px 0 10px; font-size: var(--fontSizeBase500); line-height: var(--lineHeightBase500); font-weight: var(--fontWeightSemibold); }
+.lb-card__rows { list-style: none; margin: 0 0 12px; padding: 0; overflow-y: auto; }
+/* the card rows reuse .lb__rank / .lb__dot / .lb__name, whose grid-area names must exist here too or they land on implicit lines */
+.lb-card__row { display: grid; grid-template-columns: 16px 8px minmax(0, 1fr) auto; grid-template-areas: "rank dot name stats"; column-gap: 8px; align-items: center; min-height: 32px; padding: 4px 4px; border-radius: var(--borderRadiusMedium); border-bottom: 1px solid var(--tw-panel-border); }
+.lb-card__stats { grid-area: stats; }
+.lb-card__row:last-child { border-bottom: 0; }
+.lb-card__row.is-me { background: var(--colorNeutralBackground2); }
+.lb-card__stats { display: inline-flex; align-items: baseline; gap: 3px 4px; color: var(--colorNeutralForeground2); font-variant-numeric: tabular-nums; }
+.lb-card__stats b { color: var(--colorNeutralForeground1); }
+.lb-card__stats small { font-size: var(--fontSizeBase100); color: var(--colorNeutralForeground3); margin-right: 6px; }
+.lb-card__btns { display: flex; gap: 8px; justify-content: flex-end; }
+.lb-card__timer { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--colorBrandBackground); transform-origin: left; animation: lb-card-timer var(--lb-card-ms, 8000ms) linear 1 forwards; }
+.lb-card[data-reduced-motion="true"] .lb-card__timer { display: none; }
+@keyframes lb-card-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.is-short .lb-card__inner { padding: 10px 14px; }
+.is-short .lb-card__title { font-size: var(--fontSizeBase400); margin-bottom: 6px; }
+
+/* ---------- (d) goal celebration: tile outline flash in the scorer's colour + confetti inside the tile ---------- */
+.tile.lb-goal-flash .tile__ring { border: 4px solid var(--lb-colour, var(--colorPaletteMarigoldBorderActive)); box-shadow: var(--tw-halo-strong, var(--tw-halo));
+  animation: lb-flash calc(1200ms * var(--tw-motion) + 1ms) ease-out 1; }
+@keyframes lb-flash { 0%, 20%, 40% { opacity: 1; } 10%, 30% { opacity: .35; } 100% { opacity: 1; } }
+.lb-confetti { position: absolute; inset: 0; z-index: 8; pointer-events: none; overflow: hidden; }
+.lb-confetti i { position: absolute; top: -6%; left: var(--x, 50%); width: 8px; height: 12px; border-radius: 2px; background: var(--c, var(--colorBrandBackground)); opacity: 0;
+  transform: scale(var(--s, 1)); animation: lb-confetti-fall calc(1200ms * var(--tw-motion) + 1ms) var(--curveAccelerateMid) var(--delay, 0ms) 1 forwards; }
+@keyframes lb-confetti-fall {
+  0%   { transform: translate(0, 0) rotate(0deg) scale(var(--s, 1)); opacity: 0; }
+  10%  { opacity: 1; }
+  100% { transform: translate(var(--dx, 0px), calc(var(--tile-h, 320px) * 1.15)) rotate(var(--rot, 360deg)) scale(var(--s, 1)); opacity: 0; }
+}
+.tile.lb-goal-flash .lb-confetti { max-height: 100%; }
+
+/* the frame's own flag (TwinUI.setReducedMotion / --force-prefers-reduced-motion) — same result as the media query */
+.tw-frame[data-reduced-motion="true"] .lb-confetti { display: none; }
+.tw-frame[data-reduced-motion="true"] .sb__seat.lb-pulse, .tw-frame[data-reduced-motion="true"] .lb-flame, .tw-frame[data-reduced-motion="true"] .lb-card__inner,
+.tw-frame[data-reduced-motion="true"] .tile.lb-goal-flash .tile__ring { animation: none; }
+.tw-frame[data-reduced-motion="true"] .lb-card__timer { display: none; }
+
+/* ---------- forced colours / motion ---------- */
+@media (forced-colors: active) {
+  .lb__dot, .lb__bar i { forced-color-adjust: none; background: Highlight; }
+  .tile.lb-goal-flash .tile__ring { forced-color-adjust: none; border-color: Highlight !important; box-shadow: none; }
+  .lb-card__inner { border: 1px solid CanvasText; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sb__seat.lb-pulse, .lb-flame, .lb-card__inner, .lb-card__timer, .tile.lb-goal-flash .tile__ring, .lb-confetti i { animation: none; }
+  .lb-confetti { display: none; }
+  .lb__bar i, .lb__row { transition: none; }
+}
