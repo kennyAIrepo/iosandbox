@@ -248,6 +248,7 @@
       <button class="opt" data-sp="dragon" title="rigged dragon — procedural head-look · walk · run · flapping flight (select it for the motion strip; W/S/A/D drive, Space = fly/land, R/F climb)">🐉 Dragon</button>
       <button class="opt" data-sp="foxfull" title="full-body fox with an authored facial rig (Auto-Rig-Pro-style lip ring · jaw hinge · lids · brows · gaze, built by tools/facerig) — select it → 🎭 mirror me for live lip sync from the camera">🦊 Fox</button>
       <button class="opt" data-sp="fox" title="rigged fox bust — your lips, expressions and head turns land on it live from the camera (select it → 🎭 mirror me)">🦊 Fox bust</button>
+      <button class="opt" data-sp="rug" title="a scanned rug rebuilt as CLOTH — 45×64 simulation lattice under its own 90k-triangle surface; with HoloHands on, lift it, drape it over your palms, close a hand to carry it, pinch with both hands to resize">🧶 Rug</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -545,6 +546,21 @@
     <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a see-through green glass ball with real refraction of the room behind it (the camera feed becomes a live backdrop + reflection map) · grip ✊ / pinch 🤏 to carry, throw, catch · MAKE IT SLIME: the same mass, where it sits, becomes a live particle cloud — it drapes over your fingers, lies flat on your palm, drips wherever nothing holds it, stretches between two hands (a fast yank lets go) · the surface is re-meshed from the cloud every frame</div>
   </div>
   <div class="sec">
+    <div class="lbl">PROP · CLOTH RUG</div>
+    <button id="rugBtn">🧶 SPAWN RUG</button>
+    <div class="row" id="rugSizeRow" style="margin-top:4px">
+      <button class="opt" id="rugSizeDn" title="shrink it — or PINCH with both hands and squeeze">➖ smaller</button>
+      <button class="opt" id="rugSizeUp" title="grow it — or PINCH with both hands and pull apart">➕ bigger</button>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <button class="opt" id="rugDropBtn" title="drop it flat again where your hands are">↺ flatten</button>
+      <button class="opt" id="rugWireBtn" title="show the simulation lattice that makes it bend">◫ lattice</button>
+    </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a real rug (1 M scanned triangles) turned into CLOTH: a 45×64 lattice solves it, its own
+      surface rides along · hold your hands under it and it DRAPES over your palms and folds round every finger · close a hand on it to grab and carry, open to let go ·
+      PINCH with both hands to resize · your fingers cannot pass through it — the fingers stop on the weave, the weave pushes back</div>
+  </div>
+  <div class="sec">
     <div class="lbl">GAME · BEAT RUSH</div>
     <div class="row" id="diffOpts">
       <button class="opt" data-d="chill">Chill</button>
@@ -627,6 +643,7 @@ import { REST_R42, REST_L42 } from './sdk/core/hands.js';
 import { HandBody, GrabbableSphere, GrabbableBox, BodyBody, JOINT_RADII } from './sdk/core/game-physics.js';
 import { makeGlass, updateLens, attachEnv } from './sdk/core/glass.js';
 import { SlimeSim, SlimeSurface, CLOUD_R } from './sdk/core/slime-sim.js';
+import { buildCloth, toLocalHands, clothResistHand, updateClothWire } from './sdk/core/cloth-sim.js';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { PropHull } from './sdk/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdk/core/rubiks-cube.js';
@@ -657,7 +674,7 @@ const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' 
 const BUILD = 'cs-21';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
-  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','slimeBtn','trackName','hint']
+  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','slimeBtn','rugBtn','trackName','hint']
     .map(id => [id, document.getElementById(id)]));
 
 function toast(m, ms = 2200) {
@@ -1721,6 +1738,181 @@ const slimeLab = {
     this.mesh.updateMatrixWorld(true);
     this.metrics = null;
     updateLens(this.mat, this.mesh, camera, R);
+  },
+};
+
+// ─────────────── CLOTH RUG (a scanned rug that actually bends) ───────────────
+// rug.glb arrived as 1,005,393 rigid triangles. Density was never what made it
+// stiff — it had no simulation topology, and no solver touches half a million
+// particles in a frame. tools/cloth rebuilt it as a 45×64 LATTICE (30 mm cells,
+// the measured ceiling for 8 XPBD substeps inside a tracked frame) with the
+// rug's own 90 k-triangle surface EMBEDDED in it, deformed in the vertex shader.
+// Here it becomes a prop: it lies on a holo table, your hands go UNDER it and it
+// drapes over every finger, a closing hand carries it, both hands pinching
+// resize it — and whatever penetration the cloth cannot absorb stops the HAND
+// (clothResistHand mutates the packs before the rigs render, so the drawn
+// fingers never sink into the weave).
+const RUG_URL = 'sdk/assets/props/rug_cloth.glb';
+const RUG_SPEC_URL = 'sdk/assets/props/rug_cloth.json';
+const _rgA = new THREE.Vector3(), _rgB = new THREE.Vector3(), _rgC = new THREE.Vector3();
+const _rgBox = new THREE.Box3();
+let _rugAsset = null;
+
+/** the GLB + its lattice spec, loaded once and shared by every piece */
+async function rugAsset(loader) {
+  if (!_rugAsset) {
+    const [gltf, spec] = await Promise.all([
+      loader.loadAsync(RUG_URL),
+      fetch(RUG_SPEC_URL).then(r => r.json()),
+    ]);
+    _rugAsset = { gltf, spec };
+  }
+  return _rugAsset;
+}
+
+/** one independent rug: its own lattice, its own material (its own lattice texture) */
+async function makeRugPiece(loader, opts = {}) {
+  const A = await rugAsset(loader);
+  const root = A.gltf.scene.clone(true);
+  root.traverse(o => {
+    if (!o.isMesh) return;
+    const m = o.material = o.material.clone();   // per piece: each gets its own lattice texture
+    // the scan exports metallicFactor 1 / roughnessFactor 1 — a rug is a
+    // dielectric, and fully metal with no env map renders as a flat dark shape
+    m.metalness = 0; m.metalnessMap = null; m.roughness = 0.92;
+  });
+  const piece = buildCloth(root, A.spec.grid, {
+    thickness: (A.spec.thickness_mm || 18) / 2000,   // HALF the slab: what a finger touches
+    substeps: 5, gravity: 9.0, ...opts,
+  });
+  piece.hands = {};
+  piece.spec = A.spec;
+  return piece;
+}
+
+/**
+ * One frame of a cloth piece: pinch-resize, grab, solve, push the lattice to
+ * the GPU. `packs` are the SAME welded world packs the HoloHand rigs render
+ * from, so physics matches pixels.
+ */
+function clothTick(piece, packs, dt, o = {}) {
+  const { sim, skin, group, wire } = piece;
+  group.updateWorldMatrix(true, false);
+  const s = group.getWorldScale(_rgA).x || 1;
+  sim.o.scale = s;
+  const hands = toLocalHands(packs, group, dt, piece.hands);
+  const L = hands.find(h => h.slot === 'L'), R = hands.find(h => h.slot === 'R');
+  // ── TWO-HAND PINCH = RESIZE (the basketball / cube / slime gesture): both
+  //    pinches on or near the cloth, pull apart to grow, squeeze to shrink ──
+  piece.scaling = false;
+  if (o.scalable !== false && L && R && L.pinch > 0.6 && R.pinch > 0.6 && !sim.holds.L && !sim.holds.R) {
+    const d = L.gripP.distanceTo(R.gripP) * s;
+    _rgB.copy(L.gripP).lerp(R.gripP, 0.5);
+    sim.bounds(_rgBox);
+    const reach = Math.max(_rgBox.max.x - _rgBox.min.x, _rgBox.max.z - _rgBox.min.z) * 0.7 + 0.15 / s;
+    if (piece._scal || _rgBox.getCenter(_rgC).distanceTo(_rgB) < reach) {
+      if (!piece._scal) piece._scal = { d0: Math.max(d, 1e-3), s0: s };
+      const k = Math.min(o.maxScale || 2.2, Math.max(o.minScale || 0.18, piece._scal.s0 * d / piece._scal.d0));
+      group.scale.setScalar(k); group.updateWorldMatrix(true, false);
+      sim.o.scale = k;
+      piece.scaling = true;
+    }
+  }
+  if (!piece.scaling) piece._scal = null;
+  if (piece.scaling) for (const H of hands) H.grip = 0;      // resizing never also grabs
+  // ── REACH (the prop doctrine): the camera cannot place a hand in depth, so a
+  //    hand held over the sheet brings the FREE sheet to contact depth — z
+  //    only, gravity untouched, never lifted ──
+  if (o.depthBias && !piece.scaling && !sim.holds.L && !sim.holds.R) {
+    sim.bounds(_rgBox); _rgBox.getCenter(_rgC);
+    const hw = (_rgBox.max.x - _rgBox.min.x) * 0.5, hd = (_rgBox.max.z - _rgBox.min.z) * 0.5;
+    for (const H of hands) {
+      const p = H.palmP;
+      if (Math.abs(p.x - _rgC.x) > hw || Math.abs(p.z - _rgC.z) > hd) continue;   // not over it
+      const want = p.y + (sim.o.thickness + 0.02) / s;       // just above the palm
+      const dy = want - _rgBox.min.y;
+      if (dy < 0.002 / s) continue;                          // already at contact
+      sim.shift(0, Math.min(dy, 0.9 / s) * Math.min(1, dt * 4), 0);
+      break;
+    }
+  }
+  sim.step(dt, hands, o.floorY != null ? o.floorY : null);
+  skin.update();
+  updateClothWire(wire, sim);
+  return hands;
+}
+
+/** the residual stop: whatever the cloth could not yield comes out of the HAND */
+function clothResist(piece, packs, share = 1) {
+  if (!piece || !packs) return 0;
+  let d = 0;
+  for (const slot of ['L', 'R']) {
+    const pack = packs[slot];
+    if (pack && pack[0]) d = Math.max(d, clothResistHand(piece.sim, piece.group, pack, _packRadii(pack), { share, gate: 0.004 }));
+  }
+  return d;
+}
+
+const rugLab = {
+  on: false, piece: null, table: null, loading: false, userS: 0.5, wire: false,
+  center: new THREE.Vector3(0, 0, -2), tableY: -1, resistD: 0,
+  async init() {
+    if (this.piece || this.loading) return;
+    this.loading = true;
+    try {
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      this.piece = await makeRugPiece(new GLTFLoader());
+      scene.add(this.piece.group);
+      this.piece.group.scale.setScalar(this.userS);
+      if (!cubeLab.lit) {
+        const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(1.4, 2.6, 2.2);
+        scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun); cubeLab.lit = true;
+      }
+      this.recenter();
+    } finally { this.loading = false; }
+  },
+  recenter() {
+    if (!this.piece) return;
+    views.workspaceCenter(camera, this.center);
+    // it lies on an invisible plane at working height: low enough to slide both
+    // hands UNDER, high enough to stay in frame while it drapes
+    this.tableY = S.mode === 'mirror' ? this.center.y - 0.16 : 0;
+    this.piece.group.position.set(this.center.x, this.tableY + 0.012, this.center.z + 0.05);
+    this.flatten();
+  },
+  flatten() { if (this.piece) this.piece.sim.reset(); },
+  setScale(k) {
+    this.userS = Math.min(2.2, Math.max(0.18, k));
+    if (this.piece) { this.piece.group.scale.setScalar(this.userS); this.piece.sim.o.scale = this.userS; }
+  },
+  setWire(on) {
+    this.wire = on;
+    if (this.piece) this.piece.wire.visible = on;
+    const b = document.getElementById('rugWireBtn'); if (b) b.classList.toggle('sel', on);
+  },
+  async toggle(on) {
+    if (on && !this.piece) await this.init();
+    this.on = on;
+    if (this.piece) { this.piece.group.visible = on; this.piece.wire.visible = on && this.wire; }
+    const b = els.rugBtn;
+    if (b) { b.textContent = on ? '✕ REMOVE RUG' : '🧶 SPAWN RUG'; b.classList.toggle('on', on); }
+    if (on) { if (meshOnly()) applyDisplay('lab'); this.recenter();
+      toast('🧶 cloth rug — slide your hands UNDER it and lift: it drapes over your palms · close a hand to carry it · PINCH with both hands to resize', 5200); }
+  },
+  /** solve + carry; called BEFORE the rigs pose so the stop lands on the drawn hands */
+  update(dt, packs) {
+    if (!this.on || !this.piece || S.mode === 'inspect') return;
+    const floorLocal = (this.tableY + 0.004 - this.piece.group.position.y) / (this.userS || 1);
+    clothTick(this.piece, packs, dt, { floorY: floorLocal, depthBias: S.mode === 'mirror' });
+    this.userS = this.piece.group.scale.x;
+  },
+  resist(packs) {
+    if (!this.on || !this.piece) return 0;
+    return (this.resistD = clothResist(this.piece, packs, 1));
+  },
+  stats() {
+    if (!this.piece) return null;
+    return { ...this.piece.sim.stats(), scale: +this.userS.toFixed(2), resist_mm: +(this.resistD * 1000).toFixed(1) };
   },
 };
 
@@ -3097,6 +3289,11 @@ function loop() {
     const es = _engSdk();
     AVSYNC.packsAligned = !!(es && es.on && es.view === 'pov' && (packs.L || packs.R));
   }
+  // 🧶 CLOTH RUG: solve it with THIS frame's hands, then take whatever the
+  // cloth could not yield out of the HANDS — the rigs pose from the stopped
+  // packs, so the drawn fingers stop ON the weave instead of sinking through it
+  { const rpk = AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs;
+    rugLab.update(dt, rpk); rugLab.resist(rpk); }
   const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active)
     ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider] : null;
   const t1 = performance.now();
@@ -4694,6 +4891,14 @@ els.bowBtn.addEventListener('click', () => {
   if (!LABBOW.on && !ENG.sdk.on && meshOnly()) applyDisplay('lab');
   labBowToggle().catch(e => { console.error(e); toast('🏹 bow failed: ' + (e.message || e), 6000); });
 });
+els.rugBtn.addEventListener('click', async () => {
+  try { await rugLab.toggle(!rugLab.on); }
+  catch (e) { console.error(e); toast('🧶 rug failed: ' + (e.message || e), 6000); }
+});
+document.getElementById('rugSizeDn').addEventListener('click', () => { rugLab.setScale(rugLab.userS / 1.25); toast('🧶 rug ×' + rugLab.userS.toFixed(2)); });
+document.getElementById('rugSizeUp').addEventListener('click', () => { rugLab.setScale(rugLab.userS * 1.25); toast('🧶 rug ×' + rugLab.userS.toFixed(2)); });
+document.getElementById('rugDropBtn').addEventListener('click', () => { rugLab.recenter(); toast('🧶 flattened on the table'); });
+document.getElementById('rugWireBtn').addEventListener('click', () => { rugLab.setWire(!rugLab.wire); toast(rugLab.wire ? '◫ lattice — the 45×64 grid that makes it bend' : '◫ lattice off'); });
 els.slimeBtn.addEventListener('click', () => {
   try { slimeLab.toggle(!slimeLab.on); }
   catch (e) { console.error(e); toast('🟢 slime failed: ' + (e.message || e), 6000); }
@@ -4771,7 +4976,7 @@ window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs,
   get engBodyPts() { return engBodyPts; },
   get bowCol() { return bowGripCollider; },
   get labBow() { return LABBOW; },
-  get slime() { return slimeLab; }, get ballColliders() { return ballColliders; },
+  get slime() { return slimeLab; }, get rug() { return rugLab; }, get ballColliders() { return ballColliders; },
   get nockCol() { return nockCollider; },
   get slimeCol() { return slimeCollider; },
   get arrowCol() { return arrowCollider; },
@@ -5017,6 +5222,7 @@ function engLoop() {
   engEnvTick(avDt);                            // altitude → sky / grid / cloud layer
   engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
+  engRugTick(avDt);                            // 🧶 cloth rugs: solve + hands lift/drape/carry
   engGestureTick(avDt);                        // hand gestures: grab bow, draw string
   engBowTick(avDt);                            // bow draw/loose + arrow ballistics
   // (hand depth-occluders retired: depth-only spheres punched BLACK hand-
@@ -5311,9 +5517,10 @@ function engAvCtlRefresh() {
   const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
   const drec = d && d.type === 'dragon' ? DRAGONS.get(d.id) : null;
   const frec = d && d.type === 'fox' ? FOXES.get(d.id) : null;
-  const show = !!rec || !!drec || !!frec;
+  const rrec = d && d.type === 'rug' ? RUGS.get(d.id) : null;
+  const show = !!rec || !!drec || !!frec || !!rrec;
   lbl.style.display = show ? 'block' : 'none';
-  lbl.textContent = drec ? 'DRAGON · motion' : frec ? 'FOX · face puppet' : 'AVATAR · animation';
+  lbl.textContent = drec ? 'DRAGON · motion' : frec ? 'FOX · face puppet' : rrec ? 'RUG · cloth' : 'AVATAR · animation';
   const fh = document.getElementById('engFoxHint');
   if (fh) fh.style.display = frec ? 'block' : 'none';
   host.style.display = show ? 'flex' : 'none';
@@ -5330,6 +5537,27 @@ function engAvCtlRefresh() {
     if (title) b.title = title;
     b.addEventListener('click', fn); host.appendChild(b);
   };
+  if (rrec) {                                  // RUG strip: hang · flatten · size · lattice
+    const sel = ENG.sel, P = rrec.piece, sim = P.sim;
+    mk(rrec.hang ? '📌 hanging' : '📌 hang it', !!rrec.hang, () => {
+      rrec.hang = !rrec.hang;
+      const top = (sim.ny - 1) * sim.nx, lift = 1.0 / (P.group.scale.x || 1);
+      if (rrec.hang) {                           // hung from every 4th node: it folds between the pins
+        for (let i = 0; i < sim.nx; i += 4) {
+          const k = top + i; sim.pin(k, true);
+          sim.x[k * 3 + 1] = sim.rest[k * 3 + 1] + lift;
+        }
+      } else { for (let i = 0; i < sim.n; i++) sim.pin(i, false); sim.reset(); }
+      engAvCtlRefresh();
+      toast(rrec.hang ? '📌 hung by its far edge — it folds under its own weight (no camera needed to see the cloth work)' : '📌 released — it falls flat again');
+    }, 'hang it from its far edge like a curtain');
+    mk('↺ flatten', false, () => { rrec.hang = false; for (let i = 0; i < sim.n; i++) sim.pin(i, false); sim.reset(); engAvCtlRefresh(); toast('🧶 flat again'); }, 'drop it back flat on the floor');
+    mk('➖', false, () => { P.group.scale.multiplyScalar(1 / 1.25); sim.o.scale = P.group.scale.x; toast('🧶 rug ×' + P.group.scale.x.toFixed(2)); }, 'smaller — or PINCH with both hands and squeeze');
+    mk('➕', false, () => { P.group.scale.multiplyScalar(1.25); sim.o.scale = P.group.scale.x; toast('🧶 rug ×' + P.group.scale.x.toFixed(2)); }, 'bigger — or PINCH with both hands and pull apart');
+    mk('◫ lattice', !!P.wire.visible, () => { P.wire.visible = !P.wire.visible; engAvCtlRefresh(); }, 'show the 45×64 simulation lattice under the surface');
+    mk('📷 frame', false, () => engRugFrame(sel), 'put the camera on it');
+    return;
+  }
   if (frec) {                                  // FOX strip: face live · neutral · mirror/POV
     const sel = ENG.sel, F = frec.driver;
     mk(frec.live ? '🎭 mirroring you' : '🎭 mirror me', frec.live, () => engFoxSetLive(sel, !frec.live).catch(err => toast('⚠ ' + (err.message || err), 5000)),
@@ -6255,6 +6483,47 @@ function _pinchR(pack) {                        // thumb-tip↔index-tip / palm 
   const palm = _gA.copy(pack[0]).distanceTo(pack[9]);
   return palm < 1e-6 ? 9 : _gA.copy(pack[4]).distanceTo(pack[8]) / palm;
 }
+// ─────────────── 🧶 CLOTH RUG in the engine ───────────────
+// The same cloth piece the mirror lab spawns, seated on the engine floor. With
+// HoloHands live in POV the welded packs reach engine space (the anchors
+// doctrine), so the rug is lifted, draped and carried by the SAME hands — and
+// stops them, mesh-true, when it cannot yield.
+const RUGS = new Map();                        // eng id → { piece }
+async function engSpawnRug(meta = {}) {
+  toast('loading the rug…', 8000);
+  const piece = await makeRugPiece(ENG.gltf, { substeps: 5 });
+  const g = piece.group;
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const p = ENG.orbit.target.clone().addScaledVector(fwd, 1.4);
+  g.position.set(p.x, 0.012, p.z);          // the lattice sits at local y = 0 → just clear of the floor
+  engAdopt(g, { type: 'rug', label: meta.label || 'rug ' + (ENG.seq + 1) });
+  if (meta.p) { g.position.fromArray(meta.p); g.rotation.fromArray(meta.r); g.scale.fromArray(meta.s); }
+  RUGS.set(g.userData.eng.id, { piece });
+  engRefreshList(); engAvCtlRefresh();
+  return g;
+}
+function engRugTick(dt) {
+  if (!RUGS.size) return;
+  const T = window.__lab && window.__lab.AVSYNC;
+  const packs = T && T.packsAligned ? T.packs : null;   // rendered POV HoloHands only
+  for (const rec of RUGS.values()) {
+    const g = rec.piece.group;
+    const floorLocal = (0.004 - g.position.y) / (g.scale.x || 1);
+    clothTick(rec.piece, packs, dt, { floorY: floorLocal });
+    if (packs) clothResist(rec.piece, packs, 1);
+  }
+}
+function engRugFrame(o) {                      // put the camera on it
+  const rec = RUGS.get(o.userData.eng.id); if (!rec) return;
+  const b = new THREE.Box3().setFromObject(rec.piece.group), c = b.getCenter(new THREE.Vector3());
+  const span = Math.max(...b.getSize(new THREE.Vector3()).toArray()) || 1;
+  ENG.orbit.target.copy(c);
+  ENG.camera.position.copy(c).add(new THREE.Vector3(span * 0.8, span * 0.9, span * 1.2));
+  ENG.camera.lookAt(c); ENG.orbit.update();
+}
+
+ENG.spawnRug = (...a) => engSpawnRug(...a); ENG.rugs = RUGS; ENG.select = (...a) => engSelect(...a);
+
 function engGestureTick(dt) {
   if (!BOWS.size) return;
   if (LABBOW.on) return;   // the on-hands LAB lane owns hand gestures while armed
@@ -6643,7 +6912,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -6662,6 +6931,8 @@ function engDelete(o) {
   DRAGONS.delete(o.userData.eng.id);
   if (FOXES.get(o.userData.eng.id)?.live) engFoxSetLive(o, false);
   FOXES.delete(o.userData.eng.id);
+  const rg = RUGS.get(o.userData.eng.id);
+  if (rg) { rg.piece.skin.dispose(); RUGS.delete(o.userData.eng.id); }
   const bw = BOWS.get(o.userData.eng.id);
   if (bw) {
     if (bw.nocked) ENG.scene.remove(bw.nocked);
@@ -6711,6 +6982,10 @@ async function engRestore(snap) {
         const g = await engSpawnDragon({ label: rec.label, ...(rec.dragon || {}) });
         g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'rug') {
+      try { await engSpawnRug({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
+      catch (e) { console.warn('rug restore failed', e); }
     }
     else if (rec.type === 'bow') {
       try {
@@ -7003,6 +7278,11 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
     toast('loading dragon…', 6000);
     engSpawnDragon().then(() => toast('🐉 dragon — select it for the motion strip: walk · run · fly · look'))
       .catch(err => toast('⚠ dragon failed: ' + (err.message || err), 6000));
+    return;
+  }
+  if (b.dataset.sp === 'rug') {
+    engSpawnRug().then(() => toast('🧶 rug — CLOTH on a 45×64 lattice. Select it for the strip; with HoloHands in POV your hands lift, drape and carry it', 5600))
+      .catch(err => toast('⚠ rug failed: ' + (err.message || err), 6000));
     return;
   }
   if (b.dataset.sp === 'bow') {

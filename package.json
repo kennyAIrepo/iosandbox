@@ -19,6 +19,7 @@
     "test:facerig": "node tests/facerig-smoke.mjs",
     "test:lipseam": "node tests/lipseam-smoke.mjs",
     "test:facerig-arp": "node tests/facerig-arp-smoke.mjs",
+    "test:cloth": "node tests/cloth-smoke.mjs",
     "relay": "node tools/relay-server.mjs 8787",
     "proxy": "node tools/sandbox-proxy.mjs 3334",
     "test:twin": "node tests/prop-ball-smoke.mjs && node tests/wire-smoke.mjs && node tests/ballnet-smoke.mjs && node tests/command-agent-smoke.mjs && node tests/court-space-smoke.mjs && node tests/pack-gen-smoke.mjs && node tests/ball-game-smoke.mjs && node tests/scene-executor-smoke.mjs && node tests/bot-pass-smoke.mjs && node tests/twin-ui-smoke.mjs",
