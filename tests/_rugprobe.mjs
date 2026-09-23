@@ -9,6 +9,7 @@ import puppeteer from 'puppeteer-core';
 import os from 'node:os';
 import path from 'node:path';
 const SP = process.env.PROBE_SHOTS || os.tmpdir();
+const URL = process.env.PROBE_URL || 'http://localhost:3333/mpbrowser.html';   // PROBE_URL: check a PUBLISHED copy too
 const browser = await puppeteer.launch({
   executablePath: 'C:/Program Files/Google/Chrome/Application/chrome.exe', headless: 'new',
   args: ['--window-size=1300,900', '--no-sandbox', '--use-gl=angle', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream'],
@@ -21,7 +22,7 @@ page.on('console', m => { if (m.type() === 'error' && !/favicon|XNNPACK|404|Fail
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shot = n => page.screenshot({ path: path.join(SP, 'rug-' + n + '.png') });
 
-await page.goto('http://localhost:3333/mpbrowser.html', { waitUntil: 'domcontentloaded' });
+await page.goto(URL, { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#startBtn', { timeout: 30000 });
 await page.click('#startBtn');
 await page.waitForFunction(() => window.__lab && window.__lab.S && window.__lab.S.running, { timeout: 120000 });

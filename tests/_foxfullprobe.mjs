@@ -21,7 +21,7 @@ page.on('console', m => { if (m.type() === 'error' && !/favicon|XNNPACK/.test(m.
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const shot = n => page.screenshot({ path: path.join(SP, n) });
 
-await page.goto('http://localhost:3333/mpbrowser.html', { waitUntil: 'domcontentloaded' });
+await page.goto(process.env.PROBE_URL || 'http://localhost:3333/mpbrowser.html', { waitUntil: 'domcontentloaded' });
 await page.waitForSelector('#engBtn', { timeout: 30000 });
 await page.click('#engBtn');
 await page.waitForFunction(() => document.body.classList.contains('engine-view'), { timeout: 30000 });
