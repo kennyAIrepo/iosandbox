@@ -1,7 +1,7 @@
 /**
  * hopeOS SDK — Skeleton Align (body contract stage 2→3 machinery)
  * ═══════════════════════════════════════════════════════════════
- * The BODY sibling of PuppetStage._extract/_align (sdkmp/lab/puppet-stage.js):
+ * The BODY sibling of PuppetStage._extract/_align (sdk/lab/puppet-stage.js):
  * given ANY rigged model's skeleton, detect its rig landmarks and assign
  * the body-contract channels to them — so the human→puppet translation
  * binds seamlessly on load, and accurately (every guess is reported with

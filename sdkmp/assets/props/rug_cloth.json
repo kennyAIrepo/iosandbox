@@ -1,0 +1,33 @@
+{
+ "source": "rug.glb",
+ "size": [
+  1.308,
+  1.89
+ ],
+ "thickness_mm": 17.5,
+ "pile_extent_mm": 173.0,
+ "grid": {
+  "nx": 45,
+  "ny": 64,
+  "dx": 0.029727272727272755,
+  "dy": 0.030000000000000027,
+  "u0": -0.667167884349823,
+  "v0": -1.0211949768066406,
+  "z": -0.026078529274319945,
+  "nodes": 2880,
+  "edges": {
+   "structural": 5651,
+   "shear": 5544,
+   "bend": 5542
+  }
+ },
+ "skin": {
+  "verts": 44286,
+  "tris": 89999,
+  "overhang_mm": 7.2
+ },
+ "bind": "u=(x-u0)/dx, v=(y-v0)/dy clamped to the lattice; p = bilerp(cell) + off.x*T + off.y*B + off.z*N",
+ "axes": {
+  "note": "glTF frame: the rug lies in XZ (+Y up); lattice u = +X, v = -Z, n = +Y"
+ }
+}

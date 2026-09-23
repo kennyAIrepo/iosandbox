@@ -7,7 +7,7 @@
  *   const tracker = await initTracking(videoEl, { numHands: 2 });
  *   const frame = tracker.detect();  // { hands, handedness, pose }
  *
- * Multi-person integration (sdkmp/core/multiplayer.js):
+ * Multi-person integration (sdk/core/multiplayer.js):
  *   The landmarker constructors below are exported as standalone factories
  *   (createHandLandmarker / createPoseLandmarker) so per-player pipelines can
  *   spin up their own instances that share ONE memoized vision fileset.
