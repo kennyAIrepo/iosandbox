@@ -439,9 +439,14 @@ export class HoloHandRig {
         if (!col.active) continue;
         if (col.type === 'sphere') {
           const d = _v.distanceTo(col.center);
-          if (d < col.radius && d > 1e-4) {
-            // +3mm epsilon: conformed skin sits just OFF the shell, so an
-            // opaque depth-writing object never z-fights the wrapped fingers
+          // SHALLOW vertices wrap onto the shell (+3mm epsilon, so an opaque
+          // depth-writing prop never z-fights the wrapped fingers). DEEP ones
+          // stay put when the collider declares a `band`: projecting them
+          // radially flings a whole finger outward and smears it flat across
+          // the surface. An opaque prop swallows them cleanly instead; a
+          // see-through prop (the glass ball) leaves `band` undefined and keeps
+          // the old wrap-at-any-depth, because you can see inside it.
+          if (d < col.radius && d > 1e-4 && (col.band === undefined || col.radius - d < col.band)) {
             _v.sub(col.center).multiplyScalar((col.radius + 0.003) / d).add(col.center);
             moved = true; cc++;
           }

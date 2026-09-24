@@ -198,6 +198,8 @@ export class PropBall {
     this.grabNear = opts.grabNear || null;
     this.float = !!opts.float;
     this.zone = 'far';                                         // far | approach | contact
+    this._prevMin = { left: Infinity, right: Infinity };       // for "is this hand REACHING at it"
+    this._letGo = { left: -9, right: -9 };                     // release refractory, seconds
     this.overSlot = null;                                      // which hand is on it this frame (screen truth)
     this.resistSkin = opts.resistSkin ?? 0.004;                // contact skin for the HAND-STOP, live (metres)
     this.gap = Infinity;                                       // min hand↔surface clearance this frame (metres)
@@ -308,8 +310,9 @@ export class PropBall {
     return out;
   }
   /** DEI CONTACT: enough landmarks on the ball — proximity IS the intent */
-  _nearGrab(pack, R) {
+  _nearGrab(pack, R, slot) {
     if (!this.grabNear) return null;
+    if (slot && this._t - this._letGo[slot] < 0.7) return null;   // you just let go of it
     const contact = R + (this.grabNear.margin ?? 0.03);
     if (this._minDist(pack) >= contact) return null;
     if (this._countNear(pack, contact + 0.1) < (this.grabNear.need ?? 4)) return null;
@@ -372,8 +375,10 @@ export class PropBall {
       const e = hands.find(h => h[0] === this.hold.slot);
       const g = e
         ? (this.hold.type === 'near'
-            ? (this._minDist(e[1]) < R + (this.grabNear.margin ?? 0.03) + 0.06
-               && this._countNear(e[1], R + 0.16) >= Math.max(2, (this.grabNear.need ?? 4) - 2)
+            // dei_full.html re-tested the SAME contact every frame: move the
+            // hand off it and it is released. Nothing else — no pose to hold.
+            ? (this._minDist(e[1]) < R + (this.grabNear.margin ?? 0.03) + 0.05
+               && this._countNear(e[1], R + (this.grabNear.margin ?? 0.03) + 0.1) >= (this.grabNear.need ?? 4)
                ? { type: 'near' } : null)
             : (this._wrapGrab(e[1], 0.03 + Math.min(0.08, this._pose[this.hold.slot].step), this.hold.slot)
                || this._graspGrab(this.hold.slot, e[1], R, true)))
@@ -382,6 +387,8 @@ export class PropBall {
         _tC.set(0, 0, 0); for (const v of this._velHist) _tC.add(v);
         if (this._velHist.length) _tC.divideScalar(this._velHist.length);
         this.sphere.vel.copy(_tC);                                                  // thrown / dropped with the hand's velocity
+        if (!e || this._minDist(e[1]) > R + (this.grabNear ? (this.grabNear.margin ?? 0.03) : 0.03) + 0.15)
+          this._letGo[this.hold.slot] = this._t;                                    // a real departure: no instant re-grab
         this.hold = null; this._velHist.length = 0;
         if (this.onRelease) this.onRelease(this.sphere.vel);
       } else {
@@ -398,7 +405,7 @@ export class PropBall {
     }
     // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (6 mm skin) (:1621-1630)
     if (!this.hold && !scaling) for (const [slot, pack] of hands) {
-      const g = this._nearGrab(pack, R) || this._wrapGrab(pack, 0.006, slot) || this._graspGrab(slot, pack, R);
+      const g = this._nearGrab(pack, R, slot) || this._wrapGrab(pack, 0.006, slot) || this._graspGrab(slot, pack, R);
       if (!g) continue;
       // a SCREEN grab takes the mocked depth with it: the offset is captured
       // after the snap, so the ball is IN the hand rather than wherever its
@@ -476,9 +483,19 @@ export class PropBall {
     this.zone = 'far';
     let attracting = false;
     if (this.attract && !this.hold && !scaling) {
-      let best = Infinity, bestPack = null;
-      for (const [, pack] of hands) { const d = this._minDist(pack); if (d < best) { best = d; bestPack = pack; } }
-      if (bestPack && best < this.attract.zone) {
+      let best = Infinity, bestPack = null, bestSlot = null, reaching = false;
+      for (const [slot, pack] of hands) {
+        const d = this._minDist(pack);
+        // REACHING = getting closer, or a hand that is closing on it. A hand
+        // merely present in frame must not drag the ball around the workspace:
+        // that is the other half of why it felt glued.
+        const near = d < this._prevMin[slot] - 0.0015;
+        this._prevMin[slot] = d;
+        if (this._t - this._letGo[slot] < 0.7) continue;        // just let go: leave it alone
+        const G = this.grasp ? this.grasp(slot, pack, R, false) : null;
+        if (d < best) { best = d; bestPack = pack; bestSlot = slot; reaching = near || !!(G && G.closing); }
+      }
+      if (bestPack && best < this.attract.zone && reaching) {
         const contact = R + ((this.grabNear && this.grabNear.margin) || 0.03);
         this.zone = best < contact ? 'contact' : 'approach';
         if (best > contact) {
@@ -508,7 +525,9 @@ export class PropBall {
     if (!this.hold && !scaling && this.hull) {
       this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
       const H = this.hull.begin(this.mesh);
+      const hold0 = this.grabNear ? R + (this.grabNear.margin ?? 0.03) + 0.05 : -1;
       for (const [slot, pack] of hands) {
+        if (hold0 > 0 && this._minDist(pack) < hold0) continue;   // it is IN this hand
         _tB.set(0, 0, 0);
         if (!H.pushOut(pack, packRadii(pack), _tB)) continue;
         const m = _tB.length(); if (m < 1e-6) continue;
