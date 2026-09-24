@@ -492,7 +492,7 @@
       <button class="opt" data-br="avatar">🧍 Avatar</button>
     </div>
     <div class="sname">skeleton = tracked bone-lines + holo hands (default, every player) · avatar = mesh silhouette (the driving player)</div>
-    <label class="chk"><input id="bodyChk" type="checkbox" checked> body tracking · 🪞 mirror + 🎮 first-p + 🎥 third-p</label>
+    <label class="chk"><input id="bodyChk" type="checkbox"> body tracking · 🪞 mirror + 🎮 first-p + 🎥 third-p</label>
     <div class="row" id="bodyLookOpts">
       <button class="opt sel" data-l="shadow">🌑 Shadow</button>
       <button class="opt" data-l="ghost">👻 Holo</button>
@@ -597,7 +597,6 @@
     <input type="file" id="mp3File" accept="audio/*" style="display:none">
     <div id="trackName" style="font-size:9.5px;color:var(--mut);margin:6px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">track: Beat It ⭐ baked · 138.8 BPM · 808 onsets</div>
     <button id="gameBtn">▶ START ROUND</button>
-    <label class="chk"><input id="ballChk" type="checkbox" checked> ball sandbox (grab · throw · spin)</label>
   </div>
 </div>
 
@@ -678,7 +677,7 @@ import { HoloBodyRig, BodyPose, BODY_RADII } from './sdk/core/body-rig.js';
 const S = {
   mode: 'mirror', style: 'smooth',
   predMs: 40, conform: true, showRaw: false, swap: false,
-  body: true,
+  body: false,   // START = HANDS ONLY (holo hands). Tick body tracking for the skeleton.
   bodyRender: 'skeleton',   // 'skeleton' (default — MoveNet/pose lines + holo hands, like handlab-mptest) | 'avatar' (silhouette mesh)
   bodyLook: 'shadow',   // 'shadow' = Kinect dark silhouette · 'ghost' = holo substrate
   bodyY: 0,             // body height offset (m) — raise/lower the silhouette on screen
@@ -1084,8 +1083,7 @@ async function loadGlbHalves() {
 }
 
 // game colliders (plain objects — same shape as the SDK registry)
-const BALL_R = 0.13;
-const ballCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BALL_R, active: true };
+const _expoC = new THREE.Vector3();
 // Rubik's cube: 17cm edge — between a real cube (5.7cm) and the ball, big
 // enough for webcam-grade grab precision, small enough to read handheld.
 const CUBE_EDGE = 0.17, CUBE_HALF = CUBE_EDGE / 2;
@@ -1218,7 +1216,6 @@ function applyMode(m) {
   // notes fly to its punch zone, the camera watches over its shoulder.
   if (m === 'thirdPerson') beatGame.setFrameAt(TP_ORIGIN, 0, 1.52);
   else beatGame.setFrame();
-  sandbox.recenter();
   cubeLab.recenter();
 }
 
@@ -1239,71 +1236,11 @@ addEventListener('resize', () => {
 });
 els.bgVid.addEventListener('loadedmetadata', updateCover);   // real video size known
 
-// ─────────────── sandbox ball + BEAT RUSH game ───────────────
+// ─────────────── BEAT RUSH game ───────────────
 // Ball with a spin-visible shell: object-space colour bands read like a
 // beach ball, so hand-driven rotation (and thrown spin) is obvious.
 // OPAQUE + depthWrite → correct occlusion: fingers wrapping the far side
 // disappear behind it, fingers in front cover it.
-function makeBallMesh(r) {
-  const mat = new THREE.ShaderMaterial({
-    uniforms: { uGlow: { value: 0 } },
-    vertexShader: `varying vec3 vN, vV, vO;
-      void main(){ vN = normalize(normalMatrix * normal); vO = position;
-        vec4 mv = modelViewMatrix * vec4(position,1.0); vV = normalize(-mv.xyz);
-        gl_Position = projectionMatrix * mv; }`,
-    fragmentShader: `uniform float uGlow; varying vec3 vN, vV, vO;
-      void main(){
-        vec3 N = normalize(vN), V = normalize(vV);
-        float ndv = abs(dot(N, V));
-        float fres = pow(1.0 - ndv, 1.8);
-        vec3 L = normalize(vec3(0.4, 0.8, 0.5));
-        float dif = 0.45 + 0.55 * max(dot(N, L), 0.0);
-        // object-space panels → visible spin
-        float bands = step(0.0, sin(atan(vO.x, vO.z) * 4.0)) * 0.5 + step(0.0, vO.y) * 0.22;
-        vec3 cA = vec3(0.10, 0.35, 0.52), cB = vec3(0.62, 0.88, 1.0);
-        vec3 c = mix(cA, cB, bands * 0.55 + 0.1) * dif;
-        c += vec3(0.55, 0.9, 1.0) * fres * 0.7 + vec3(0.95, 0.6, 0.3) * uGlow;
-        gl_FragColor = vec4(c, 1.0);
-      }`,
-    transparent: false, depthWrite: true,
-  });
-  return new THREE.Mesh(new THREE.SphereGeometry(r, 26, 18), mat);
-}
-
-const sandbox = {
-  ball: null, enabled: true,
-  sphere: new GrabbableSphere(BALL_R, { gravity: -5.2, restitution: 0.58 }),
-  center: new THREE.Vector3(0, 0, -2),
-  init() {
-    this.ball = makeBallMesh(BALL_R);
-    scene.add(this.ball);
-    this.recenter();
-  },
-  recenter() {
-    views.workspaceCenter(camera, this.center);
-    this.sphere.reset(this.center.clone().add(new THREE.Vector3(0.38, 0.05, 0)));
-  },
-  floorY() { return S.mode === 'mirror' ? this.center.y - 1.05 : 0; },
-  update(dt) {
-    if (!this.ball) return;
-    const show = this.enabled && S.mode !== 'inspect' && !meshOnly();
-    this.ball.visible = show;
-    ballCollider.active = show && S.conform;
-    if (!show) return;
-    // full loop: grab (grip or pinch) → stick to palm frame (rotates with
-    // the wrist) → release throws with spin → gravity/floor → pick back up.
-    // Colliders include the BODY — the ball bounces off your chest.
-    this.sphere.update(dt, ballColliders, this.floorY());
-    if (!this.sphere.grabbed() && this.sphere.pos.distanceTo(this.center) > 3.4) this.sphere.reset();
-    this.ball.position.copy(this.sphere.pos);
-    this.ball.quaternion.copy(this.sphere.quat);
-    this.ball.material.uniforms.uGlow.value +=
-      ((this.sphere.grabbed() ? 0.35 : 0) - this.ball.material.uniforms.uGlow.value) * 0.12;
-    ballCollider.center.copy(this.sphere.pos);
-  },
-};
-
-
 // ─────────────── GLASS SLIME (see-through · refracting · LIVE POINT-CLOUD slime) ───────────────
 // A green glass ball built straight in three.js (sdk/core/glass.js): real
 // screen-space refraction of what is RENDERED behind it. In MIRROR mode the
@@ -1809,7 +1746,8 @@ function pxToMetres(camera, canvasH, worldPos, px) {
   return px * worldH / Math.max(1, canvasH);
 }
 
-const basketCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BASKET_R, active: false };
+const basketCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BASKET_R, active: false,
+  band: 0.022 };   // only the outer 22 mm of the hand wraps - deeper skin is swallowed, never splattered
 const _bsA = new THREE.Vector3(), _bsB = new THREE.Vector3(), _bsC = new THREE.Vector3();
 const _bsR = new THREE.Vector3();
 
@@ -1924,10 +1862,9 @@ const basketLab = {
         // THE DEI ROUTE (dei_full.html): on a webcam the hand's depth is a guess,
         // so the BALL closes the gap — it drifts to the palm from anywhere in the
         // approach zone, and a hand ON it takes it. No pose, no curl threshold.
-        float: true,                                  // it hangs in the workspace, like DEI (no unseen floor to fall to)
-        attract: { zone: 0.8, force: 0.04 },          // dei_full.html SNAP_APPROACH / attractForce
+        attract: { zone: 0.34, force: 0.05 },          // reach AT it (intent-gated) - dei_full.html SNAP_APPROACH
         grabNear: { need: 4, margin: 0.035 } });      // dei_full.html GRAB_LANDMARK_COUNT / SNAP_CONTACT
-      this.ball.setScale(1.6);                        // DEI screen presence: ~20 % of the view, not a 6 % pea
+      this.ball.setScale(1.15);                        // ~28 cm across: a hand-and-a-bit, like a real ball
       this.userS = this.ball.userS;
       this.ball.collider = basketCollider;    // the rigs' conform list holds THIS object
       // the hand's truth about this ball is its SCREEN circle (see ballGraspHook)
@@ -2332,10 +2269,6 @@ const cubeLab = {
       // mesh-isolation hides all props — spawning the cube means you want
       // to SEE it, so exit isolation first (same as START ROUND does)
       if (meshOnly()) applyDisplay('lab');
-      if (sandbox.enabled) {   // keep the stage clear — re-check the box to bring the ball back
-        sandbox.enabled = false;
-        document.getElementById('ballChk').checked = false;
-      }
       this.recenter();
       toast('🧊 cube incoming — it drops to the table · grab ✊ or pinch 🤏 · carry, drop, pick it back up', 3800);
     }
@@ -3557,7 +3490,7 @@ function loop() {
     rugLab.update(dt, rpk); rugLab.resist(rpk);
     basketLab.update(dt, rpk); }        // 🏀 the ball yields, then stops the hand
   const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active || basketCollider.active)
-    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider, basketCollider] : null;
+    ? [cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider, basketCollider] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
   if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
@@ -3863,7 +3796,6 @@ function loop() {
     if (hand) handBodies[slot].update(hand.points, dt, hand.img);
     else handBodies[slot].drop();
   }
-  sandbox.update(dt);
   slimeLab.update(dt, AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs);                       // 🟢 glass slime (see-through, soft body)
   cubeLab.update(dt);
   // co-op: in multi mode every player's hands can punch the shared note stream
@@ -3879,13 +3811,12 @@ function loop() {
     }
   }
   // live spatial state — window.HOPEOS_STATE (plain numbers, allocated once)
-  EXPO.t = now * 0.001; EXPO.mode = S.mode; EXPO.floorY = sandbox.floorY();
+  EXPO.t = now * 0.001; EXPO.mode = S.mode; EXPO.floorY = S.mode === 'mirror' ? views.workspaceCenter(camera, _expoC).y - 0.55 : 0;
   if (frame.pose) { EXPO.head.x = frame.pose[0].x; EXPO.head.y = frame.pose[0].y; }
   handBodies.left.snapshot(EXPO.hands.left);
   handBodies.right.snapshot(EXPO.hands.right);
   bodyBody.snapshot(EXPO.body);
   EXPO.body.airY = bodyPose.airY;   // inferred jump height (m)
-  sandbox.sphere.snapshot(EXPO.ball);
   cubeLab.box.snapshot(EXPO.cube);
   EXPO.cube.on = cubeLab.on; EXPO.cube.tableY = cubeLab.tableY;
   EXPO.cube.twisting = !!(cubeLab.model && cubeLab.model.twisting());
@@ -3973,7 +3904,6 @@ async function boot() {
       bodyRigB = new HoloBodyRig(scene, { alpha: 0.42, look: S.bodyLook, back: true }).build('standard');
       toast(`body forged ×2 (front + back bind): ${bodyRig.stats.verts} verts · ${bodyRig.stats.ms}ms — 🌑 shadow silhouette`);
     }
-    if (!sandbox.ball) sandbox.init();
     applyMode(S.mode === 'inspect' ? 'mirror' : S.mode);
     document.querySelectorAll('#viewOpts .opt').forEach(x => x.classList.toggle('sel', x.dataset.v === S.mode));
     els.entry.style.display = 'none';
@@ -5139,9 +5069,6 @@ document.getElementById('mp3File').addEventListener('change', async (e) => {
     els.trackName.textContent = 'track: ' + f.name + ' (analysis failed)';
     toast('audio decode failed: ' + (err.message || err), 5000);
   }
-});
-document.getElementById('ballChk').addEventListener('change', (e) => {
-  sandbox.enabled = e.target.checked;
 });
 els.cubeBtn.addEventListener('click', () => {
   try { cubeLab.toggle(!cubeLab.on); }
@@ -6794,7 +6721,7 @@ async function engSpawnBasket(meta = {}) {
   home.y = BASKET_R + 0.02;
   const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.0, restitution: 0.72,
     home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0),
-    attract: { zone: 0.6, force: 0.05 },              // the DEI approach, in a world that has a floor
+    attract: { zone: 0.34, force: 0.05 },              // the DEI approach, in a world that has a floor
     grabNear: { need: 4, margin: 0.035 } });
   ball.grasp = ballGraspHook(ball, () => ENG.camera,
     () => ({ W: ENG.renderer.domElement.clientWidth || 1300, H: ENG.renderer.domElement.clientHeight || 900 }), BASKET_PX);

@@ -3,7 +3,8 @@
 //   · a camera cannot measure depth, so the BALL closes the gap — reach toward
 //     it from anywhere in the approach zone and it comes to your palm;
 //   · a hand ON it takes it. No pose, no curl threshold, no wrap to discover;
-//   · pulling away lets go, with the hand's speed;
+//   · OPEN your hand and it falls — gravity is on, and a hand that is not
+//     reaching for it never drags it around;
 //   · your fingers never pass through it: the ball yields first, then whatever
 //     is left STOPS the hand (5 screen pixels of skin, measured at its depth);
 //   · the hand straddles it in depth, so the parts behind it are hidden.
@@ -106,6 +107,13 @@ const stat = () => page.evaluate(() => {
            textured: !!B.ball.mesh.material.map };
 });
 const out = {};
+out.band = await page.evaluate(() => {
+  const L = window.__lab;
+  // the collider the hand mesh conforms to — its band is what stops a finger
+  // deep inside the ball being flung onto the surface and smeared flat
+  const c = L.basket.ball.collider;
+  return c && c.band;
+});
 out.rest = await stat();
 await shot('1-rest');
 
@@ -117,17 +125,41 @@ await page.evaluate(() => {
 await sleep(900);
 out.far = await stat();
 
-// (b) APPROACH: reach toward it from 40 cm away AND 35 cm nearer in depth —
-//     the case the screenshot shows. The ball must close the gap itself.
+// (a2) PRESENT BUT NOT REACHING: a hand parked inside the zone must not drag
+//      the ball to itself — that half of the glue was the worst of it
+await page.evaluate(() => {
+  const W = window.__bp, c = W.ball();
+  window.__park = W.samePixel({ x: c.x + 0.24, y: c.y - 0.1, z: c.z }, 0.3);
+  W.feed(W.open(window.__park.x, window.__park.y, window.__park.z), null);
+});
+await sleep(300);
+const parkFrom = await stat();
+await sleep(1400);
+out.parked = await stat();
+out.parkedMoved = +Math.hypot(out.parked.pos[0] - parkFrom.pos[0], out.parked.pos[1] - parkFrom.pos[1],
+                              out.parked.pos[2] - parkFrom.pos[2]).toFixed(3);
+await page.evaluate(() => { window.__bp.feed(null, null); });
+await sleep(600);
+
+// (b) REACH: the hand actually travels toward it (from outside the zone, 35 cm
+//     off in depth — the case the screenshot shows). The ball closes the gap.
 out.approachStart = await page.evaluate(() => {
   const W = window.__bp, c = W.ball();
-  window.__h = W.samePixel({ x: c.x + 0.34, y: c.y - 0.16, z: c.z }, 0.35);
-  const pack = W.open(window.__h.x, window.__h.y, window.__h.z);
+  window.__reach0 = W.samePixel({ x: c.x + 0.55, y: c.y - 0.3, z: c.z }, 0.35);
+  window.__reach1 = W.samePixel({ x: c.x + 0.12, y: c.y - 0.06, z: c.z }, 0.35);
+  const pack = W.open(window.__reach0.x, window.__reach0.y, window.__reach0.z);
   const gap = W.palmDist(pack);                 // measured BEFORE the ball can react
   W.feed(pack, null);
   return { gap: +gap.toFixed(3), zone: window.__lab.basket.ball.zone };
 });
-await sleep(1700);
+for (let k = 1; k <= 18; k++) {
+  await page.evaluate(k => {
+    const W = window.__bp, a = window.__reach0, b = window.__reach1, t = k / 18;
+    W.feed(W.open(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t, a.z + (b.z - a.z) * t), null);
+  }, k);
+  await sleep(45);
+}
+await sleep(900);
 out.approachEnd = await page.evaluate(() => ({
   gap: +window.__bp.palmDist(window.__lab.AVSYNC.packs.L).toFixed(3), zone: window.__lab.basket.ball.zone,
   held: !!window.__lab.basket.ball.hold }));
@@ -168,14 +200,26 @@ out.carry = await page.evaluate(() => {
            gap: +window.__bp.palmDist(window.__lab.AVSYNC.packs.L).toFixed(3) };
 });
 await shot('4-carried');
+await page.evaluate(() => { window.__beforeY = window.__lab.basket.ball.sphere.pos.y; });
 
-// (d) pull away → it lets go
-await page.evaluate(() => {
-  const W = window.__bp, c = window.__c0;
-  W.feed(W.open(c.x - 1.3, c.y + 0.8, c.z + 0.1), null);
+// (d) OPEN YOUR HAND IN PLACE → it drops (gravity), and it does not jump back
+const beforeOpen = await page.evaluate(() => {
+  const B = window.__lab.basket.ball;
+  return { y: +B.sphere.pos.y.toFixed(3), held: !!B.hold };
 });
-await sleep(600);
-out.release = await page.evaluate(() => ({ held: !!window.__lab.basket.ball.hold }));
+await page.evaluate(() => {
+  const W = window.__bp, B = window.__lab.basket.ball, c = B.sphere.pos;
+  // take the hand off it — dei_full.html releases the moment the contact test fails
+  W.feed(W.open(c.x + 0.55, c.y - 0.35, c.z + 0.1), null);
+});
+await sleep(250);
+out.opened = await page.evaluate(() => ({ held: !!window.__lab.basket.ball.hold }));
+await sleep(900);
+out.release = await page.evaluate(() => {
+  const B = window.__lab.basket.ball;
+  return { held: !!B.hold, y: +B.sphere.pos.y.toFixed(3), fell: +(window.__beforeY - B.sphere.pos.y).toFixed(3) };
+});
+await shot('4b-dropped');
 
 // (e) THE HAND-STOP: with one hand carrying it, drive the OTHER through it
 await page.evaluate(() => { window.__bp.feed(null, null); });
@@ -298,7 +342,8 @@ const R = out;
 const checks = {
   'the scanned ball spawns (textured, 4.5k tris)': R.rest.on && R.rest.textured && R.rest.tris > 3000,
   'authored at a real basketball radius': Math.abs(R.rest.authored - 0.12) < 0.005,
-  'it floats in the workspace (no unseen floor to fall to)': Math.abs(R.rest.pos[1] - R.far.pos[1]) < 0.01,
+  'gravity is on: it rests on its floor': Math.abs(R.rest.pos[1] - R.far.pos[1]) < 0.01 && R.rest.vel.y === 0,
+  'a hand parked near it does NOT drag it around': R.parkedMoved < 0.02,
   'a hand outside the approach zone leaves it alone': R.far.zone === 'far' && Math.hypot(R.far.pos[0] - R.rest.pos[0], R.far.pos[1] - R.rest.pos[1]) < 0.02,
   'REACH: the ball closes the gap to the hand itself': R.approachEnd.gap < R.approachStart.gap - 0.15,
   'even though the hand is 35 cm off in depth': R.approachEnd.gap < R.rest.r + 0.14,
@@ -306,7 +351,10 @@ const checks = {
   'it is really in the hand (joints on the ball)': R.grabDetail.on >= 5,
   'the hand straddles it in depth, so parts are hidden': R.occlusion.behind >= 2 && R.occlusion.front >= 2,
   'it travels with the hand': R.carry.held && R.carry.moved > 0.15 && R.carry.gap < R.rest.r + 0.14,
-  'pulling away lets go': !R.release.held,
+  'take your hand off it and it lets go': beforeOpen.held && !R.release.held,
+  'and it FALLS — gravity, not glue': R.release.fell > 0.05,
+  'and it does not jump straight back into the hand': !R.release.held,
+  'the conform only wraps the outer skin (no splattered fingers)': R.rest.collider === true && R.band === 0.022,
   'the OTHER hand is STOPPED by it': R.stop.pushed_mm > 5,
   'and ends flush, never inside': R.stop.deepest_mm > -2,
   'avoidance was in charge': R.stop.avoiding === true,
