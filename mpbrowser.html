@@ -248,6 +248,7 @@
       <button class="opt" data-sp="dragon" title="rigged dragon — procedural head-look · walk · run · flapping flight (select it for the motion strip; W/S/A/D drive, Space = fly/land, R/F climb)">🐉 Dragon</button>
       <button class="opt" data-sp="foxfull" title="full-body fox with an authored facial rig (Auto-Rig-Pro-style lip ring · jaw hinge · lids · brows · gaze, built by tools/facerig) — select it → 🎭 mirror me for live lip sync from the camera">🦊 Fox</button>
       <button class="opt" data-sp="fox" title="rigged fox bust — your lips, expressions and head turns land on it live from the camera (select it → 🎭 mirror me)">🦊 Fox bust</button>
+      <button class="opt" data-sp="ball" title="a real size-6 basketball — shape-vs-shape collision against your hands, 5-pixel avoidance skin, wrap/clip to pick it up, open to throw">🏀 Ball</button>
       <button class="opt" data-sp="rug" title="a scanned rug rebuilt as CLOTH — 45×64 simulation lattice under its own 90k-triangle surface; with HoloHands on, lift it, drape it over your palms, close a hand to carry it, pinch with both hands to resize">🧶 Rug</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
@@ -551,6 +552,21 @@
     <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a see-through green glass ball with real refraction of the room behind it (the camera feed becomes a live backdrop + reflection map) · grip ✊ / pinch 🤏 to carry, throw, catch · MAKE IT SLIME: the same mass, where it sits, becomes a live particle cloud — it drapes over your fingers, lies flat on your palm, drips wherever nothing holds it, stretches between two hands (a fast yank lets go) · the surface is re-meshed from the cloud every frame</div>
   </div>
   <div class="sec">
+    <div class="lbl">PROP · BASKETBALL</div>
+    <button id="basketBtn">🏀 SPAWN BASKETBALL</button>
+    <div class="row" id="basketSizeRow" style="margin-top:4px">
+      <button class="opt" id="basketSizeDn" title="smaller — or PINCH with both hands and squeeze">➖ smaller</button>
+      <button class="opt" id="basketSizeUp" title="bigger — or PINCH with both hands and pull apart">➕ bigger</button>
+    </div>
+    <div class="row" style="margin-top:4px">
+      <button class="opt" id="basketResetBtn" title="drop it back in front of you">↺ reset</button>
+      <button class="opt" id="basketSkinBtn" title="glow the ball while a hand is inside the 5-pixel avoidance skin">◉ avoidance</button>
+    </div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a real size-6 basketball on the BALL DOCTRINE: collision is SHAPE vs SHAPE — its hull against your 21 joint spheres, never
+      proximity to a point · when a hand comes within <b>5 screen pixels</b> of the surface, object avoidance takes over: the ball yields first, then whatever is left STOPS the hand, so your fingers never pass through it ·
+      wrap ✊ or clip 🤏 to pick it up, open to release (it flies with your hand's speed), rest it on an open palm · PINCH with both hands to resize</div>
+  </div>
+  <div class="sec">
     <div class="lbl">PROP · CLOTH RUG</div>
     <button id="rugBtn">🧶 SPAWN RUG</button>
     <div class="row" id="rugSizeRow" style="margin-top:4px">
@@ -650,6 +666,7 @@ import { makeGlass, updateLens, attachEnv } from './sdk/core/glass.js';
 import { SlimeSim, SlimeSurface, CLOUD_R } from './sdk/core/slime-sim.js';
 import { buildCloth, toLocalHands, clothResistHand, updateClothWire } from './sdk/core/cloth-sim.js';
 import { clothify, unclothify } from './sdk/core/clothify.js';
+import { PropBall } from './sdk/game/prop-ball.js';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { PropHull } from './sdk/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdk/core/rubiks-cube.js';
@@ -680,7 +697,7 @@ const bodyOn = () => S.display === 'hands' ? false : (S.display === 'handsBody' 
 const BUILD = 'cs-21';          // bumped every deploy — STALE CACHE DETECTOR
 console.log('%chopeOS mpgames build ' + BUILD, 'color:#66e0ff;font-weight:bold');
 const els = Object.fromEntries(
-  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','slimeBtn','rugBtn','trackName','hint']
+  ['bgVid','vid','c','ov','entry','startBtn','bootMsg','toast','metrics','gameBtn','cubeBtn','bowBtn','slimeBtn','rugBtn','basketBtn','trackName','hint']
     .map(id => [id, document.getElementById(id)]));
 
 function toast(m, ms = 2200) {
@@ -1744,6 +1761,134 @@ const slimeLab = {
     this.mesh.updateMatrixWorld(true);
     this.metrics = null;
     updateLens(this.mat, this.mesh, camera, R);
+  },
+};
+
+// ─────────────── 🏀 BASKETBALL (a real ball on the BALL DOCTRINE) ───────────────
+// The scanned ball (sdk/assets/props/basketball.glb, Sketchfab size-6) driven by
+// sdk/game/prop-ball.js — the extracted doctrine: collision is SHAPE vs SHAPE
+// (PropHull capsule chain vs the 21 joint spheres the rigs render), pickup only
+// by finger WRAP / thumb CLIP / the measured holding-pose cradle, gravity always
+// on, and the hand-stop: whatever penetration the ball cannot yield is taken out
+// of the HAND, in place, before the rigs pose. AVOIDANCE SWITCHES ON BY PIXELS —
+// the skin is 5 screen pixels converted to metres at the ball's own depth, so it
+// engages exactly when the drawn hand reaches the drawn ball, at any zoom.
+const BASKET_URL = 'sdk/assets/props/basketball.glb';
+const BASKET_R = 0.12;                      // size-6: 0.229 m across
+const BASKET_PX = 5;                        // the avoidance gate, in screen pixels
+let _basketAsset = null;
+/** load once, normalise to a ball of radius BASKET_R centred on its own origin */
+async function basketGeo(loader) {
+  if (!_basketAsset) {
+    const gltf = await loader.loadAsync(BASKET_URL);
+    let src = null;
+    gltf.scene.updateWorldMatrix(true, true);
+    gltf.scene.traverse(o => { if (o.isMesh && (!src || o.geometry.attributes.position.count > src.geometry.attributes.position.count)) src = o; });
+    if (!src) throw new Error('basketball.glb has no mesh');
+    const geo = src.geometry.clone();
+    geo.applyMatrix4(src.matrixWorld);       // the Sketchfab root carries the Z-up fix
+    geo.computeBoundingSphere();
+    const bs = geo.boundingSphere;
+    geo.translate(-bs.center.x, -bs.center.y, -bs.center.z);
+    const k = BASKET_R / (bs.radius || 1);
+    geo.scale(k, k, k);                      // authored AT the radius: PropBall.setScale owns mesh.scale
+    geo.computeBoundingSphere();
+    const mat = Array.isArray(src.material) ? src.material[0].clone() : src.material.clone();
+    mat.metalness = 0; mat.metalnessMap = null; mat.roughness = 0.75; mat.side = THREE.FrontSide;
+    _basketAsset = { geo, mat, srcR: +bs.radius.toFixed(3) };
+  }
+  const m = new THREE.Mesh(_basketAsset.geo, _basketAsset.mat.clone());
+  m.name = 'Basketball';
+  return m;
+}
+/** N screen pixels at a world point, in metres — the avoidance gate, at any zoom */
+function pxToMetres(camera, canvasH, worldPos, px) {
+  const dist = Math.max(0.05, camera.position.distanceTo(worldPos));
+  const worldH = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * dist;
+  return px * worldH / Math.max(1, canvasH);
+}
+
+const basketCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BASKET_R, active: false };
+const _bhb = { left: { present: false, pinch: 0, pinchPoint: new THREE.Vector3() },
+               right: { present: false, pinch: 0, pinchPoint: new THREE.Vector3() } };
+/** {present, pinch, pinchPoint} per slot, straight off the packs (HandBody's own formula) */
+function packHands(pk) {
+  for (const [slot, key] of [['left', 'L'], ['right', 'R']]) {
+    const p = pk && pk[key], h = _bhb[slot];
+    if (!p || !p[0] || !p[9] || !p[4] || !p[8]) { h.present = false; h.pinch = 0; continue; }
+    const palm = Math.max(0.02, _rgA.set(p[0].x, p[0].y, p[0].z).distanceTo(_rgB.set(p[9].x, p[9].y, p[9].z)));
+    const d = _rgA.set(p[4].x, p[4].y, p[4].z).distanceTo(_rgB.set(p[8].x, p[8].y, p[8].z)) / palm;
+    h.pinch = Math.max(0, Math.min(1, 1 - (d - 0.18) / 0.5));      // game-physics.js:174
+    h.pinchPoint.set((p[4].x + p[8].x) / 2, (p[4].y + p[8].y) / 2, (p[4].z + p[8].z) / 2);
+    h.present = true;
+  }
+  return _bhb;
+}
+const basketLab = {
+  on: false, ball: null, loading: false, userS: 1, showSkin: false,
+  center: new THREE.Vector3(0, 0, -2), gapPx: Infinity,
+  async init() {
+    if (this.ball || this.loading) return;
+    this.loading = true;
+    try {
+      const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+      const mesh = await basketGeo(new GLTFLoader());
+      views.workspaceCenter(camera, this.center);
+      this.ball = new PropBall(scene, { radius: BASKET_R, mesh, gravity: -5.6, restitution: 0.62,
+        home: this.center, floorY: this.center.y - 0.55, spawnOffset: new THREE.Vector3(0.34, 0.24, 0) });
+      this.ball.collider = basketCollider;    // the rigs' conform list holds THIS object
+      if (!cubeLab.lit) {
+        const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(1.4, 2.6, 2.2);
+        scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun); cubeLab.lit = true;
+      }
+    } finally { this.loading = false; }
+  },
+  recenter() {
+    if (!this.ball) return;
+    views.workspaceCenter(camera, this.center);
+    this.ball.setHome(this.center, S.mode === 'mirror' ? this.center.y - 0.55 : 0);
+  },
+  setScale(k) { if (this.ball) { this.ball.setScale(k); this.userS = this.ball.userS; } },
+  setSkin(on) {
+    this.showSkin = on;
+    const b = document.getElementById('basketSkinBtn'); if (b) b.classList.toggle('sel', on);
+    if (!on && this.ball && this.ball.mesh.material.emissive) this.ball.mesh.material.emissive.setHex(0x000000);
+  },
+  async toggle(on) {
+    if (on && !this.ball) await this.init();
+    this.on = on;
+    if (this.ball) this.ball.mesh.visible = on;
+    basketCollider.active = false;
+    const b = els.basketBtn;
+    if (b) { b.textContent = on ? '✕ REMOVE BASKETBALL' : '🏀 SPAWN BASKETBALL'; b.classList.toggle('on', on); }
+    if (on) { if (meshOnly()) applyDisplay('lab'); this.recenter();
+      toast('🏀 basketball — wrap ✊ or clip 🤏 to pick it up, open to throw · your fingers stop ON its surface, they never pass through', 5200); }
+  },
+  /** solved BEFORE the rigs pose, so the hand-stop lands on the drawn hands */
+  update(dt, packs) {
+    if (!this.on || !this.ball || S.mode === 'inspect') return;
+    const B = this.ball;
+    B.floorY = S.mode === 'mirror' ? this.center.y - 0.55 : 0;   // it rests IN frame, not under it
+    // THE 5-PIXEL GATE: avoidance engages when a hand is within 5 screen px of
+    // the surface — measured at the ball's own depth, so it holds at any zoom
+    const mPerPx = pxToMetres(camera, renderer.domElement.clientHeight || 900, B.sphere.pos, 1);
+    B.resistSkin = mPerPx * BASKET_PX;
+    B.update(dt, packs, packHands(packs));
+    this.userS = B.userS;
+    this.gapPx = B.gap === Infinity ? Infinity : B.gap / Math.max(1e-9, mPerPx);
+    const em = B.mesh.material.emissive;
+    if (em) {                                 // the debug read-out: lit while avoidance has the hand
+      const want = this.showSkin && B.avoiding ? 0xff7a1a : 0x000000;
+      if (em.getHex() !== want) { em.setHex(want); B.mesh.material.emissiveIntensity = want ? 0.8 : 0; }
+    }
+  },
+  stats() {
+    if (!this.ball) return null;
+    const s = this.ball.snapshot({});
+    return { ...s, gap_mm: this.ball.gap === Infinity ? null : +(this.ball.gap * 1000).toFixed(1),
+             gap_px: this.gapPx === Infinity ? null : +this.gapPx.toFixed(1),
+             skin_mm: +(this.ball.resistSkin * 1000).toFixed(2), skin_px: BASKET_PX,
+             avoiding: this.ball.avoiding, collider: basketCollider.active };
   },
 };
 
@@ -3307,9 +3452,10 @@ function loop() {
   // cloth could not yield out of the HANDS — the rigs pose from the stopped
   // packs, so the drawn fingers stop ON the weave instead of sinking through it
   { const rpk = AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs;
-    rugLab.update(dt, rpk); rugLab.resist(rpk); }
-  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active)
-    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider] : null;
+    rugLab.update(dt, rpk); rugLab.resist(rpk);
+    basketLab.update(dt, rpk); }        // 🏀 the ball yields, then stops the hand
+  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active || basketCollider.active)
+    ? [ballCollider, cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider, basketCollider] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
   if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
@@ -4905,6 +5051,17 @@ els.bowBtn.addEventListener('click', () => {
   if (!LABBOW.on && !ENG.sdk.on && meshOnly()) applyDisplay('lab');
   labBowToggle().catch(e => { console.error(e); toast('🏹 bow failed: ' + (e.message || e), 6000); });
 });
+els.basketBtn.addEventListener('click', async () => {
+  try { await basketLab.toggle(!basketLab.on); }
+  catch (e) { console.error(e); toast('🏀 basketball failed: ' + (e.message || e), 6000); }
+});
+document.getElementById('basketSizeDn').addEventListener('click', () => { basketLab.setScale(basketLab.userS / 1.2); toast('🏀 ball ×' + basketLab.userS.toFixed(2)); });
+document.getElementById('basketSizeUp').addEventListener('click', () => { basketLab.setScale(basketLab.userS * 1.2); toast('🏀 ball ×' + basketLab.userS.toFixed(2)); });
+document.getElementById('basketResetBtn').addEventListener('click', () => { basketLab.recenter(); toast('🏀 back in front of you'); });
+document.getElementById('basketSkinBtn').addEventListener('click', () => {
+  basketLab.setSkin(!basketLab.showSkin);
+  toast(basketLab.showSkin ? '◉ the ball glows while a hand is inside the 5-pixel avoidance skin' : '◉ avoidance read-out off');
+});
 els.rugBtn.addEventListener('click', async () => {
   try { await rugLab.toggle(!rugLab.on); }
   catch (e) { console.error(e); toast('🧶 rug failed: ' + (e.message || e), 6000); }
@@ -4990,7 +5147,7 @@ window.__eng = ENG; window.__lab = {   // probe handles (tests/_engsdkprobe.mjs,
   get engBodyPts() { return engBodyPts; },
   get bowCol() { return bowGripCollider; },
   get labBow() { return LABBOW; },
-  get slime() { return slimeLab; }, get rug() { return rugLab; }, get ballColliders() { return ballColliders; },
+  get slime() { return slimeLab; }, get rug() { return rugLab; }, get basket() { return basketLab; }, get ballColliders() { return ballColliders; },
   get nockCol() { return nockCollider; },
   get slimeCol() { return slimeCollider; },
   get arrowCol() { return arrowCollider; },
@@ -5236,6 +5393,7 @@ function engLoop() {
   engEnvTick(avDt);                            // altitude → sky / grid / cloud layer
   engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
+  engBallTick(avDt);                           // 🏀 basketballs: bat, catch, carry, throw — and stop the hand
   engRugTick(avDt);                            // 🧶 cloth rugs: solve + hands lift/drape/carry
   engGestureTick(avDt);                        // hand gestures: grab bow, draw string
   engBowTick(avDt);                            // bow draw/loose + arrow ballistics
@@ -5532,7 +5690,8 @@ function engAvCtlRefresh() {
   const drec = d && d.type === 'dragon' ? DRAGONS.get(d.id) : null;
   const frec = d && d.type === 'fox' ? FOXES.get(d.id) : null;
   const rrec = d ? RUGS.get(d.id) : null;
-  const show = !!rec || !!drec || !!frec || !!rrec || (ENG.sel && engClothable(ENG.sel));
+  const brec = d ? BASKETS.get(d.id) : null;
+  const show = !!rec || !!drec || !!frec || !!rrec || !!brec || (ENG.sel && engClothable(ENG.sel));
   lbl.style.display = show ? 'block' : 'none';
   lbl.textContent = drec ? 'DRAGON · motion' : frec ? 'FOX · face puppet' : rrec ? 'CLOTH · simulation' : 'AVATAR · animation';
   const fh = document.getElementById('engFoxHint');
@@ -5551,6 +5710,15 @@ function engAvCtlRefresh() {
     if (title) b.title = title;
     b.addEventListener('click', fn); host.appendChild(b);
   };
+  if (brec) {                                  // BALL strip: reset · size · frame
+    const sel = ENG.sel, B = brec.ball;
+    lbl.textContent = 'BASKETBALL · physics';
+    mk('↺ drop it', false, () => { B.sphere.reset(B.center.clone().add(new THREE.Vector3(0, 0.6, 0))); B.hold = null; B.cradle = null; toast('🏀 dropped'); }, 'drop it from above its home');
+    mk('➖', false, () => { B.setScale(B.userS / 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'smaller — or PINCH with both hands');
+    mk('➕', false, () => { B.setScale(B.userS * 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'bigger — or PINCH with both hands');
+    mk('📷 frame', false, () => engBallFrame(sel), 'put the camera on it');
+    return;
+  }
   if (!rrec && ENG.sel && engClothable(ENG.sel)) {   // CLOTHIFY strip: make this prop cloth
     const sel = ENG.sel;
     lbl.textContent = 'CLOTH · make it cloth';
@@ -6512,6 +6680,49 @@ function _pinchR(pack) {                        // thumb-tip↔index-tip / palm 
   const palm = _gA.copy(pack[0]).distanceTo(pack[9]);
   return palm < 1e-6 ? 9 : _gA.copy(pack[4]).distanceTo(pack[8]) / palm;
 }
+// ─────────────── 🏀 BASKETBALL in the engine ───────────────
+// Same component, same doctrine, seated on the engine floor. With HoloHands live
+// in POV the welded packs reach engine space (the anchors doctrine), so the ball
+// is batted, caught, carried and thrown by the SAME hands — and stops them.
+const BASKETS = new Map();                    // eng id → { ball }
+async function engSpawnBasket(meta = {}) {
+  const mesh = await basketGeo(ENG.gltf);
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  const home = ENG.orbit.target.clone().addScaledVector(fwd, 1.2);
+  home.y = BASKET_R + 0.02;
+  const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.0, restitution: 0.72,
+    home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0) });
+  engAdopt(mesh, { type: 'ball', label: meta.label || 'basketball ' + (ENG.seq + 1) });
+  if (meta.p) { mesh.position.fromArray(meta.p); ball.sphere.reset(mesh.position.clone()); ball.center.copy(mesh.position); }
+  if (meta.s) ball.setScale(meta.s[0] || 1);
+  BASKETS.set(mesh.userData.eng.id, { ball });
+  engRefreshList(); engAvCtlRefresh();
+  return mesh;
+}
+function engBallTick(dt) {
+  if (!BASKETS.size) return;
+  const T = window.__lab && window.__lab.AVSYNC;
+  const packs = T && T.packsAligned ? T.packs : null;   // rendered POV HoloHands only
+  const H = ENG.renderer.domElement.clientHeight || 900;
+  for (const rec of BASKETS.values()) {
+    const B = rec.ball;
+    if (ENG.tc.dragging && ENG.sel === B.mesh) {         // the gizmo wins while you drag it
+      B.sphere.pos.copy(B.mesh.position); B.sphere.vel.set(0, 0, 0);
+      B.center.copy(B.mesh.position); B.hold = null; B.cradle = null;
+      continue;
+    }
+    B.resistSkin = pxToMetres(ENG.camera, H, B.sphere.pos, BASKET_PX);
+    B.update(dt, packs, packHands(packs));
+  }
+}
+function engBallFrame(o) {
+  const rec = BASKETS.get(o.userData.eng.id); if (!rec) return;
+  const c = rec.ball.sphere.pos, r = rec.ball.radius * rec.ball.userS;
+  ENG.orbit.target.copy(c);
+  ENG.camera.position.copy(c).add(new THREE.Vector3(r * 6, r * 4, r * 8));
+  ENG.camera.lookAt(c); ENG.orbit.update();
+}
+
 // ─────────────── 🧶 CLOTH RUG in the engine ───────────────
 // The same cloth piece the mirror lab spawns, seated on the engine floor. With
 // HoloHands live in POV the welded packs reach engine space (the anchors
@@ -6549,8 +6760,8 @@ const ENG_CLOTH_CELLS = { fine: 0.02, medium: 0.03, coarse: 0.05 };
 let ENG_CLOTH_CELL = 'medium';
 const engClothable = o => {
   const d = o && o.userData.eng;
-  if (!d || RUGS.has(d.id)) return false;
-  if (['tracker', 'avatar', 'dragon', 'fox', 'bow', 'rug'].includes(d.type)) return false;
+  if (!d || RUGS.has(d.id) || BASKETS.has(d.id)) return false;
+  if (['tracker', 'avatar', 'dragon', 'fox', 'bow', 'rug', 'ball'].includes(d.type)) return false;
   let has = false;
   o.traverse(c => { if (c.isMesh && !c.isSkinnedMesh) has = true; });
   return has;
@@ -6589,6 +6800,7 @@ function engRugFrame(o) {                      // put the camera on it
 
 ENG.spawnRug = (...a) => engSpawnRug(...a); ENG.rugs = RUGS; ENG.select = (...a) => engSelect(...a);
 ENG.clothify = (...a) => engClothify(...a); ENG.unclothify = (...a) => engUnclothify(...a);
+ENG.spawnBasket = (...a) => engSpawnBasket(...a); ENG.baskets = BASKETS;
 
 function engGestureTick(dt) {
   if (!BOWS.size) return;
@@ -6978,7 +7190,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.cloth || d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'ball' ? '🏀' : d.cloth || d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -6997,6 +7209,8 @@ function engDelete(o) {
   DRAGONS.delete(o.userData.eng.id);
   if (FOXES.get(o.userData.eng.id)?.live) engFoxSetLive(o, false);
   FOXES.delete(o.userData.eng.id);
+  const bk = BASKETS.get(o.userData.eng.id);
+  if (bk) { BASKETS.delete(o.userData.eng.id); }
   const rg = RUGS.get(o.userData.eng.id);
   if (rg) {
     if (rg.clothified) unclothify(rg.piece);
@@ -7053,6 +7267,10 @@ async function engRestore(snap) {
         const g = await engSpawnDragon({ label: rec.label, ...(rec.dragon || {}) });
         g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
+    }
+    else if (rec.type === 'ball') {
+      try { await engSpawnBasket({ label: rec.label, p: rec.p, s: rec.s }); }
+      catch (e) { console.warn('basketball restore failed', e); }
     }
     else if (rec.type === 'rug') {
       try { await engSpawnRug({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
@@ -7355,6 +7573,11 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
     toast('loading dragon…', 6000);
     engSpawnDragon().then(() => toast('🐉 dragon — select it for the motion strip: walk · run · fly · look'))
       .catch(err => toast('⚠ dragon failed: ' + (err.message || err), 6000));
+    return;
+  }
+  if (b.dataset.sp === 'ball') {
+    engSpawnBasket().then(() => toast('🏀 basketball — with HoloHands in POV you can bat, catch and throw it; your fingers stop on its surface', 5200))
+      .catch(err => toast('⚠ basketball failed: ' + (err.message || err), 6000));
     return;
   }
   if (b.dataset.sp === 'rug') {

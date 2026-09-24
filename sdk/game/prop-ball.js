@@ -1,10 +1,17 @@
 /**
- * sdk/game/prop-ball.js — PROPOSED standalone module (research copy, 2026-09-18).
+ * sdk/game/prop-ball.js — the BALL DOCTRINE as a component (extracted 2026-09-18,
+ * in service since 2026-09-24).
  * ═══════════════════════════════════════════════════════════════════════════
- * The GLASS (rigid sphere) BALL-DOCTRINE lane of the FROZEN mpbrowser.html
- * `slimeLab` object, lifted out so a new page can drop it in. Nothing in the
- * repo is modified; this file lives in the research folder until a builder
- * copies it to C:/Users/hanna/iosandbox/sdk/game/prop-ball.js.
+ * The GLASS (rigid sphere) lane of mpbrowser.html's `slimeLab`, lifted out so any
+ * page can drop it in. IN USE BY: teamslab.html (the playable ball) and
+ * mpbrowser.html's 🏀 BASKETBALL — the scanned Sketchfab ball in both the mirror
+ * lab (`basketLab`) and the engine (`engSpawnBasket` / `engBallTick`), where the
+ * mesh is a real GLB instead of makeBallMesh().
+ *
+ * AVOIDANCE GATE (2026-09-24): `resistSkin` is live. mpbrowser sets it every frame
+ * from FIVE SCREEN PIXELS converted to metres at the ball's own depth, so the
+ * hand-stop engages exactly when the drawn hand reaches the drawn ball at any
+ * zoom; `gap` (min hand↔surface clearance) and `avoiding` are readable each frame.
  *
  * Source (mpbrowser.html WORKING TREE 2026-09-18; HEAD 6c8e6bc is these numbers minus 3):
  *   makeBallMesh (opaque, spin-visible bands)      :1206-1230
@@ -86,14 +93,14 @@ export function hullTouch(hull, obj, pack) {                   // :2312-2315
 }
 /** HAND RESISTANCE: translate the WHOLE pack back out along the deepest contact normal (mutates pack in place).
  *  share = 1.0 for an anchored/rigid prop, 0.3 when the prop itself yields. Returns the resolved depth. */
-export function handResist(hull, obj, pack, share) {           // :2324-2341
+export function handResist(hull, obj, pack, share, skin = 0.004) {           // :2324-2341
   if (!hull || !pack || !pack[0]) return 0;
   hull.begin(obj);
   const radii = packRadii(pack);
   let depth = 0;
   for (let i = 0; i < 21; i++) {
     if (!pack[i]) continue;
-    const g = hull.closest(pack[i], null, _lbB) - radii[i] - 0.004;   // 4 mm skin
+    const g = hull.closest(pack[i], null, _lbB) - radii[i] - skin;   // contact skin (default 4 mm)
     if (g < depth) { depth = g; _lbA.copy(_lbB); }                     // deepest contact
   }
   if (depth >= 0) return 0;
@@ -172,6 +179,9 @@ export class PropBall {
     this.cradle = null;                                        // slot of the HOLDING-POSE hand it rests in
     this._pose = { left: _newPose(), right: _newPose() };
     this._gT = new Uint8Array(21); this._gN = new Array(21).fill(0).map(() => new THREE.Vector3());
+    this.resistSkin = opts.resistSkin ?? 0.004;                // contact skin for the HAND-STOP, live (metres)
+    this.gap = Infinity;                                       // min hand↔surface clearance this frame (metres)
+    this.avoiding = false;                                     // …and whether that put avoidance in charge
     this.extraBodies = [];                                     // [D7] default for update(): {joints, radii, present} bodies (BodyBody) — support only
     this.recenter();
   }
@@ -404,12 +414,17 @@ export class PropBall {
       this.sphere.vel.copy(_tC);                                                      // leaves the palm with the palm's velocity when tilted off
     }
     // ── HAND-STOP residual (mesh-true): whatever penetration is left stops the HAND — the carrying hand is exempt (:1703-1713)
+    this.gap = Infinity; this.avoiding = false;
     if (this.hull && pk && !scaling) {
       this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
       const holder = this.hold ? this.hold.slot : null;
       for (const [slot, pack] of hands) {
+        const t = hullTouch(this.hull, this.mesh, pack);        // SHAPE vs SHAPE clearance
+        if (t < this.gap) this.gap = t;
         if (slot === holder || slot === this.cradle) continue;
-        handResist(this.hull, this.mesh, pack, 1.0);
+        if (t > this.resistSkin) continue;                      // out of the skin: nothing to avoid yet
+        this.avoiding = true;
+        handResist(this.hull, this.mesh, pack, 1.0, this.resistSkin);
       }
     }
     // ── conform collider for the holohand skin, depth-true (:1714-1717)
