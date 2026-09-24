@@ -2,6 +2,7 @@
 // hands push it, grab it and are STOPPED by it. No browser needed.
 import * as THREE from 'three';
 import { ClothSim, buildCloth, clothResistHand, toLocalHands } from '../sdk/core/cloth-sim.js';
+import { clothify, unclothify, fitPlane } from '../sdk/core/clothify.js';
 
 let fails = 0;
 const ok = (name, cond, extra = '') => { console.log((cond ? '  ok   ' : '  FAIL ') + name + (extra ? '  — ' + extra : '')); if (!cond) fails++; };
@@ -39,24 +40,24 @@ const { sim, skin } = piece;
 console.log('CLOTH — lattice + embedded skin');
 ok('lattice rebuilt from the glTF node order', sim.n === NX * NY && sim.nx === NX && sim.ny === NY);
 ok('rest lattice is the regular grid', Math.abs(sim.rest[3] - sim.rest[0] - D) < 1e-6, 'dx=' + (sim.rest[3] - sim.rest[0]).toFixed(4));
-ok('skin bound', !!skinMesh.geometry.attributes.aCell && !!skinMesh.geometry.attributes.aOff);
+ok('skin bound', !!skinMesh.geometry.attributes.aCell && !!skinMesh.geometry.attributes.aOff && !!skinMesh.geometry.attributes.aNrm);
 
 // the SHADER's reconstruction, in JS: at rest it must reproduce the mesh exactly
 function replay(latX) {
   const g = skinMesh.geometry, cell = g.attributes.aCell.array, off = g.attributes.aOff.array;
   const out = new Float32Array(g.attributes.position.count * 3);
-  const sgn = skin.sgn;
   const at = (i, j) => { const k = (j * NX + i) * 3; return [latX[k], latX[k + 1], latX[k + 2]]; };
+  const mix = (p, q2, s) => p.map((x, i2) => x + (q2[i2] - x) * s);
+  const sub = (p, q2) => p.map((x, i2) => x - q2[i2]);
+  const norm = w => { const L = Math.hypot(...w) || 1; return w.map(x => x / L); };
+  const cross = (p, q2) => [p[1] * q2[2] - p[2] * q2[1], p[2] * q2[0] - p[0] * q2[2], p[0] * q2[1] - p[1] * q2[0]];
   for (let t = 0; t < g.attributes.position.count; t++) {
     const u = cell[t * 2], v = cell[t * 2 + 1];
-    const ci = u | 0, cj = v | 0, a = u - ci, b = v - cj;
+    const ci = u | 0, cj = v | 0, a2 = u - ci, b2 = v - cj;
     const q00 = at(ci, cj), q10 = at(ci + 1, cj), q01 = at(ci, cj + 1), q11 = at(ci + 1, cj + 1);
-    const mix = (p, q, s) => p.map((x, i2) => x + (q[i2] - x) * s);
-    const base = mix(mix(q00, q10, a), mix(q01, q11, a), b);
-    const norm = w => { const L = Math.hypot(...w) || 1; return w.map(x => x / L); };
-    const T = norm(mix(q10.map((x, i2) => x - q00[i2]), q11.map((x, i2) => x - q01[i2]), b)).map(x => x * sgn.x);
-    const Bt = norm(mix(q01.map((x, i2) => x - q00[i2]), q11.map((x, i2) => x - q10[i2]), a)).map(x => x * sgn.y);
-    const cross = (p, q) => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+    const base = mix(mix(q00, q10, a2), mix(q01, q11, a2), b2);
+    const T = norm(mix(sub(q10, q00), sub(q11, q01), b2));
+    const Bt = norm(mix(sub(q01, q00), sub(q11, q10), a2));
     const N = norm(cross(Bt, T)), B = norm(cross(T, N));
     for (let c = 0; c < 3; c++) out[t * 3 + c] = base[c] + off[t * 3] * T[c] + off[t * 3 + 1] * B[c] + off[t * 3 + 2] * N[c];
   }
@@ -129,7 +130,7 @@ for (let i = 0; i < 120; i++) sim.step(1 / 60, [H], -0.6);
     }
   }
   ok('the sheet drapes ON the hand, not through it', worst > -0.0015, 'deepest ' + (worst * 1000).toFixed(2) + ' mm');
-  ok('it actually lands on the fingers (flush contact)', touched > 0, touched + ' node/joint contacts');
+  ok('it actually lands on the fingers (flush contact)', sim.contacts > 0, sim.contacts + ' contacts resolved this frame, ' + touched + ' node/joint pairs within 4 mm');
   ok('and it kept falling round them', Math.min(...Array.from({ length: sim.n }, (_, i) => sim.x[i * 3 + 1])) < -0.5);
 }
 
@@ -193,6 +194,83 @@ for (let i = 0; i < 5; i++) sim.step(1 / 60, [], null);       // settle + build 
   const ms = Number(process.hrtime.bigint() - t0) / 1e6 / 60;
   console.log(`  info  ${sim.n} nodes, 8 substeps, two hands: ${ms.toFixed(2)} ms/frame`);
   ok('inside the frame budget', ms < 8, ms.toFixed(2) + ' ms');
+}
+
+
+// ══ CLOTHIFY: any prop, any orientation, at runtime ══
+console.log('');
+console.log('CLOTHIFY — fit a lattice to an arbitrary prop');
+{
+  const W2 = 0.8, H2 = 1.2, TH2 = 0.012, NU = 41, NV = 61;
+  const mk = (half) => {                       // a BOWED slab, two shells
+    const pos = [], nrm = [];
+    for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+      const x = -W2 / 2 + W2 * i / (NU - 1), z = -H2 / 2 + H2 * j / (NV - 1);
+      const bow = 0.09 * Math.cos(Math.PI * z / H2);
+      pos.push(x, bow + half * TH2, z); nrm.push(0, Math.sign(half), 0);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+    return new THREE.Mesh(g, new THREE.MeshStandardMaterial());
+  };
+  const prop = new THREE.Group(); const top = mk(1);
+  prop.add(top, mk(-1));
+  prop.rotation.set(0.6, -1.1, 0.35); prop.updateMatrixWorld(true);   // arbitrary angle
+  const before = Float32Array.from(top.geometry.attributes.position.array);
+  const piece = clothify(prop, { cell: 0.04, substeps: 5 });
+  const I = piece.info;
+  ok('clothify found the sheet plane', I.flat < 0.15, 'flatness ' + I.flat);
+  ok('lattice sized from the footprint', Math.min(I.nx, I.ny) >= 15 && Math.max(I.nx, I.ny) >= 22 && I.nodes < 4200,
+     I.nx + 'x' + I.ny + ' = ' + I.nodes + ' nodes at ' + (I.cell * 1000).toFixed(0) + ' mm');
+  ok('it measured the slab thickness', Math.abs(I.thickness - TH2) < 0.006, (I.thickness * 1000).toFixed(1) + ' mm half-thickness');
+  ok('both meshes ride ONE lattice', piece.skins.length === 2 && piece.sim.n === I.nodes);
+  ok('every mesh is bound', piece.skins.every(s => s.mesh.geometry.attributes.aCell && s.mesh.geometry.attributes.aNrm));
+  {
+    const p = top.geometry.attributes.position, F = piece.sim.frame(), v = new THREE.Vector3();
+    let bowLeft = 0;
+    for (let i2 = 0; i2 < p.count; i2++) { v.set(p.getX(i2), p.getY(i2), p.getZ(i2)).sub(F.o); bowLeft = Math.max(bowLeft, Math.abs(v.dot(F.N))); }
+    ok('UNBOW flattened the rest sheet', bowLeft < 0.02, 'residual ' + (bowLeft * 1000).toFixed(1) + ' mm (the scan had 90 mm of bow)');
+  }
+  {
+    const s = piece.sim;
+    for (let i2 = 0; i2 < 60; i2++) s.step(1 / 60, [], null);
+    let lo = Infinity; for (let i2 = 0; i2 < s.n; i2++) lo = Math.min(lo, s.x[i2 * 3 + 1]);
+    ok('the clothified prop falls', lo < -0.3, 'lowest ' + lo.toFixed(2) + ' m');
+    let worst = 0;
+    for (let c = 0; c < s.nStruct; c++) { const a = s.cA[c] * 3, b = s.cB[c] * 3;
+      worst = Math.max(worst, Math.hypot(s.x[a] - s.x[b], s.x[a + 1] - s.x[b + 1], s.x[a + 2] - s.x[b + 2]) / s.cL[c]); }
+    ok('...without the weave stretching', worst < 1.04, 'x' + worst.toFixed(3));
+  }
+  unclothify(piece);
+  {
+    const p = top.geometry.attributes.position.array;
+    let e = 0; for (let i2 = 0; i2 < p.length; i2++) e = Math.max(e, Math.abs(p[i2] - before[i2]));
+    ok('unclothify restores the original geometry', e === 0 && top.parent === prop, 'max drift ' + e);
+  }
+}
+{ // a 24-vertex box has nothing to fold WITH — the component tessellates it
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial());
+  box.scale.set(1.4, 0.02, 1.0);
+  const v0 = box.geometry.attributes.position.count;
+  const piece = clothify(box, { cell: 0.05 });
+  const v1 = box.geometry.attributes.position.count;
+  ok('a squashed box reads as a sheet', piece.info.flat < 0.2, 'flatness ' + piece.info.flat);
+  ok('and is tessellated enough to fold', v1 > piece.sim.n * 2, v0 + ' → ' + v1 + ' verts for ' + piece.sim.n + ' nodes');
+  ok('the prop scale is baked, not simulated inside', box.scale.y === 1);
+  const s2 = piece.sim;
+  s2.pin(0); s2.pin(s2.nx - 1);
+  for (let i2 = 0; i2 < 90; i2++) s2.step(1 / 60, [], null);
+  let lo = Infinity; for (let i2 = 0; i2 < s2.n; i2++) lo = Math.min(lo, s2.x[i2 * 3 + 1]);
+  ok('the clothified box hangs', lo < -0.3, 'lowest ' + lo.toFixed(2));
+  unclothify(piece);
+  ok('un-clothify puts the 24-vertex box back', box.geometry.attributes.position.count === v0 && Math.abs(box.scale.y - 0.02) < 1e-9, 'scale restored too');
+}
+{
+  const pts = [];
+  for (let i2 = 0; i2 < 400; i2++) pts.push(Math.random() * 2 - 1, 0.001 * (Math.random() - 0.5), Math.random() * 3 - 1.5);
+  const F = fitPlane(Float32Array.from(pts));
+  ok('fitPlane picks the thin axis as the normal', Math.abs(Math.abs(F.n.y) - 1) < 0.02, 'n = ' + F.n.toArray().map(v => v.toFixed(2)).join(','));
 }
 
 console.log(fails ? `\n${fails} CLOTH CONTRACT(S) BROKEN` : '\nall CLOTH contracts hold');

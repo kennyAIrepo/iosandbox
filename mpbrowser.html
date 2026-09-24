@@ -259,7 +259,12 @@
       <input id="engUrl" type="text" placeholder="paste a .glb URL (Meshy, self-hosted…)">
       <button class="opt" id="engUrlGo" style="flex:0 0 auto">Load</button>
     </div>
-    <div class="sname">auto-scaled to a placeable size &amp; grounded — same treatment every hosted asset gets</div>
+    <div class="row" style="margin-top:4px">
+      <button class="opt" id="engUrlCloth" title="bring it in as CLOTH: a simulation lattice is fitted to the model and its surface embedded in it, so hands can lift, drape and grab it (works on any sheet-like prop — a rug, a banner, a cape, a flattened box)">🧶 as cloth</button>
+    </div>
+    <div class="sname">auto-scaled to a placeable size &amp; grounded — same treatment every hosted asset gets ·
+      🧶 <b>as cloth</b> runs the rug pipeline at runtime on whatever you load · any object already in the scene can be
+      clothified from its strip when you select it</div>
   </div>
   <div class="sec">
     <div class="lbl">GIZMO · selected object</div>
@@ -644,6 +649,7 @@ import { HandBody, GrabbableSphere, GrabbableBox, BodyBody, JOINT_RADII } from '
 import { makeGlass, updateLens, attachEnv } from './sdk/core/glass.js';
 import { SlimeSim, SlimeSurface, CLOUD_R } from './sdk/core/slime-sim.js';
 import { buildCloth, toLocalHands, clothResistHand, updateClothWire } from './sdk/core/cloth-sim.js';
+import { clothify, unclothify } from './sdk/core/clothify.js';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { PropHull } from './sdk/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdk/core/rubiks-cube.js';
@@ -1755,6 +1761,7 @@ const slimeLab = {
 const RUG_URL = 'sdk/assets/props/rug_cloth.glb';
 const RUG_SPEC_URL = 'sdk/assets/props/rug_cloth.json';
 const _rgA = new THREE.Vector3(), _rgB = new THREE.Vector3(), _rgC = new THREE.Vector3();
+const _rgD = new THREE.Vector3(), _rgM = new THREE.Matrix4();
 const _rgBox = new THREE.Box3();
 let _rugAsset = null;
 
@@ -1797,6 +1804,7 @@ async function makeRugPiece(loader, opts = {}) {
  */
 function clothTick(piece, packs, dt, o = {}) {
   const { sim, skin, group, wire } = piece;
+  if (!piece.hands) piece.hands = {};
   group.updateWorldMatrix(true, false);
   const s = group.getWorldScale(_rgA).x || 1;
   sim.o.scale = s;
@@ -1836,8 +1844,15 @@ function clothTick(piece, packs, dt, o = {}) {
       break;
     }
   }
-  sim.step(dt, hands, o.floorY != null ? o.floorY : null);
-  skin.update();
+  // the floor arrives in WORLD metres and is resolved in the piece's own frame:
+  // a clothified prop's lattice lives inside whatever transform it was given
+  let floor = null;
+  if (o.floorWorld != null) {
+    _rgM.copy(group.matrixWorld).invert();
+    floor = _rgD.set(0, o.floorWorld, 0).applyMatrix4(_rgM).y;
+  } else if (o.floorY != null) floor = o.floorY;
+  sim.step(dt, hands, floor);
+  if (piece.skins) for (const k of piece.skins) k.update(); else skin.update();
   updateClothWire(wire, sim);
   return hands;
 }
@@ -1902,8 +1917,7 @@ const rugLab = {
   /** solve + carry; called BEFORE the rigs pose so the stop lands on the drawn hands */
   update(dt, packs) {
     if (!this.on || !this.piece || S.mode === 'inspect') return;
-    const floorLocal = (this.tableY + 0.004 - this.piece.group.position.y) / (this.userS || 1);
-    clothTick(this.piece, packs, dt, { floorY: floorLocal, depthBias: S.mode === 'mirror' });
+    clothTick(this.piece, packs, dt, { floorWorld: this.tableY + 0.004, depthBias: S.mode === 'mirror' });
     this.userS = this.piece.group.scale.x;
   },
   resist(packs) {
@@ -5517,10 +5531,10 @@ function engAvCtlRefresh() {
   const rec = d && d.type === 'avatar' ? AVREG.get(d.id) : null;
   const drec = d && d.type === 'dragon' ? DRAGONS.get(d.id) : null;
   const frec = d && d.type === 'fox' ? FOXES.get(d.id) : null;
-  const rrec = d && d.type === 'rug' ? RUGS.get(d.id) : null;
-  const show = !!rec || !!drec || !!frec || !!rrec;
+  const rrec = d ? RUGS.get(d.id) : null;
+  const show = !!rec || !!drec || !!frec || !!rrec || (ENG.sel && engClothable(ENG.sel));
   lbl.style.display = show ? 'block' : 'none';
-  lbl.textContent = drec ? 'DRAGON · motion' : frec ? 'FOX · face puppet' : rrec ? 'RUG · cloth' : 'AVATAR · animation';
+  lbl.textContent = drec ? 'DRAGON · motion' : frec ? 'FOX · face puppet' : rrec ? 'CLOTH · simulation' : 'AVATAR · animation';
   const fh = document.getElementById('engFoxHint');
   if (fh) fh.style.display = frec ? 'block' : 'none';
   host.style.display = show ? 'flex' : 'none';
@@ -5537,7 +5551,20 @@ function engAvCtlRefresh() {
     if (title) b.title = title;
     b.addEventListener('click', fn); host.appendChild(b);
   };
-  if (rrec) {                                  // RUG strip: hang · flatten · size · lattice
+  if (!rrec && ENG.sel && engClothable(ENG.sel)) {   // CLOTHIFY strip: make this prop cloth
+    const sel = ENG.sel;
+    lbl.textContent = 'CLOTH · make it cloth';
+    mk('🧶 clothify', false, () => {
+      try { engClothify(sel); }
+      catch (e) { toast('⚠ clothify failed: ' + (e.message || e), 5000); }
+    }, 'fit a simulation lattice to this prop and embed its surface in it — it becomes cloth you can lift, drape and grab');
+    for (const k of ['fine', 'medium', 'coarse'])
+      mk(k === 'fine' ? '▫ fine' : k === 'medium' ? '◻ medium' : '⬜ coarse', ENG_CLOTH_CELL === k,
+         () => { ENG_CLOTH_CELL = k; engAvCtlRefresh(); toast('🧶 lattice cell → ' + Math.round(ENG_CLOTH_CELLS[k] * 1000) + ' mm'); },
+         'lattice cell size: ' + Math.round(ENG_CLOTH_CELLS[k] * 1000) + ' mm (finer folds cost more per frame)');
+    return;
+  }
+  if (rrec) {                                  // CLOTH strip: hang · flatten · size · lattice
     const sel = ENG.sel, P = rrec.piece, sim = P.sim;
     mk(rrec.hang ? '📌 hanging' : '📌 hang it', !!rrec.hang, () => {
       rrec.hang = !rrec.hang;
@@ -5554,8 +5581,10 @@ function engAvCtlRefresh() {
     mk('↺ flatten', false, () => { rrec.hang = false; for (let i = 0; i < sim.n; i++) sim.pin(i, false); sim.reset(); engAvCtlRefresh(); toast('🧶 flat again'); }, 'drop it back flat on the floor');
     mk('➖', false, () => { P.group.scale.multiplyScalar(1 / 1.25); sim.o.scale = P.group.scale.x; toast('🧶 rug ×' + P.group.scale.x.toFixed(2)); }, 'smaller — or PINCH with both hands and squeeze');
     mk('➕', false, () => { P.group.scale.multiplyScalar(1.25); sim.o.scale = P.group.scale.x; toast('🧶 rug ×' + P.group.scale.x.toFixed(2)); }, 'bigger — or PINCH with both hands and pull apart');
-    mk('◫ lattice', !!P.wire.visible, () => { P.wire.visible = !P.wire.visible; engAvCtlRefresh(); }, 'show the 45×64 simulation lattice under the surface');
+    mk('◫ lattice', !!P.wire.visible, () => { P.wire.visible = !P.wire.visible; engAvCtlRefresh(); },
+       `show the ${sim.nx}×${sim.ny} simulation lattice under the surface`);
     mk('📷 frame', false, () => engRugFrame(sel), 'put the camera on it');
+    if (rrec.clothified) mk('↩ un-cloth', false, () => engUnclothify(sel), 'put the rigid prop back exactly as it was');
     return;
   }
   if (frec) {                                  // FOX strip: face live · neutral · mirror/POV
@@ -6507,11 +6536,47 @@ function engRugTick(dt) {
   const T = window.__lab && window.__lab.AVSYNC;
   const packs = T && T.packsAligned ? T.packs : null;   // rendered POV HoloHands only
   for (const rec of RUGS.values()) {
-    const g = rec.piece.group;
-    const floorLocal = (0.004 - g.position.y) / (g.scale.x || 1);
-    clothTick(rec.piece, packs, dt, { floorY: floorLocal });
+    clothTick(rec.piece, packs, dt, { floorWorld: 0.004 });
     if (packs) clothResist(rec.piece, packs, 1);
   }
+}
+
+// ── CLOTHIFY, the component: any prop in the scene becomes cloth ──
+// The rug ships pre-lattticed from tools/cloth; this does the same fit at
+// RUNTIME for anything else the engine is holding — a hosted Meshy GLB, a
+// squashed primitive, a scanned banner. Same solver, same hands, same strip.
+const ENG_CLOTH_CELLS = { fine: 0.02, medium: 0.03, coarse: 0.05 };
+let ENG_CLOTH_CELL = 'medium';
+const engClothable = o => {
+  const d = o && o.userData.eng;
+  if (!d || RUGS.has(d.id)) return false;
+  if (['tracker', 'avatar', 'dragon', 'fox', 'bow', 'rug'].includes(d.type)) return false;
+  let has = false;
+  o.traverse(c => { if (c.isMesh && !c.isSkinnedMesh) has = true; });
+  return has;
+};
+function engClothify(obj, opts = {}) {
+  const d = obj.userData.eng;
+  const cellKey = opts.cell || ENG_CLOTH_CELL;
+  const piece = clothify(obj, { cell: ENG_CLOTH_CELLS[cellKey] || 0.03, substeps: 5 });
+  piece.hands = {};
+  RUGS.set(d.id, { piece, clothified: true, cellKey });
+  d.cloth = { cell: cellKey };
+  engRefreshList(); engAvCtlRefresh();
+  const I = piece.info;
+  toast(`🧶 ${d.label} is CLOTH — ${I.nx}×${I.ny} lattice (${I.nodes} nodes at ${Math.round(I.cell * 1000)} mm) under ${I.verts.toLocaleString()} vertices`, 5600);
+  if (I.flat > 0.35) toast('⚠ this prop is not very sheet-like — the lattice fits its flattest plane, so it will behave like a folded panel', 6000);
+  return piece;
+}
+function engUnclothify(obj) {
+  const rec = RUGS.get(obj.userData.eng.id);
+  if (!rec || !rec.clothified) return false;
+  unclothify(rec.piece);
+  RUGS.delete(obj.userData.eng.id);
+  delete obj.userData.eng.cloth;
+  engRefreshList(); engAvCtlRefresh();
+  toast('↩ back to a rigid prop');
+  return true;
 }
 function engRugFrame(o) {                      // put the camera on it
   const rec = RUGS.get(o.userData.eng.id); if (!rec) return;
@@ -6523,6 +6588,7 @@ function engRugFrame(o) {                      // put the camera on it
 }
 
 ENG.spawnRug = (...a) => engSpawnRug(...a); ENG.rugs = RUGS; ENG.select = (...a) => engSelect(...a);
+ENG.clothify = (...a) => engClothify(...a); ENG.unclothify = (...a) => engUnclothify(...a);
 
 function engGestureTick(dt) {
   if (!BOWS.size) return;
@@ -6912,7 +6978,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.cloth || d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -6932,7 +6998,12 @@ function engDelete(o) {
   if (FOXES.get(o.userData.eng.id)?.live) engFoxSetLive(o, false);
   FOXES.delete(o.userData.eng.id);
   const rg = RUGS.get(o.userData.eng.id);
-  if (rg) { rg.piece.skin.dispose(); RUGS.delete(o.userData.eng.id); }
+  if (rg) {
+    if (rg.clothified) unclothify(rg.piece);
+    else if (rg.piece.skins) rg.piece.skins.forEach(k => k.dispose());
+    else rg.piece.skin.dispose();
+    RUGS.delete(o.userData.eng.id);
+  }
   const bw = BOWS.get(o.userData.eng.id);
   if (bw) {
     if (bw.nocked) ENG.scene.remove(bw.nocked);
@@ -6993,12 +7064,18 @@ async function engRestore(snap) {
         g.position.fromArray(rec.p); g.rotation.fromArray(rec.r); g.scale.fromArray(rec.s);
       } catch { toast('⚠ could not reload ' + rec.label); }
     }
-    else if (rec.type === 'glb') { try { await engImportGLB(rec.url, rec); } catch { toast('⚠ could not reload ' + rec.label); } }
+    else if (rec.type === 'glb') {
+      try {
+        const g = await engImportGLB(rec.url, rec);
+        if (rec.cloth) engClothify(g, { cell: rec.cloth.cell });      // it was cloth when saved
+      } catch { toast('⚠ could not reload ' + rec.label); }
+    }
     else {
       engSpawn(rec.type);
       const o = ENG.objects[ENG.objects.length - 1];
       o.material.color.set(rec.color); o.userData.eng.color = rec.color; o.userData.eng.label = rec.label;
       o.position.fromArray(rec.p); o.rotation.fromArray(rec.r); o.scale.fromArray(rec.s);
+      if (rec.cloth) engClothify(o, { cell: rec.cloth.cell });
     }
   }
   engSelect(null);
@@ -7349,7 +7426,14 @@ document.getElementById('engExactVal').addEventListener('keydown', e => {
 });
 engEls.engUrlGo.addEventListener('click', () => {
   const url = engEls.engUrl.value.trim();
-  if (url) engImportGLB(url).catch(e => toast('⚠ ' + e.message, 4000));
+  if (!url) return;
+  const asCloth = document.getElementById('engUrlCloth').classList.contains('sel');
+  engImportGLB(url).then(g => { if (asCloth && engClothable(g)) engClothify(g); })
+    .catch(e => toast('⚠ ' + e.message, 4000));
+});
+document.getElementById('engUrlCloth').addEventListener('click', e => {
+  const on = e.currentTarget.classList.toggle('sel');
+  toast(on ? '🧶 the next model you load arrives as CLOTH' : 'models load rigid');
 });
 engEls.engDup.addEventListener('click', () => {
   if (!ENG.sel) { toast('select an object first'); return; }

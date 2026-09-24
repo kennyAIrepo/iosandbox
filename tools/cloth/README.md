@@ -105,6 +105,38 @@ is **smaller than a cell**:
 A closing hand (fist or pinch) grabs the nodes under it and carries them in the
 palm frame; opening releases with the hand's velocity.
 
+## The component — `sdk/core/clothify.js`
+
+The Blender pipeline above bakes a lattice into a GLB. `clothify()` does the
+same fit **at runtime, on anything already in the scene** — no Blender, no
+re-export, no authored spec:
+
+```js
+const piece = clothify(obj, { cell: 0.03 });   // → { group, sim, skins, wire, info }
+…
+unclothify(piece);                              // puts the rigid prop back, exactly
+```
+
+1. **Plane fit** — Jacobi PCA over the vertex cloud; the smallest-variance axis
+   is the sheet normal. A rug lying flat, a banner standing up and a scan that
+   came in at some arbitrary angle all fit the same way.
+2. **Scale bake** — the prop's own scale moves into the geometry and is reset to
+   1. Cloth solved inside a non-uniform scale is a lie: a sheet hanging a metre
+   in the local frame of a prop squashed to 0.02 in y renders as a 2 cm twitch.
+3. **Lattice** — a regular grid over the footprint at `cell`, capped by
+   `maxNodes` so the solver always fits a frame whatever the prop's size.
+4. **Unbow** — the mean surface offset per node is measured, smoothed and
+   subtracted, so the REST state is flat while the silhouette keeps every bump.
+5. **Tessellate** — a surface coarser than the lattice cannot show a fold, so a
+   24-vertex box is split 1→4 (shared-edge midpoints) until it has ~3 vertices
+   per node. A 1 M-triangle scan is left alone.
+6. **Embed** — every vertex of every mesh is bound into its cell and rides it in
+   the vertex shader. Multi-mesh props share one lattice.
+
+The whole binding lives in the rest **cell frame**, so nothing downstream
+assumes world axes — that is what let the same `ClothSim`/`ClothSkin` serve
+both the authored rug and an arbitrary clothified prop.
+
 ## In mpbrowser
 
 | | mirror lane | engine lane |
@@ -115,9 +147,18 @@ palm frame; opening releases with the hand's velocity.
 | debug | `◫ lattice` | `◫ lattice` |
 | extra | lies at hand height — slide your hands under it | `📌 hang it` (curtain), `📷 frame` |
 
-Tests: `npm run test:cloth` (node — solver, embedding, grab, hand-stop, budget) ·
-`node tests/_rugprobe.mjs` (browser — 17 contracts across both lanes, screenshots
-in `PROBE_SHOTS`).
+**Clothify any prop (engine):** select any object that is not a rig — a hosted
+GLB, a primitive, a scanned panel — and its strip offers `🧶 clothify` with a
+lattice-cell choice (`▫ fine` 20 mm · `◻ medium` 30 mm · `⬜ coarse` 50 mm).
+It becomes cloth in place, gets the full cloth strip, and `↩ un-cloth` puts the
+rigid prop back exactly as it was (geometry, material, scale). **Creation mode:**
+`🧶 as cloth` in HOST · IMPORT MODEL brings the next loaded model in as cloth.
+Both survive save/load (the choice rides in the scene snapshot).
+
+Tests: `npm run test:cloth` (node — solver, embedding, grab, hand-stop, clothify,
+budget) · `node tests/_rugprobe.mjs` (browser — 17 contracts across both lanes) ·
+`node tests/_clothifyprobe.mjs` (browser — 12 contracts on the component and its
+UI). Screenshots land in `PROBE_SHOTS`.
 
 ## Still open
 

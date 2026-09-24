@@ -276,7 +276,7 @@ const checks = {
   'and ends up flush, not inside': R.stop.deepest_mm < 4,
   'lattice toggle': R.wireOn,
   'engine: spawns + listed + same lattice': R.engine.spawned && R.engine.listed && R.engine.nodes === 2880,
-  'engine: selection strip': /RUG/.test(R.engineStrip.label) && R.engineStrip.buttons.some(t => /lattice/.test(t)),
+  'engine: selection strip': /CLOTH/.test(R.engineStrip.label) && R.engineStrip.buttons.some(t => /lattice/.test(t)),
   'engine: hangs in folds without stretching': R.engineHang.drop > 0.25 && R.engineHang.stretch < 1.08,
   'no page errors': errors.length === 0 && !out.engineError,
 };

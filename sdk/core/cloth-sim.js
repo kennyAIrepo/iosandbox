@@ -151,6 +151,25 @@ export class ClothSim {
   /** pin / unpin a node (kinematic): the anchor map rebuilds on the next step */
   pin(i, on = true) { this.w[i] = on ? 0 : 1; this._lraDirty = true; }
 
+  /**
+   * The rest lattice's own plane frame — origin, row/column directions and the
+   * cell frame (T, B, N) built the same way the vertex shader builds the live
+   * one. Everything that binds to this cloth works in THIS frame, so a lattice
+   * fitted to an arbitrary prop (clothify.js) needs no special casing.
+   */
+  frame() {
+    if (this._planeFrame) return this._planeFrame;
+    const R = this.rest, k = this.nx * 3;
+    const o = new THREE.Vector3(R[0], R[1], R[2]);
+    const pu = new THREE.Vector3(R[3], R[4], R[5]).sub(o);          // node (1,0) − (0,0)
+    const pv = new THREE.Vector3(R[k], R[k + 1], R[k + 2]).sub(o);  // node (0,1) − (0,0)
+    const du = pu.length() || 1, dv = pv.length() || 1;
+    const T = pu.clone().divideScalar(du), Bt = pv.clone().divideScalar(dv);
+    const N = new THREE.Vector3().crossVectors(Bt, T).normalize();
+    const B = new THREE.Vector3().crossVectors(T, N).normalize();
+    return (this._planeFrame = { o, u: T, v: Bt, T, B, N, du, dv });
+  }
+
   /** drop every node back on the rest lattice (optionally translated) */
   reset(offset) {
     this.x.set(this.rest); this.v.fill(0); this.w.fill(1);
@@ -619,33 +638,37 @@ export class ClothSkin {
     const nx = sim.nx, ny = sim.ny, rest = sim.rest;
     const g = mesh.geometry;
     const pos = g.attributes.position;
+    const nrm = g.attributes.normal;
     const n = pos.count;
-    // the rest lattice is a flat axis-aligned rectangle: u along +X, v along +Z,
-    // n along +Y, so the binding falls out of the rest position — nothing stored
-    // in the asset can go stale against the mesh.
-    const x0 = rest[0], z0 = rest[2];
-    const dx = rest[3] - rest[0];                      // node (1,0) − (0,0)
-    const dz = rest[nx * 3 + 2] - rest[2];             // node (0,1) − (0,0)
-    this.dx = dx; this.dz = dz; this.x0 = x0; this.z0 = z0;
-    const cell = new Float32Array(n * 2), off = new Float32Array(n * 3);
+    // The binding is expressed in the REST CELL FRAME, whatever that frame is:
+    // the lattice may lie in any plane at any orientation (clothify.js fits one
+    // to an arbitrary prop), so nothing here may assume world axes. Both the
+    // offset and the rest normal are written in (T₀, B₀, N₀), and the shader
+    // replays them in the live cell's (T, B, N) — so rest reproduces exactly
+    // and the sheet carries its own shading with it.
+    const F = sim.frame();
+    const du = F.du, dv = F.dv;
+    const cell = new Float32Array(n * 2), off = new Float32Array(n * 3), nb = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
-      const u = Math.min(Math.max((pos.getX(i) - x0) / dx, 0), nx - 1.0001);
-      const v = Math.min(Math.max((pos.getZ(i) - z0) / dz, 0), ny - 1.0001);
+      _a.set(pos.getX(i), pos.getY(i), pos.getZ(i)).sub(F.o);
+      const u = Math.min(Math.max(_a.dot(F.u) / du, 0), nx - 1.0001);
+      const v = Math.min(Math.max(_a.dot(F.v) / dv, 0), ny - 1.0001);
       cell[i * 2] = u; cell[i * 2 + 1] = v;
       const ci = u | 0, cj = v | 0, a = u - ci, b = v - cj;
       const at = (ii, jj, c) => rest[(jj * nx + ii) * 3 + c];
       const bx = at(ci, cj, 0) * (1 - a) * (1 - b) + at(ci + 1, cj, 0) * a * (1 - b) + at(ci, cj + 1, 0) * (1 - a) * b + at(ci + 1, cj + 1, 0) * a * b;
       const by = at(ci, cj, 1) * (1 - a) * (1 - b) + at(ci + 1, cj, 1) * a * (1 - b) + at(ci, cj + 1, 1) * (1 - a) * b + at(ci + 1, cj + 1, 1) * a * b;
       const bz = at(ci, cj, 2) * (1 - a) * (1 - b) + at(ci + 1, cj, 2) * a * (1 - b) + at(ci, cj + 1, 2) * (1 - a) * b + at(ci + 1, cj + 1, 2) * a * b;
-      // rest cell frame is sign-normalised to the world axes (T = +X̂, B = +Ẑ,
-      // N = +Ŷ), whichever way the lattice rows happen to run
-      off[i * 3] = pos.getX(i) - bx;
-      off[i * 3 + 1] = pos.getZ(i) - bz;
-      off[i * 3 + 2] = pos.getY(i) - by;
+      _b.set(pos.getX(i) - bx, pos.getY(i) - by, pos.getZ(i) - bz);
+      off[i * 3] = _b.dot(F.T); off[i * 3 + 1] = _b.dot(F.B); off[i * 3 + 2] = _b.dot(F.N);
+      if (nrm) {
+        _c.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i));
+        nb[i * 3] = _c.dot(F.T); nb[i * 3 + 1] = _c.dot(F.B); nb[i * 3 + 2] = _c.dot(F.N);
+      } else nb[i * 3 + 2] = 1;
     }
-    this.sgn = new THREE.Vector2(Math.sign(dx) || 1, Math.sign(dz) || 1);
     g.setAttribute('aCell', new THREE.BufferAttribute(cell, 2));
     g.setAttribute('aOff', new THREE.BufferAttribute(off, 3));
+    g.setAttribute('aNrm', new THREE.BufferAttribute(nb, 3));
     // the lattice, as a texture the vertex shader can read
     this.data = new Float32Array(nx * ny * 4);
     this.tex = new THREE.DataTexture(this.data, nx, ny, THREE.RGBAFormat, THREE.FloatType);
@@ -660,8 +683,7 @@ export class ClothSkin {
   }
 
   _patch(mat, nx, ny) {
-    const uni = { uLat: { value: this.tex }, uLatSize: { value: new THREE.Vector2(nx, ny) },
-                  uSgn: { value: this.sgn } };
+    const uni = { uLat: { value: this.tex }, uLatSize: { value: new THREE.Vector2(nx, ny) } };
     this.uniforms = uni;
     const mats = Array.isArray(mat) ? mat : [mat];
     for (const M of mats) {
@@ -670,9 +692,9 @@ export class ClothSkin {
         sh.vertexShader = `
           uniform sampler2D uLat;
           uniform vec2 uLatSize;
-          uniform vec2 uSgn;
           attribute vec2 aCell;
           attribute vec3 aOff;
+          attribute vec3 aNrm;
           vec3 latAt(vec2 ij) {
             return texture2D(uLat, (clamp(ij, vec2(0.0), uLatSize - 1.0) + 0.5) / uLatSize).xyz;
           }
@@ -684,13 +706,14 @@ export class ClothSkin {
           vec3 q00 = latAt(cIJ), q10 = latAt(cIJ + vec2(1.0, 0.0));
           vec3 q01 = latAt(cIJ + vec2(0.0, 1.0)), q11 = latAt(cIJ + vec2(1.0, 1.0));
           vec3 clothBase = mix(mix(q00, q10, cAB.x), mix(q01, q11, cAB.x), cAB.y);
-          // sign-normalised cell frame: T → +X̂, B → +Ẑ, N → +Ŷ at rest, whichever
-          // way the lattice rows run, so the baked offsets and normals replay exactly
-          vec3 clothT = normalize(mix(q10 - q00, q11 - q01, cAB.y) + vec3(1e-9, 0.0, 0.0)) * uSgn.x;
-          vec3 clothBt = normalize(mix(q01 - q00, q11 - q10, cAB.x) + vec3(0.0, 0.0, 1e-9)) * uSgn.y;
+          // the LIVE cell frame, built exactly as the rest frame was at bind time,
+          // so aOff / aNrm (which are written in that frame) replay without
+          // assuming anything about which way the lattice lies in the world
+          vec3 clothT = normalize(mix(q10 - q00, q11 - q01, cAB.y) + vec3(1e-9, 0.0, 0.0));
+          vec3 clothBt = normalize(mix(q01 - q00, q11 - q10, cAB.x) + vec3(0.0, 0.0, 1e-9));
           vec3 clothN = normalize(cross(clothBt, clothT));
           vec3 clothB = normalize(cross(clothT, clothN));
-          vec3 objectNormal = normalize(normal.x * clothT + normal.z * clothB + normal.y * clothN);
+          vec3 objectNormal = normalize(aNrm.x * clothT + aNrm.y * clothB + aNrm.z * clothN);
           `
         ).replace(
           '#include <begin_vertex>',
