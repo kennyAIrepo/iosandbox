@@ -234,7 +234,14 @@ console.log('\n[static doctrine]');
   const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');   // CODE only: the doctrine header comment names the forbidden calls
   ok(!/jointsWithin|GrabState|countNearLandmarks|gravity\s*[:=]\s*0/.test(code), 'no jointsWithin / GrabState / gravity-off in the module (comments stripped)');
   const posY = src.split('\n').filter(l => /sphere\.pos\.y\s*[+\-]?=/.test(l));
-  ok(posY.length === 0, `no line writes sphere.pos.y toward a hand (found ${posY.length})`);
+  // the ONE allowed write: the camera-ray depth mock, which moves x, y and z
+  // together by the factor that keeps the ball on its own pixel (see "ALONG THE
+  // CAMERA RAY"). Anything else that touches y is the old lift bug coming back.
+  const rayY = posY.filter(l => /G\.target\.y - this\.sphere\.pos\.y/.test(l));
+  ok(posY.length === rayY.length && rayY.length <= 1,
+     `the only sphere.pos.y write is the camera-ray move (found ${posY.length}, allowed ${rayY.length})`);
+  const rayBlock = /ALONG THE CAMERA RAY[\s\S]{0,400}?G\.target\.z - this\.sphere\.pos\.z/.test(src);
+  ok(rayBlock || rayY.length === 0, 'the ray move changes x, y and z together (pixel preserved)');
 }
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);

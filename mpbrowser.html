@@ -562,9 +562,10 @@
       <button class="opt" id="basketResetBtn" title="drop it back in front of you">↺ reset</button>
       <button class="opt" id="basketSkinBtn" title="glow the ball while a hand is inside the 5-pixel avoidance skin">◉ avoidance</button>
     </div>
-    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a real size-6 basketball on the BALL DOCTRINE: collision is SHAPE vs SHAPE — its hull against your 21 joint spheres, never
-      proximity to a point · when a hand comes within <b>5 screen pixels</b> of the surface, object avoidance takes over: the ball yields first, then whatever is left STOPS the hand, so your fingers never pass through it ·
-      wrap ✊ or clip 🤏 to pick it up, open to release (it flies with your hand's speed), rest it on an open palm · PINCH with both hands to resize</div>
+    <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">a real size-6 basketball on the <b>DEI route</b> — the one that always worked on a webcam: <b>reach for it and it comes to your hand</b> (a camera cannot measure
+      depth, so the ball closes the gap), and a hand <b>on</b> it simply takes it — no pose to hit. Pull away to let go; it flies with your hand's speed ·
+      your fingers cannot pass through it: within <b>5 screen pixels</b> of the surface the ball yields first, then whatever is left STOPS the hand, and the
+      hand mesh wraps the live sphere so the parts behind it stay hidden · PINCH with both hands to resize</div>
   </div>
   <div class="sec">
     <div class="lbl">PROP · CLOTH RUG</div>
@@ -1809,6 +1810,90 @@ function pxToMetres(camera, canvasH, worldPos, px) {
 }
 
 const basketCollider = { type: 'sphere', center: new THREE.Vector3(), radius: BASKET_R, active: false };
+const _bsA = new THREE.Vector3(), _bsB = new THREE.Vector3(), _bsC = new THREE.Vector3();
+const _bsR = new THREE.Vector3();
+
+/**
+ * THE BALL AS THE HAND SEES IT — its screen circle, live.
+ * A webcam cannot measure depth, so "my hand is on the ball" is a SCREEN fact.
+ * This projects the sphere the way the viewer sees it (centre + radius in
+ * pixels) and hands it to the interaction as the shape of record.
+ */
+function ballScreen(B, cam, W, H) {
+  cam.updateMatrixWorld();
+  const R = B.radius * B.userS;
+  _bsA.copy(B.sphere.pos).project(cam);
+  const cx = (_bsA.x * 0.5 + 0.5) * W, cy = (-_bsA.y * 0.5 + 0.5) * H;
+  _bsR.set(cam.matrixWorld.elements[0], cam.matrixWorld.elements[1], cam.matrixWorld.elements[2]);   // camera right
+  _bsB.copy(B.sphere.pos).addScaledVector(_bsR, R).project(cam);
+  const ex = (_bsB.x * 0.5 + 0.5) * W, ey = (-_bsB.y * 0.5 + 0.5) * H;
+  return { cx, cy, r: Math.hypot(ex - cx, ey - cy), R };
+}
+
+/**
+ * The grasp hook PropBall asks for: is this hand ON the ball as drawn, is it
+ * closing, and what depth do we MOCK the ball to so the fingers can close.
+ *   over    the nearest hand point is within N px of the ball's screen circle
+ *   closing curl or pinch — intent; proximity alone never grabs anything
+ *   z       the grasp depth: halfway between the palm and the fingertips, which
+ *           is simply where a held ball sits. No palm-normal guesswork, no sign
+ *           to get wrong, and the push-out / hand-stop settle the last few mm.
+ */
+function ballGraspHook(B, camFn, sizeFn, px) {
+  const JOINTS = [0, 5, 9, 13, 17, 4, 8, 12, 16, 20, 2, 3, 6, 7, 10, 11];
+  return (slot, pack, R, holding) => {
+    if (!pack || !pack[0] || !pack[9]) return null;
+    const cam = camFn(); if (!cam) return null;
+    const { W, H } = sizeFn();
+    const S = ballScreen(B, cam, W, H);
+    let best = Infinity;
+    for (const i of JOINTS) {
+      const q = pack[i]; if (!q) continue;
+      _bsC.set(q.x, q.y, q.z).project(cam);
+      const x = (_bsC.x * 0.5 + 0.5) * W, y = (-_bsC.y * 0.5 + 0.5) * H;
+      const d = Math.hypot(x - S.cx, y - S.cy) - S.r;          // px from the EDGE
+      if (d < best) best = d;
+    }
+    const gate = holding ? px * 8 : px;                        // hysteresis while carried
+    const over = best <= gate;
+    const curl = _closure(pack), pinch = _pinchR(pack);
+    // CLOSING = intent to take it (curl or pinch). ENGAGE = "this hand wants the
+    // ball at its own depth" — which includes a hand already SHAPED round it: a
+    // wrap reads curl ≈ 0 (fingers far from the wrist, because a ball is in the
+    // way), so curl alone would deadlock — the ball would never come close
+    // enough for the mesh-true wrap gate to ever fire.
+    const closingCurl = curl > (holding ? 0.3 : 0.45) || pinch < (holding ? 0.55 : 0.45);
+    let zlo = Infinity, zhi = -Infinity;
+    for (const i of JOINTS) { const q = pack[i]; if (!q) continue; if (q.z < zlo) zlo = q.z; if (q.z > zhi) zhi = q.z; }
+    const straddle = (zhi - zlo) > R * 0.6;                    // the pack already surrounds a ball-sized volume
+    // a hand SHAPED ROUND it (joints on both sides of a ball-sized depth) is
+    // holding it, whatever the curl metric says — that IS the wrap pose
+    const closing = closingCurl || straddle;
+    const engage = closing || curl > 0.25 || pinch < 0.55;
+    // the GRASP CENTRE: halfway between the palm and the fingertips — simply
+    // where a held ball sits. No palm-normal guesswork, no sign to get wrong.
+    _bsA.set(0, 0, 0); let n = 0;
+    for (const i of [0, 5, 9, 13, 17]) { const q = pack[i]; if (q) { _bsA.x += q.x; _bsA.y += q.y; _bsA.z += q.z; n++; } }
+    if (n) _bsA.multiplyScalar(1 / n);
+    _bsB.set(0, 0, 0); let tn = 0;
+    for (const i of [4, 8, 12, 16, 20]) { const q = pack[i]; if (q) { _bsB.x += q.x; _bsB.y += q.y; _bsB.z += q.z; tn++; } }
+    if (tn) _bsB.multiplyScalar(1 / tn); else _bsB.copy(_bsA);
+    _bsA.lerp(_bsB, 0.5);                                     // the grasp centre, world
+    // …and the ball must travel ALONG ITS OWN CAMERA RAY to that depth, or the
+    // "depth-only" move would slide it off the pixel it was sitting on.
+    _bsR.set(-cam.matrixWorld.elements[8], -cam.matrixWorld.elements[9], -cam.matrixWorld.elements[10]);  // forward
+    const dBall = _bsC.copy(B.sphere.pos).sub(cam.position).dot(_bsR);
+    const dHand = _bsC.copy(_bsA).sub(cam.position).dot(_bsR);
+    const k = Math.abs(dBall) < 1e-4 ? 1 : dHand / dBall;
+    const target = { x: cam.position.x + (B.sphere.pos.x - cam.position.x) * k,
+                     y: cam.position.y + (B.sphere.pos.y - cam.position.y) * k,
+                     z: cam.position.z + (B.sphere.pos.z - cam.position.z) * k };
+    const palmZ = _bsA.z, tipZ = _bsB.z;
+    return { over, closing, engage, straddle, gapPx: +best.toFixed(1),
+             curl: +curl.toFixed(2), pinch: +pinch.toFixed(2),
+             z: _bsA.z, target, screen: S };
+  };
+}
 const _bhb = { left: { present: false, pinch: 0, pinchPoint: new THREE.Vector3() },
                right: { present: false, pinch: 0, pinchPoint: new THREE.Vector3() } };
 /** {present, pinch, pinchPoint} per slot, straight off the packs (HandBody's own formula) */
@@ -1835,8 +1920,19 @@ const basketLab = {
       const mesh = await basketGeo(new GLTFLoader());
       views.workspaceCenter(camera, this.center);
       this.ball = new PropBall(scene, { radius: BASKET_R, mesh, gravity: -5.6, restitution: 0.62,
-        home: this.center, floorY: this.center.y - 0.55, spawnOffset: new THREE.Vector3(0.34, 0.24, 0) });
+        home: this.center, floorY: this.center.y - 0.55, spawnOffset: new THREE.Vector3(0.18, 0.02, 0),
+        // THE DEI ROUTE (dei_full.html): on a webcam the hand's depth is a guess,
+        // so the BALL closes the gap — it drifts to the palm from anywhere in the
+        // approach zone, and a hand ON it takes it. No pose, no curl threshold.
+        float: true,                                  // it hangs in the workspace, like DEI (no unseen floor to fall to)
+        attract: { zone: 0.8, force: 0.04 },          // dei_full.html SNAP_APPROACH / attractForce
+        grabNear: { need: 4, margin: 0.035 } });      // dei_full.html GRAB_LANDMARK_COUNT / SNAP_CONTACT
+      this.ball.setScale(1.6);                        // DEI screen presence: ~20 % of the view, not a 6 % pea
+      this.userS = this.ball.userS;
       this.ball.collider = basketCollider;    // the rigs' conform list holds THIS object
+      // the hand's truth about this ball is its SCREEN circle (see ballGraspHook)
+      this.ball.grasp = ballGraspHook(this.ball, () => camera,
+        () => ({ W: renderer.domElement.clientWidth || 1300, H: renderer.domElement.clientHeight || 900 }), BASKET_PX);
       if (!cubeLab.lit) {
         const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(1.4, 2.6, 2.2);
         scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun); cubeLab.lit = true;
@@ -1878,17 +1974,23 @@ const basketLab = {
     this.gapPx = B.gap === Infinity ? Infinity : B.gap / Math.max(1e-9, mPerPx);
     const em = B.mesh.material.emissive;
     if (em) {                                 // the debug read-out: lit while avoidance has the hand
-      const want = this.showSkin && B.avoiding ? 0xff7a1a : 0x000000;
+      const want = this.showSkin && B.avoidingHold ? 0xff7a1a : 0x000000;
       if (em.getHex() !== want) { em.setHex(want); B.mesh.material.emissiveIntensity = want ? 0.8 : 0; }
     }
   },
   stats() {
     if (!this.ball) return null;
     const s = this.ball.snapshot({});
-    return { ...s, gap_mm: this.ball.gap === Infinity ? null : +(this.ball.gap * 1000).toFixed(1),
+    const G = this.ball.grasp && window.__lab && window.__lab.AVSYNC && window.__lab.AVSYNC.packs
+      ? (this.ball.grasp('left', window.__lab.AVSYNC.packs.L, this.ball.radius * this.ball.userS, !!this.ball.hold)
+         || this.ball.grasp('right', window.__lab.AVSYNC.packs.R, this.ball.radius * this.ball.userS, !!this.ball.hold)) : null;
+    return { ...s, shape: this.ball.shape(), grasp: G && { over: G.over, closing: G.closing, gapPx: G.gapPx, curl: G.curl, pinch: G.pinch },
+             over: this.ball.overSlot,
+             gap_mm: this.ball.gap === Infinity ? null : +(this.ball.gap * 1000).toFixed(1),
              gap_px: this.gapPx === Infinity ? null : +this.gapPx.toFixed(1),
              skin_mm: +(this.ball.resistSkin * 1000).toFixed(2), skin_px: BASKET_PX,
-             avoiding: this.ball.avoiding, collider: basketCollider.active };
+             zone: this.ball.zone, avoiding: this.ball.avoiding, avoidingHold: !!this.ball.avoidingHold,
+             collider: basketCollider.active };
   },
 };
 
@@ -6691,7 +6793,11 @@ async function engSpawnBasket(meta = {}) {
   const home = ENG.orbit.target.clone().addScaledVector(fwd, 1.2);
   home.y = BASKET_R + 0.02;
   const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.0, restitution: 0.72,
-    home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0) });
+    home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0),
+    attract: { zone: 0.6, force: 0.05 },              // the DEI approach, in a world that has a floor
+    grabNear: { need: 4, margin: 0.035 } });
+  ball.grasp = ballGraspHook(ball, () => ENG.camera,
+    () => ({ W: ENG.renderer.domElement.clientWidth || 1300, H: ENG.renderer.domElement.clientHeight || 900 }), BASKET_PX);
   engAdopt(mesh, { type: 'ball', label: meta.label || 'basketball ' + (ENG.seq + 1) });
   if (meta.p) { mesh.position.fromArray(meta.p); ball.sphere.reset(mesh.position.clone()); ball.center.copy(mesh.position); }
   if (meta.s) ball.setScale(meta.s[0] || 1);
