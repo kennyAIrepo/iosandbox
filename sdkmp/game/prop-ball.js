@@ -179,6 +179,26 @@ export class PropBall {
     this.cradle = null;                                        // slot of the HOLDING-POSE hand it rests in
     this._pose = { left: _newPose(), right: _newPose() };
     this._gT = new Uint8Array(21); this._gN = new Array(21).fill(0).map(() => new THREE.Vector3());
+    // SCREEN-SPACE GRASP (2026-09-24). A camera cannot measure depth, so "the
+    // hand is on the ball" is a SCREEN fact, and the world z has to be mocked to
+    // match it. The page supplies grasp(slot, pack, R) -> { over, closing, z }:
+    //   over    the hand overlaps the ball's screen circle (within N px of it)
+    //   closing that hand is closing (curl or pinch) — intent, never proximity alone
+    //   z       the depth to mock the ball to, so the fingers can actually close
+    // Without it the lane keeps its old world-space behaviour verbatim.
+    this.grasp = opts.grasp || null;
+    // ── THE DEI LANE (dei_full.html, restored 2026-09-24) ──
+    // The route that always worked on a webcam, because it never pretends the
+    // camera knows depth: the ball COMES TO THE HAND from across the workspace,
+    // and a hand ON it takes it — no pose to hit, no curl threshold to pass.
+    //   attract  { zone, force }  approach zone in metres, drift per 1/60 s
+    //   grabNear { need, margin } landmarks that must be on it, and the skin
+    //   float    no gravity: it hangs where you left it (mirror AR, no floor)
+    this.attract = opts.attract || null;
+    this.grabNear = opts.grabNear || null;
+    this.float = !!opts.float;
+    this.zone = 'far';                                         // far | approach | contact
+    this.overSlot = null;                                      // which hand is on it this frame (screen truth)
     this.resistSkin = opts.resistSkin ?? 0.004;                // contact skin for the HAND-STOP, live (metres)
     this.gap = Infinity;                                       // min hand↔surface clearance this frame (metres)
     this.avoiding = false;                                     // …and whether that put avoidance in charge
@@ -265,6 +285,52 @@ export class PropBall {
     return null;
   }
 
+  /** nearest landmark distance to the ball centre (dei_full.html minLandmarkDist) */
+  _minDist(pack) {
+    let m = Infinity;
+    for (let i = 0; i < 21; i++) { const q = pack[i]; if (!q) continue;
+      const d = Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y, q.z - this.sphere.pos.z);
+      if (d < m) m = d; }
+    return m;
+  }
+  /** how many of the contact landmarks are on it (dei_full.html countNearLandmarks) */
+  _countNear(pack, within) {
+    let n = 0;
+    for (const i of [0, 4, 5, 8, 9, 12, 13, 16, 17, 20]) { const q = pack[i]; if (!q) continue;
+      if (Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y, q.z - this.sphere.pos.z) < within) n++; }
+    return n;
+  }
+  /** the palm centre the DEI lane carried the ball by (wrist + 3 MCPs) */
+  _palmC(pack, out) {
+    out.set(0, 0, 0); let n = 0;
+    for (const i of [0, 5, 9, 17]) { const q = pack[i]; if (!q) continue; out.x += q.x; out.y += q.y; out.z += q.z; n++; }
+    if (n) out.multiplyScalar(1 / n);
+    return out;
+  }
+  /** DEI CONTACT: enough landmarks on the ball — proximity IS the intent */
+  _nearGrab(pack, R) {
+    if (!this.grabNear) return null;
+    const contact = R + (this.grabNear.margin ?? 0.03);
+    if (this._minDist(pack) >= contact) return null;
+    if (this._countNear(pack, contact + 0.1) < (this.grabNear.need ?? 4)) return null;
+    return { type: 'near' };
+  }
+
+  /**
+   * The screen-space grab: a hand that is ON the ball on screen AND closing.
+   * This is the DEI basketball gate (intent + proximity, game-physics.js:296-312)
+   * restated against the page's screen truth instead of a world radius, because
+   * a webcam's depth is a guess and the world radius test silently never fires
+   * when the hand's guessed depth differs from the ball's.
+   * @param {boolean} holding loosen it (hysteresis) while the ball is already held
+   */
+  _graspGrab(slot, pack, R, holding = false) {
+    if (!this.grasp) return null;
+    const G = this.grasp(slot, pack, R, holding);
+    if (!G || !G.over || !G.closing) return null;
+    return { type: 'grip', z: G.z, target: G.target };
+  }
+
   /**
    * Per frame (verbatim lane :1570-1724 with page globals swapped for fields/args).
    * @param {number} dt            seconds, clamp <= 0.05 upstream
@@ -304,7 +370,14 @@ export class PropBall {
     //    2-3 m/s carry. At rest the skin is exactly the lane's 0.03; an OPEN hand still releases THAT frame (no opposite finger joint).
     if (this.hold) {
       const e = hands.find(h => h[0] === this.hold.slot);
-      const g = e ? this._wrapGrab(e[1], 0.03 + Math.min(0.08, this._pose[this.hold.slot].step), this.hold.slot) : null;
+      const g = e
+        ? (this.hold.type === 'near'
+            ? (this._minDist(e[1]) < R + (this.grabNear.margin ?? 0.03) + 0.06
+               && this._countNear(e[1], R + 0.16) >= Math.max(2, (this.grabNear.need ?? 4) - 2)
+               ? { type: 'near' } : null)
+            : (this._wrapGrab(e[1], 0.03 + Math.min(0.08, this._pose[this.hold.slot].step), this.hold.slot)
+               || this._graspGrab(this.hold.slot, e[1], R, true)))
+        : null;
       if (!g) {
         _tC.set(0, 0, 0); for (const v of this._velHist) _tC.add(v);
         if (this._velHist.length) _tC.divideScalar(this._velHist.length);
@@ -325,8 +398,13 @@ export class PropBall {
     }
     // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (6 mm skin) (:1621-1630)
     if (!this.hold && !scaling) for (const [slot, pack] of hands) {
-      const g = this._wrapGrab(pack, 0.006, slot);
+      const g = this._nearGrab(pack, R) || this._wrapGrab(pack, 0.006, slot) || this._graspGrab(slot, pack, R);
       if (!g) continue;
+      // a SCREEN grab takes the mocked depth with it: the offset is captured
+      // after the snap, so the ball is IN the hand rather than wherever its
+      // guessed depth happened to leave it
+      if (g.target) { this.sphere.pos.set(g.target.x, g.target.y, g.target.z); this.sphere.vel.set(0, 0, 0); }
+      else if (g.z != null) { this.sphere.pos.z = g.z; this.sphere.vel.z = 0; }
       palmPose(pack, _pP, _pQ);
       this.hold = { slot, type: g.type,
         posOff: _tB.copy(this.sphere.pos).sub(_pP).applyQuaternion(_pQ2.copy(_pQ).invert()).clone(),
@@ -357,22 +435,75 @@ export class PropBall {
     }
     // ── DEPTH BIAS (the cube doctrine): a hand over the ball on screen has the ball's z come to CONTACT depth on
     //    the hand's inner side — z only, gravity untouched, never lifted, never moved on screen (:1653-1674)
+    this.overSlot = null;
     if (!this.hold && !this.cradle && !scaling && !this.seek) for (const [slot, pack] of hands) {
-      let near = false;
-      for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.2) { near = true; break; } }
+      const G = this.grasp ? this.grasp(slot, pack, R, false) : null;
+      let near = G ? G.over : false;
+      if (!G) for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.2) { near = true; break; } }
       if (!near) continue;
+      this.overSlot = slot;
       const P = this._pose[slot], pc = _tA.copy(pack[0]).lerp(pack[9], 0.5);
       const side = Math.sign(this.sphere.pos.z - pc.z) || -1;                        // the side it is ALREADY on — never through the hand
       const off = (R + 0.03) * (P.sign !== 0 ? Math.max(0.15, Math.abs(P.n.z)) : 1);
+      // A CLOSING hand gets the ball INTO the grasp (the hand's own depth): parking
+      // it a radius off the palm is why fingers could never close round it, and why
+      // it always drew behind the hand. An OPEN hand keeps the old contact depth.
+      // ENGAGE brings it into the hand; a merely open hand keeps the old
+      // contact depth, so an open palm still cannot swallow it
+      const closing = !!(G && G.engage);
+      if (closing && G.target) {
+        // ALONG THE CAMERA RAY: the depth changes, the pixel does not. Moving on
+        // the world z axis instead would slide the ball off the hand on screen.
+        const f = Math.min(1, dt * 12);
+        this.sphere.pos.x += (G.target.x - this.sphere.pos.x) * f;
+        this.sphere.pos.y += (G.target.y - this.sphere.pos.y) * f;
+        this.sphere.pos.z += (G.target.z - this.sphere.pos.z) * f;
+        this.sphere.vel.set(0, 0, 0);                                                // no momentum from a mocked move
+        this.seek = 'grasp'; this.seekHand = pack;
+        break;
+      }
       const zt0 = pc.z + side * off;
-      if (Math.abs(zt0 - this.sphere.pos.z) < 0.01) continue;
+      if (Math.abs(zt0 - this.sphere.pos.z) < 0.004) continue;
       const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, zt0));
       this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 6);
       this.seek = 'z'; this.seekHand = pack;
       break;
     }
-    // ── free flight: gravity ALWAYS on; the sphere only integrates + floor — its own grab logic is never given a hand (:1675-1677)
-    if (!this.hold && !scaling && !cradleP) this.sphere.update(dt, [], this.floorY);
+    // ── DEI APPROACH ZONE: a hand anywhere near it and the ball comes TO the
+    //    hand (all axes, gravity suspended while it closes). This is the whole
+    //    reason the DEI route worked on a webcam: you never have to find the
+    //    ball in depth — it finds you.
+    this.zone = 'far';
+    let attracting = false;
+    if (this.attract && !this.hold && !scaling) {
+      let best = Infinity, bestPack = null;
+      for (const [, pack] of hands) { const d = this._minDist(pack); if (d < best) { best = d; bestPack = pack; } }
+      if (bestPack && best < this.attract.zone) {
+        const contact = R + ((this.grabNear && this.grabNear.margin) || 0.03);
+        this.zone = best < contact ? 'contact' : 'approach';
+        if (best > contact) {
+          attracting = true;
+          this._palmC(bestPack, _tB).sub(this.sphere.pos);
+          const len = _tB.length();
+          if (len > 1e-5) {
+            const f = (this.attract.force ?? 0.04) * (1 - best / this.attract.zone) * Math.min(3, dt * 60);
+            this.sphere.pos.addScaledVector(_tB.divideScalar(len), Math.min(len, f));
+            this.sphere.vel.multiplyScalar(0.6);
+          }
+        }
+      }
+    }
+    // ── free flight: gravity ALWAYS on (unless this prop floats, DEI-style);
+    //    the sphere only integrates + floor — its own grab logic is never given a hand (:1675-1677)
+    if (!this.hold && !scaling && !cradleP && !attracting) {
+      if (this.float) {
+        this.sphere.pos.addScaledVector(this.sphere.vel, dt);
+        this.sphere.vel.multiplyScalar(0.94);
+        const w = this.sphere.angVel.length();
+        if (w > 1e-4) { _pQ.setFromAxisAngle(_tA.copy(this.sphere.angVel).normalize(), w * dt);
+          this.sphere.quat.premultiply(_pQ).normalize(); this.sphere.angVel.multiplyScalar(0.995); }
+      } else this.sphere.update(dt, [], this.floorY);
+    }
     // ── SUPPORT: a free ball is pushed OUT of every hand's joint spheres — rests on a palm, batted, never passes through (:1678-1695)
     if (!this.hold && !scaling && this.hull) {
       this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
@@ -415,6 +546,7 @@ export class PropBall {
     }
     // ── HAND-STOP residual (mesh-true): whatever penetration is left stops the HAND — the carrying hand is exempt (:1703-1713)
     this.gap = Infinity; this.avoiding = false;
+    this._t = (this._t || 0) + dt;
     if (this.hull && pk && !scaling) {
       this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
       const holder = this.hold ? this.hold.slot : null;
@@ -423,16 +555,18 @@ export class PropBall {
         if (t < this.gap) this.gap = t;
         if (slot === holder || slot === this.cradle) continue;
         if (t > this.resistSkin) continue;                      // out of the skin: nothing to avoid yet
-        this.avoiding = true;
+        this.avoiding = true; this._avoidAt = this._t;
         handResist(this.hull, this.mesh, pack, 1.0, this.resistSkin);
       }
     }
+    // latched for anything that samples between frames (UI glow, probes)
+    this.avoidingHold = this.avoiding || (this._avoidAt != null && this._t - this._avoidAt < 0.3);
     // ── conform collider for the holohand skin, depth-true (:1714-1717)
     this.collider.center.copy(this.sphere.pos);
     this.collider.radius = this.radius * this.userS;
     this.collider.active = true;
     // ── out of the workspace (:1718): tell the game (tile-to-tile pass), then reset
-    if (!this.hold && this.sphere.pos.distanceTo(this.center) > this.boundsR) {
+    if (!this.hold && !attracting && this.sphere.pos.distanceTo(this.center) > this.boundsR) {
       if (this.onExit) this.onExit({ pos: this.sphere.pos.clone(), vel: this.sphere.vel.clone(), quat: this.sphere.quat.clone(), angVel: this.sphere.angVel.clone() });
       this.sphere.reset(); this.hold = null; this.cradle = null;
     }
@@ -442,12 +576,23 @@ export class PropBall {
     return { collider: this.collider, hold: this.hold, cradle: this.cradle, seek: this.seek };
   }
 
+  /**
+   * THE SHAPE, as a game object: the live sphere every hand routine reads —
+   * the same numbers that drive the conform collider and the hand-stop. Feed it
+   * to anything that needs to know where this ball's edge is this frame.
+   */
+  shape() {
+    const c = this.sphere.pos;
+    return { type: 'sphere', center: [c.x, c.y, c.z], radius: this.radius * this.userS,
+             scale: this.userS, held: this.hold ? this.hold.slot : null, over: this.overSlot };
+  }
+
   /** Plain-number state for HUDs / probes (GrabbableSphere.snapshot + hold/cradle/seek). */
   snapshot(out = {}) {
     this.sphere.snapshot(out);
     out.held = this.hold ? this.hold.slot : null;
     out.holdType = this.hold ? this.hold.type : null;
-    out.cradle = this.cradle; out.seek = this.seek; out.scale = this.userS;
+    out.cradle = this.cradle; out.seek = this.seek; out.scale = this.userS; out.zone = this.zone;
     return out;
   }
 
