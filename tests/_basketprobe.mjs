@@ -125,8 +125,8 @@ await page.evaluate(() => {
 await sleep(900);
 out.far = await stat();
 
-// (a2) PRESENT BUT NOT REACHING: a hand parked inside the zone must not drag
-//      the ball to itself — that half of the glue was the worst of it
+// (a2) DEI: a hand simply RESTING inside the zone brings the ball — no reach
+//      gesture, no approach speed. A real hand hovers; that is what it does.
 await page.evaluate(() => {
   const W = window.__bp, c = W.ball();
   window.__park = W.samePixel({ x: c.x + 0.24, y: c.y - 0.1, z: c.z }, 0.3);
@@ -136,10 +136,27 @@ await sleep(300);
 const parkFrom = await stat();
 await sleep(1400);
 out.parked = await stat();
-out.parkedMoved = +Math.hypot(out.parked.pos[0] - parkFrom.pos[0], out.parked.pos[1] - parkFrom.pos[1],
-                              out.parked.pos[2] - parkFrom.pos[2]).toFixed(3);
+out.parkedMoved = +Math.hypot(out.parked.pos[0] - out.rest.pos[0], out.parked.pos[1] - out.rest.pos[1],
+                              out.parked.pos[2] - out.rest.pos[2]).toFixed(3);   // from REST: it is on its way within 300 ms
 await page.evaluate(() => { window.__bp.feed(null, null); });
-await sleep(600);
+await sleep(1200);
+
+// (a3) a JITTERY hover: a real hand never holds still — ±3 mm of tracking noise
+//      every frame must not keep the ball from arriving and being taken
+await page.evaluate(() => { const B = window.__lab.basket.ball; B.sphere.reset(); B.hold = null; });
+await sleep(700);
+for (let k = 0; k < 40; k++) {
+  await page.evaluate(k => {
+    const W = window.__bp, c = W.ball();
+    if (k === 0) window.__hov = W.samePixel({ x: c.x + 0.2, y: c.y - 0.05, z: c.z }, 0.25);
+    const j = () => (Math.random() - 0.5) * 0.006;
+    W.feed(W.open(window.__hov.x + j(), window.__hov.y + j(), window.__hov.z + j()), null);
+  }, k);
+  await sleep(45);
+}
+out.jitter = await stat();
+await page.evaluate(() => { window.__bp.feed(null, null); });
+await sleep(1200);
 
 // (b) REACH: the hand actually travels toward it (from outside the zone, 35 cm
 //     off in depth — the case the screenshot shows). The ball closes the gap.
@@ -183,7 +200,7 @@ out.grabDetail = await page.evaluate(() => {
     if (dz < -R * 0.15) behind++; else if (dz > R * 0.15) front++;
     if (Math.hypot(q.x - c.x, q.y - c.y, q.z - c.z) < R + 0.03) on++;
   }
-  return { held: !!B.hold, type: B.hold && B.hold.type, zone: B.zone, behind, front, on };
+  return { held: !!B.hold, type: B.hold && B.hold.type, zone: B.zone, behind, front, on, collider: B.collider.active };
 });
 await shot('3-held');
 for (let k = 1; k <= 16; k++) {
@@ -343,7 +360,8 @@ const checks = {
   'the scanned ball spawns (textured, 4.5k tris)': R.rest.on && R.rest.textured && R.rest.tris > 3000,
   'authored at a real basketball radius': Math.abs(R.rest.authored - 0.12) < 0.005,
   'gravity is on: it rests on its floor': Math.abs(R.rest.pos[1] - R.far.pos[1]) < 0.01 && R.rest.vel.y === 0,
-  'a hand parked near it does NOT drag it around': R.parkedMoved < 0.02,
+  'DEI: a hand resting in the zone brings it (no reach gesture)': (R.parked.held === 'left' || R.parked.zone !== 'far') && R.parkedMoved > 0.05,
+  'a jittery hover still gets the ball into the hand': R.jitter.held === true || (R.jitter.gap_mm != null && R.jitter.gap_mm < 60),
   'a hand outside the approach zone leaves it alone': R.far.zone === 'far' && Math.hypot(R.far.pos[0] - R.rest.pos[0], R.far.pos[1] - R.rest.pos[1]) < 0.02,
   'REACH: the ball closes the gap to the hand itself': R.approachEnd.gap < R.approachStart.gap - 0.15,
   'even though the hand is 35 cm off in depth': R.approachEnd.gap < R.rest.r + 0.14,
@@ -354,7 +372,7 @@ const checks = {
   'take your hand off it and it lets go': beforeOpen.held && !R.release.held,
   'and it FALLS — gravity, not glue': R.release.fell > 0.05,
   'and it does not jump straight back into the hand': !R.release.held,
-  'the conform only wraps the outer skin (no splattered fingers)': R.rest.collider === true && R.band === 0.022,
+  'the conform only wraps the outer skin (no splattered fingers)': R.grabDetail.collider === true && R.band === 0.022,
   'the OTHER hand is STOPPED by it': R.stop.pushed_mm > 5,
   'and ends flush, never inside': R.stop.deepest_mm > -2,
   'avoidance was in charge': R.stop.avoiding === true,

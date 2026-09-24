@@ -198,7 +198,6 @@ export class PropBall {
     this.grabNear = opts.grabNear || null;
     this.float = !!opts.float;
     this.zone = 'far';                                         // far | approach | contact
-    this._prevMin = { left: Infinity, right: Infinity };       // for "is this hand REACHING at it"
     this._letGo = { left: -9, right: -9 };                     // release refractory, seconds
     this.overSlot = null;                                      // which hand is on it this frame (screen truth)
     this.resistSkin = opts.resistSkin ?? 0.004;                // contact skin for the HAND-STOP, live (metres)
@@ -395,8 +394,8 @@ export class PropBall {
         palmPose(e[1], _pP, _pQ);                                                    // ride the palm frame
         _tB.copy(this.hold.posOff).applyQuaternion(_pQ).add(_pP);
         _tC.copy(this.sphere.pos);
-        this.sphere.pos.lerp(_tB, 0.6);
-        _pQ2.copy(_pQ).multiply(this.hold.quatOff); this.sphere.quat.slerp(_pQ2, 0.5);
+        this.sphere.pos.copy(_tB);                                                   // IN the hand: it never trails behind it
+        _pQ2.copy(_pQ).multiply(this.hold.quatOff); this.sphere.quat.slerp(_pQ2, 0.85);
         _tC.subVectors(this.sphere.pos, _tC).divideScalar(Math.max(dt, 1e-3));
         this._velHist.push(_tC.clone()); if (this._velHist.length > 6) this._velHist.shift();
         this.sphere.vel.copy(_tC);
@@ -443,7 +442,7 @@ export class PropBall {
     // ── DEPTH BIAS (the cube doctrine): a hand over the ball on screen has the ball's z come to CONTACT depth on
     //    the hand's inner side — z only, gravity untouched, never lifted, never moved on screen (:1653-1674)
     this.overSlot = null;
-    if (!this.hold && !this.cradle && !scaling && !this.seek) for (const [slot, pack] of hands) {
+    if (!this.attract && !this.hold && !this.cradle && !scaling && !this.seek) for (const [slot, pack] of hands) {
       const G = this.grasp ? this.grasp(slot, pack, R, false) : null;
       let near = G ? G.over : false;
       if (!G) for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.2) { near = true; break; } }
@@ -482,32 +481,39 @@ export class PropBall {
     //    ball in depth — it finds you.
     this.zone = 'far';
     let attracting = false;
+    this.attractHand = null;
     if (this.attract && !this.hold && !scaling) {
-      let best = Infinity, bestPack = null, bestSlot = null, reaching = false;
+      let best = Infinity, bestPack = null, bestSlot = null;
       for (const [slot, pack] of hands) {
-        const d = this._minDist(pack);
-        // REACHING = getting closer, or a hand that is closing on it. A hand
-        // merely present in frame must not drag the ball around the workspace:
-        // that is the other half of why it felt glued.
-        const near = d < this._prevMin[slot] - 0.0015;
-        this._prevMin[slot] = d;
         if (this._t - this._letGo[slot] < 0.7) continue;        // just let go: leave it alone
-        const G = this.grasp ? this.grasp(slot, pack, R, false) : null;
-        if (d < best) { best = d; bestPack = pack; bestSlot = slot; reaching = near || !!(G && G.closing); }
+        const d = this._minDist(pack);
+        if (d < best) { best = d; bestPack = pack; bestSlot = slot; }
       }
-      if (bestPack && best < this.attract.zone && reaching) {
+      // DEI, PLAIN: a hand in the zone and the ball comes to it. No "is it
+      // reaching" test — a real hand hovers with millimetres of jitter, so a
+      // per-frame approach gate fired on half the frames and gravity took the
+      // ball back on the other half: it never arrived. What stops the glue is
+      // the release refractory above, not a gate on the approach.
+      if (bestPack && best < this.attract.zone) {
         const contact = R + ((this.grabNear && this.grabNear.margin) || 0.03);
         this.zone = best < contact ? 'contact' : 'approach';
+        this.attractHand = bestPack; this.overSlot = bestSlot;
+        attracting = true;                                     // held up while it closes AND at contact (the grab fires next frame)
         if (best > contact) {
-          attracting = true;
-          this._palmC(bestPack, _tB).sub(this.sphere.pos);
+          // it comes to sit ON the palm — the palm centre, one radius off in
+          // depth on the side it is already on — never INTO it, which is what
+          // made the hand-stop shove the whole hand away as it arrived
+          this._palmC(bestPack, _tB);
+          const side = Math.sign(this.sphere.pos.z - _tB.z) || -1;
+          _tB.z += side * (R + 0.012);
+          _tB.sub(this.sphere.pos);
           const len = _tB.length();
           if (len > 1e-5) {
-            const f = (this.attract.force ?? 0.04) * (1 - best / this.attract.zone) * Math.min(3, dt * 60);
+            const f = (this.attract.force ?? 0.04) * (0.35 + 0.65 * (1 - best / this.attract.zone)) * Math.min(3, dt * 60);
             this.sphere.pos.addScaledVector(_tB.divideScalar(len), Math.min(len, f));
             this.sphere.vel.multiplyScalar(0.6);
           }
-        }
+        } else this.sphere.vel.set(0, 0, 0);
       }
     }
     // ── free flight: gravity ALWAYS on (unless this prop floats, DEI-style);
@@ -572,7 +578,7 @@ export class PropBall {
       for (const [slot, pack] of hands) {
         const t = hullTouch(this.hull, this.mesh, pack);        // SHAPE vs SHAPE clearance
         if (t < this.gap) this.gap = t;
-        if (slot === holder || slot === this.cradle) continue;
+        if (slot === holder || slot === this.cradle || pack === this.attractHand) continue;
         if (t > this.resistSkin) continue;                      // out of the skin: nothing to avoid yet
         this.avoiding = true; this._avoidAt = this._t;
         handResist(this.hull, this.mesh, pack, 1.0, this.resistSkin);
@@ -583,7 +589,9 @@ export class PropBall {
     // ── conform collider for the holohand skin, depth-true (:1714-1717)
     this.collider.center.copy(this.sphere.pos);
     this.collider.radius = this.radius * this.userS;
-    this.collider.active = true;
+    // live only while a hand is on or near it (or it is carried): a ball across
+    // the room must not cost a 15k-vertex conform walk per hand per frame
+    this.collider.active = !!(this.hold || this.cradle || this.gap < 0.06);
     // ── out of the workspace (:1718): tell the game (tile-to-tile pass), then reset
     if (!this.hold && !attracting && this.sphere.pos.distanceTo(this.center) > this.boundsR) {
       if (this.onExit) this.onExit({ pos: this.sphere.pos.clone(), vel: this.sphere.vel.clone(), quat: this.sphere.quat.clone(), angVel: this.sphere.angVel.clone() });

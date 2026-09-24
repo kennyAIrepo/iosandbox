@@ -413,7 +413,7 @@ export class HoloHandRig {
 
     // ── Collider conform (unchanged holohand contact design) ──
     let contacts = 0;
-    if (cols && cols.length) contacts = this._conform(pos, cols);
+    if (cols && cols.length) { const near = this._nearCols(lm, cols); if (near.length) contacts = this._conform(pos, near); }
 
     this.mesh.geometry.getAttribute('position').needsUpdate = true;
     this.mesh.geometry.getAttribute('normal').needsUpdate = true;
@@ -425,6 +425,32 @@ export class HoloHandRig {
       this.tips[t].set(p.x, p.y, p.z);
     }
     return lm;
+  }
+
+  /** The colliders that can actually touch this hand this frame: its bounding
+   *  sphere (from the 21 landmarks, plus skin) against each collider's. A prop
+   *  a metre away must not cost a 15,065-vertex conform walk per hand per frame. */
+  _nearCols(lm, cols) {
+    let cx = 0, cy = 0, cz = 0, n = 0;
+    for (let i = 0; i < lm.length; i++) { const p = lm[i]; if (!p) continue; cx += p.x; cy += p.y; cz += p.z; n++; }
+    if (!n) return cols;
+    cx /= n; cy /= n; cz /= n;
+    let r2 = 0;
+    for (let i = 0; i < lm.length; i++) { const p = lm[i]; if (!p) continue; const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz; const d2 = dx * dx + dy * dy + dz * dz; if (d2 > r2) r2 = d2; }
+    const hr = Math.sqrt(r2) + 0.06;                          // the skin reaches past the landmarks
+    const out = this._nearBuf || (this._nearBuf = []);
+    out.length = 0;
+    for (let c = 0; c < cols.length; c++) {
+      const col = cols[c];
+      if (!col || !col.active) continue;
+      let cr;
+      if (col.type === 'sphere') cr = col.radius;
+      else if (col.type === 'box') cr = col.half.length();
+      else { out.push(col); continue; }                       // mesh colliders gate themselves per vertex
+      const dx = col.center.x - cx, dy = col.center.y - cy, dz = col.center.z - cz;
+      if (dx * dx + dy * dy + dz * dz <= (hr + cr) * (hr + cr)) out.push(col);
+    }
+    return out;
   }
 
   _conform(pos, cols) {
