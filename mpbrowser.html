@@ -520,6 +520,10 @@
   <div class="sec">
     <div class="lbl">GAME · RUBIK'S CUBE</div>
     <button id="cubeBtn">🧊 SPAWN CUBE</button>
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button id="cubeSizeDn" title="smaller — or PINCH with both hands and squeeze" style="flex:1;padding:6px;border-radius:8px;border:1px solid var(--cy-dim);background:rgba(28,64,86,.7);color:#fff;font-size:11px;cursor:pointer">➖ smaller</button>
+      <button id="cubeSizeUp" title="bigger — or PINCH with both hands and pull apart, no limit" style="flex:1;padding:6px;border-radius:8px;border:1px solid var(--cy-dim);background:rgba(28,64,86,.7);color:#fff;font-size:11px;cursor:pointer">➕ bigger</button>
+    </div>
     <div style="font-size:9.5px;color:var(--mut);margin-top:6px;line-height:1.55">drops onto the table at the frame bottom
       · grab ✊ / pinch 🤏 · carry, drop, pick it back up · 🔄 hold with one hand,
       grip a layer with the other and TWIST like a cap — clicks every 90°</div>
@@ -1413,6 +1417,10 @@ const slimeLab = {
       if (opp >= 2 && (fingers & (fingers - 1)) !== 0) return { type: 'wrap' };
     }
     for (const t of [3, 4]) if (T[t]) for (const f of [7, 8, 11, 12]) if (T[f] && N[f].dot(N[t]) < -0.2) return { type: 'clip' };
+    // FIST WRAP (the cube's full-fist rule): many joints on it, from opposing
+    // sides — the hand is closed round it, whichever joint the palm test missed
+    let nT = 0; for (let i = 0; i < 21; i++) nT += T[i];
+    if (nT >= 7) for (let a = 0; a < 21; a++) if (T[a]) for (let b = a + 1; b < 21; b++) if (T[b] && N[a].dot(N[b]) < -0.35) return { type: 'wrap' };
     return null;
   },
   /** THE live point cloud (Float32Array n×3, world metres) — null while rigid glass. */
@@ -1578,7 +1586,8 @@ const slimeLab = {
     if (this.hold) {
       const e = hands.find(h => h[0] === this.hold.slot);
       const g = e ? this._wrapGrab(e[1], 0.03, this.hold.slot) : null;
-      if (!g) {
+      this._lost = g ? 0 : (this._lost || 0) + 1;
+      if (!e || this._lost > 4) {                    // opened / gone — 4 frames of grace for tracking flicker (the cube's rule)
         _sbTmpC.set(0, 0, 0); for (const v of this._velHist) _sbTmpC.add(v);
         if (this._velHist.length) _sbTmpC.divideScalar(this._velHist.length);
         this.sphere.vel.copy(_sbTmpC);                // thrown / dropped with the hand's velocity
@@ -1587,12 +1596,12 @@ const slimeLab = {
         _palmPose(e[1], _slP, _slQ);                  // ride the palm frame (translate + rotate with the hand)
         _sbTmpB.copy(this.hold.posOff).applyQuaternion(_slQ).add(_slP);
         _sbTmpC.copy(this.sphere.pos);
-        this.sphere.pos.lerp(_sbTmpB, 0.6);
-        _slQ2.copy(_slQ).multiply(this.hold.quatOff); this.sphere.quat.slerp(_slQ2, 0.5);
+        this.sphere.pos.copy(_sbTmpB);               // IN the hand: it never trails behind it
+        _slQ2.copy(_slQ).multiply(this.hold.quatOff); this.sphere.quat.slerp(_slQ2, 0.85);
         _sbTmpC.subVectors(this.sphere.pos, _sbTmpC).divideScalar(Math.max(dt, 1e-3));
         this._velHist.push(_sbTmpC.clone()); if (this._velHist.length > 6) this._velHist.shift();
         this.sphere.vel.copy(_sbTmpC);
-        this.hold.type = g.type;
+        if (g) this.hold.type = g.type;
       }
     }
     // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (4mm skin) ──
@@ -1603,7 +1612,7 @@ const slimeLab = {
       this.hold = { slot, type: g.type,
                     posOff: _sbTmpB.copy(this.sphere.pos).sub(_slP).applyQuaternion(_slQ2.copy(_slQ).invert()).clone(),
                     quatOff: _slQ2.copy(_slQ).invert().multiply(this.sphere.quat).clone() };
-      this._velHist.length = 0; this.sphere.vel.set(0, 0, 0); this.cradle = null;
+      this._velHist.length = 0; this.sphere.vel.set(0, 0, 0); this.cradle = null; this._lost = 0;
       break;
     }
     // ── CRADLE / POCKET ATTRACTION (the holding pose): a free ball near a palm
@@ -1635,41 +1644,38 @@ const slimeLab = {
     //    spheres meet it: it is pushed, stopped, cradled, gripped ──
     if (!this.hold && !this.cradle && !scaling && !this.seek) for (const [slot, pack] of hands) {
       let near = false;
-      for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.2) { near = true; break; } }
+      for (const i of [0, 5, 9, 13, 17, 4, 8, 12, 16]) { const q = pack[i]; if (q && Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y) < R * 1.5) { near = true; break; } }
       if (!near) continue;
       // contact depth on the side the ball is ALREADY on (never through the hand);
       // a palm facing the camera keeps the full offset, a palm facing down (fingers
       // coming round it) brings the ball almost to the hand depth itself
       const P = this._pose[slot], pc = _sbTmpA.copy(pack[0]).lerp(pack[9], 0.5);
       const side = Math.sign(this.sphere.pos.z - pc.z) || -1;
-      const off = (R + 0.03) * (P.sign !== 0 ? Math.max(0.15, Math.abs(P.n.z)) : 1);
+      // ONE radius off the palm, whatever the palm faces: scaling the offset by
+      // the palm normal's z brought a sideways fist to 15 % of a radius — the
+      // hand sat INSIDE the glass (the cube never scales its depth this way)
+      const off = R + 0.02;
       const zt0 = pc.z + side * off;
       if (Math.abs(zt0 - this.sphere.pos.z) < 0.01) continue;
       const zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, zt0));
-      this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 6);
+      this.sphere.pos.z += (zt - this.sphere.pos.z) * Math.min(1, dt * 12);
       this.seek = 'z'; this.seekHand = pack;
       break;
     }
     // ── free flight: gravity ALWAYS on; the sandbox lane only integrates + floor
     //    (its own grab logic — the cube's anchor-radius grab — is never given a hand) ──
     if (!this.hold && !scaling && !cradleP) this.sphere.update(dt, [], this.floorY());
-    // ── SUPPORT: a free ball is pushed OUT of every hand's joint spheres — it
-    //    rests on a palm, is batted by a hand, never passes through one ──
-    if (!this.hold && !scaling && this.hull) {
-      this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
-      const H = this.hull.begin(this.mesh);
-      for (const [slot, pack] of hands) {
-        _sbTmpB.set(0, 0, 0);
-        if (!H.pushOut(pack, _packRadii(pack), _sbTmpB)) continue;
-        const m = _sbTmpB.length(); if (m < 1e-6) continue;
-        if (m > 0.02) _sbTmpB.multiplyScalar(0.02 / m);       // gentle: never flung — the residual stops the hand instead
-        this.sphere.pos.add(_sbTmpB);
-        _sbTmpB.normalize();
-        const vn = this.sphere.vel.dot(_sbTmpB);
-        if (vn < 0) this.sphere.vel.addScaledVector(_sbTmpB, -vn);   // no bounce into the hand
-        this.sphere.vel.multiplyScalar(0.85);                         // contact friction: it settles, does not skate off
-        this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false); H.begin(this.mesh);
-      }
+    // ── SUPPORT / AVOIDANCE — THE CUBE'S CONTACT SOLVER: the body is pushed
+    //    FULLY out of every present hand's (and body's) joint spheres and picks
+    //    up their velocity (GrabbableSphere._pushOut — the same solver the
+    //    Rubik's cube rests, bats and tumbles on). It sits on a palm, is
+    //    batted, rolled, never passes through a hand — and a hand can never be
+    //    inside it. The old 2 cm-a-frame hull ease could not keep up with a
+    //    closing fist, which is how a fist ended up sitting inside the glass. ──
+    if (!this.hold && !scaling) {
+      for (const hb of this._hands(pk, dt)) this.sphere._pushOut(hb, cradleP ? null : this.sphere.vel, dt);   // 21 joint spheres + live velocity, from the packs
+      if (bodyBody && bodyBody.present) this.sphere._pushOut(bodyBody, cradleP ? null : this.sphere.vel, dt);   // rests on a chest, batted by a knee
+      if (this.sphere.vel.length() > 6) this.sphere.vel.setLength(6);
     }
     // ── CRADLE follow (after physics, so it stays in the pocket) ──
     if (cradleP && !this.hold) {
@@ -1692,7 +1698,7 @@ const slimeLab = {
     // ── conform collider: ghost fingers wrap the live ball, depth-true ──
     slimeCollider.center.copy(this.sphere.pos);
     slimeCollider.radius = SLIME_R * this.userS;
-    slimeCollider.active = true;
+    slimeCollider.active = true;                 // free when far: the rig gates colliders by bounding sphere (_nearCols)
     if (!this.hold && this.sphere.pos.distanceTo(this.center) > 3.4) { this.sphere.reset(); this.hold = null; this.cradle = null; }
     this.mesh.position.copy(this.sphere.pos);
     this.mesh.quaternion.copy(this.sphere.quat);
@@ -1862,7 +1868,7 @@ const basketLab = {
         // THE DEI ROUTE (dei_full.html): on a webcam the hand's depth is a guess,
         // so the BALL closes the gap — it drifts to the palm from anywhere in the
         // approach zone, and a hand ON it takes it. No pose, no curl threshold.
-        attract: { zone: 0.34, force: 0.05 },          // reach AT it (intent-gated) - dei_full.html SNAP_APPROACH
+        attract: { zone: 0.5, force: 0.05 },           // any hand in the zone brings it (DEI, plain) - dei_full.html SNAP_APPROACH
         grabNear: { need: 4, margin: 0.035 } });      // dei_full.html GRAB_LANDMARK_COUNT / SNAP_CONTACT
       this.ball.setScale(1.15);                        // ~28 cm across: a hand-and-a-bit, like a real ball
       this.userS = this.ball.userS;
@@ -2294,7 +2300,7 @@ const cubeLab = {
       if (this._scaling || this.box.surfaceDistance(_cubeMid) < 0.3) {
         const d = L.pinchPoint.distanceTo(R.pinchPoint);
         if (!this._scaling) this._scaling = { d0: Math.max(d, 1e-3), s0: this.scale };
-        this.setScale(Math.max(0.45, Math.min(2.6, this._scaling.s0 * d / this._scaling.d0)));
+        this.setScale(Math.max(0.02, this._scaling.s0 * d / this._scaling.d0));   // NO CEILING: as big as you pull it
         this.box.pos.lerp(_cubeMid, 0.4);            // held between the pinches
         this.box.vel.set(0, 0, 0);
         this.box.angVel.multiplyScalar(0.85);
@@ -2315,10 +2321,10 @@ const cubeLab = {
       }
       if (zt !== null) {
         zt = Math.max(this.center.z - 0.9, Math.min(this.center.z + 0.9, zt));
-        this.iz += (zt - this.iz) * Math.min(1, dt * 5);
+        this.iz += (zt - this.iz) * Math.min(1, dt * 12);      // two low-passes at 5 and 8 lagged the hand by ~300 ms
       }
       if (!this.box.grabbed() && !this._scaling) {
-        this.box.pos.z += (this.iz - this.box.pos.z) * Math.min(1, dt * 8);
+        this.box.pos.z += (this.iz - this.box.pos.z) * Math.min(1, dt * 18);
       }
       const dist = camera.position.distanceTo(_cubeMid.set(this.center.x, this.center.y, this.iz));
       this._halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * dist;
@@ -2337,8 +2343,11 @@ const cubeLab = {
     // back inside instead of rolling out of the visible frame
     if (S.mode === 'mirror' && this._halfW && !this.box.grabbed() && !this._scaling) {
       const m = CUBE_HALF * this.scale;
-      this.box.contain(this.center.x - this._halfW + m, this.center.x + this._halfW - m,
-                       this.center.y + this._halfH - m, dt);
+      // a cube scaled past the frame has no inside to be kept in — crossed walls
+      // would pin it. Bigger than the view, it is simply free.
+      if (m < this._halfW * 0.98 && m < this._halfH * 0.98)
+        this.box.contain(this.center.x - this._halfW + m, this.center.x + this._halfW - m,
+                         this.center.y + this._halfH - m, dt);
     }
     this.model.update(dt);                                                 // release-snap animation
     if (!this.box.grabbed() && this.box.pos.distanceTo(this.center) > 3.4) this.box.reset();
@@ -2449,7 +2458,7 @@ const EXPO = { t: 0, mode: 'mirror', head: { x: 0.5, y: 0.5 }, floorY: 0,
 window.HOPEOS_STATE = EXPO;
 
 // ───────────────────────── main loop ─────────────────────────
-const M = { fps: 0, detect: 0, pose: 0, lastMet: 0 };
+const M = { fps: 0, detect: 0, pose: 0, props: 0, _p: 0, lastMet: 0 };
 const seen = { left: 0, right: 0 };
 const handsBySlot = { left: null, right: null };
 let lastT = performance.now();
@@ -3486,9 +3495,10 @@ function loop() {
   // 🧶 CLOTH RUG: solve it with THIS frame's hands, then take whatever the
   // cloth could not yield out of the HANDS — the rigs pose from the stopped
   // packs, so the drawn fingers stop ON the weave instead of sinking through it
-  { const rpk = AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs;
+  { const tP = performance.now(), rpk = AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs;
     rugLab.update(dt, rpk); rugLab.resist(rpk);
-    basketLab.update(dt, rpk); }        // 🏀 the ball yields, then stops the hand
+    basketLab.update(dt, rpk);          // 🏀 the ball yields, then stops the hand
+    M._p = performance.now() - tP; }
   const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active || basketCollider.active)
     ? [cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider, basketCollider] : null;
   const t1 = performance.now();
@@ -3796,8 +3806,10 @@ function loop() {
     if (hand) handBodies[slot].update(hand.points, dt, hand.img);
     else handBodies[slot].drop();
   }
-  slimeLab.update(dt, AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs);                       // 🟢 glass slime (see-through, soft body)
-  cubeLab.update(dt);
+  { const tP = performance.now();
+    slimeLab.update(dt, AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs);                     // 🟢 glass slime (see-through, soft body)
+    cubeLab.update(dt);
+    M.props += (M._p + performance.now() - tP - M.props) * 0.1; }
   // co-op: in multi mode every player's hands can punch the shared note stream
   const gameHands = (S.mp && mpF) ? [handBodies.left, handBodies.right, ...mpExtraHands] : handBodyArr;
   beatGame.update(dt, gameHands, frame.pose ? frame.pose[0].x : (mpPrimary?.body2D?.[0]?.x ?? null));
@@ -3848,7 +3860,7 @@ function loop() {
     const felt = Math.max(0, M.detect + frameMs + 35 - S.predMs);
     els.metrics.innerHTML =
       `fps <b>${M.fps.toFixed(0)}</b><br>` +
-      `track <b>${M.detect.toFixed(1)}ms</b> · pose <b>${M.pose.toFixed(1)}ms</b><br>` +
+      `track <b>${M.detect.toFixed(1)}ms</b> · pose <b>${M.pose.toFixed(1)}ms</b> · props <b>${M.props.toFixed(1)}ms</b><br>` +
       `mesh <b>${rigR?.stats?.verts ?? '—'}</b> verts (${rigR?.stats?.style ?? '—'})<br>` +
       `body <b>${bodyOn() && activeBodyRig() ? (S.bodyLook === 'shadow' ? '🌑' : '👻') + activeBodyRig().stats.verts + 'v' + (bodyBody.present ? ' ●' : ' ○') + (bodyPose.airY > 0.05 ? ' ▲' : '') : 'off'}</b> · felt ≈ <b>${felt.toFixed(0)}ms</b><br>` +
       `hands <b>${(handsBySlot.left ? '◐ ' : '') + (handsBySlot.right ? '◑' : '') || '—'}</b> · view <b>${S.mode}</b>` +
@@ -5074,6 +5086,8 @@ els.cubeBtn.addEventListener('click', () => {
   try { cubeLab.toggle(!cubeLab.on); }
   catch (e) { console.error(e); toast('🧊 cube failed: ' + (e.message || e), 6000); }
 });
+document.getElementById('cubeSizeDn').addEventListener('click', () => { if (cubeLab.group) cubeLab.setScale(Math.max(0.02, cubeLab.scale / 1.25)); toast('🧊 cube ×' + cubeLab.scale.toFixed(2)); });
+document.getElementById('cubeSizeUp').addEventListener('click', () => { if (cubeLab.group) cubeLab.setScale(cubeLab.scale * 1.25); toast('🧊 cube ×' + cubeLab.scale.toFixed(2)); });
 els.bowBtn.addEventListener('click', () => {
   // spawning the bow means you want to SEE it — exit mesh isolation first
   // (same as the cube), unless the engine SDK owns the display right now
@@ -6721,7 +6735,7 @@ async function engSpawnBasket(meta = {}) {
   home.y = BASKET_R + 0.02;
   const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.0, restitution: 0.72,
     home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0),
-    attract: { zone: 0.34, force: 0.05 },              // the DEI approach, in a world that has a floor
+    attract: { zone: 0.5, force: 0.05 },               // the DEI approach, in a world that has a floor
     grabNear: { need: 4, margin: 0.035 } });
   ball.grasp = ballGraspHook(ball, () => ENG.camera,
     () => ({ W: ENG.renderer.domElement.clientWidth || 1300, H: ENG.renderer.domElement.clientHeight || 900 }), BASKET_PX);
