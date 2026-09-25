@@ -121,7 +121,8 @@ await shot('4-caught');
 await page.evaluate(async () => {
   const W = window.__ep, B = W.ball(), E = window.__eng;
   W.feed(null, null);
-  const { solveLaunch } = await import('./sdk/game/ball-round.js');
+  let mod; try { mod = await import('./sdk/game/ball-round.js'); } catch { mod = await import('./sdkmp/game/ball-round.js'); }   // dev tree or the published sdkmp tree
+  const { solveLaunch } = mod;
   const rim = E.rimWorld();
   const from = { x: B.sphere.pos.x, y: B.sphere.pos.y, z: B.sphere.pos.z }, to = { x: rim.x, y: rim.y + 0.02, z: rim.z };
   const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: 1 / 60, T: 1.2 });
