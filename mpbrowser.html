@@ -224,6 +224,7 @@
   <div class="sec">
     <div class="lbl">IMPORT SDK · live tracking</div>
     <label class="chk"><input id="engSdkChk" type="checkbox"> 🧠 tracking SDK</label>
+    <div class="sname" id="engFrameStat" style="display:none" title="where the frame goes — track: the tracker (camera → landmarks) · pose: the hand rigs · props: ball, rug, slime. A big track number is the machine, not the game"></div>
     <div class="row" id="engSdkParts" style="display:none">
       <button class="opt sel" data-part="hand">🖐 Hand</button>
       <button class="opt" data-part="body">🧍 Body</button>
@@ -277,7 +278,7 @@
       <button class="opt" data-sp="fox" title="rigged fox bust — your lips, expressions and head turns land on it live from the camera (select it → 🎭 mirror me)">🦊 Fox bust</button>
       <button class="opt" data-sp="ball" title="a real size-6 basketball — shape-vs-shape collision against your hands, 5-pixel avoidance skin, wrap/clip to pick it up, open to throw">🏀 Ball</button>
       <button class="opt" data-sp="rug" title="a scanned rug rebuilt as CLOTH — 45×64 simulation lattice under its own 90k-triangle surface; with HoloHands on, lift it, drape it over your palms, close a hand to carry it, pinch with both hands to resize">🧶 Rug</button>
-      <button class="opt" data-sp="hoop" title="a regulation hoop (3.05 m rim, Ø45.7 cm) — the GOAL for the ball round; spawns ahead of you and faces you">🥅 Hoop</button>
+      <button class="opt" data-sp="hoop" title="🏟 the NBA court with its two live hoops (rims at 3.05 m, backboards, stanchions — all real collision) — you stand at the free-throw line of the near one; the GOAL for the ball round">🏟 Court</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -722,7 +723,7 @@ import { HandIntent } from './sdkmp/game/hand-intent.js';
 const CUES = new GameCues({ id: 'engBall' });
 const FRAME_DT = { lab: 1 / 60, eng: 1 / 60, ball: 1 / 60 };   // measured steps: the lab loop, the engine loop, the engine ball's own   // smoothed frame step per loop — the launch solver integrates with the SAME step the ball does
 import { clothify, unclothify } from './sdkmp/core/clothify.js';
-import { PropBall } from './sdkmp/game/prop-ball.js';
+import { PropBall, palmPocket } from './sdkmp/game/prop-ball.js';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
 import { PropHull } from './sdkmp/core/prop-hull.js';
 import { buildRubiksCube, makeHoloTable, makeContactShadow, RubiksModel, twistAngleAbout } from './sdkmp/core/rubiks-cube.js';
@@ -5275,6 +5276,7 @@ async function engInit() {
   ENG.renderer.setSize(innerWidth, innerHeight);
   ENG.renderer.outputColorSpace = THREE.SRGBColorSpace;
   ENG.renderer.toneMapping = THREE.ACESFilmicToneMapping;      // PBR objects; the sky dome is raw and unaffected
+  ENG.renderer.shadowMap.enabled = true; ENG.renderer.shadowMap.type = THREE.PCFSoftShadowMap;   // 🏟 the ball and the hoops cast real shadows (only casters / receivers pay)
   ENG.scene = new THREE.Scene();
   ENG.camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 4000);
   ENG.camera.position.set(6, 4.2, 8);
@@ -5337,6 +5339,10 @@ async function engInit() {
   const sun = new THREE.DirectionalLight(0xfff2e0, 1.6);
   sun.position.copy(sunDir).multiplyScalar(50);
   ENG.scene.add(sun);
+  ENG.sun = sun; sun.castShadow = false;                          // on with a court (engSpawnCourt): an ortho shadow box over the court
+  sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+  { const sc = sun.shadow.camera; sc.near = 5; sc.far = 160; sc.left = -20; sc.right = 20; sc.top = 20; sc.bottom = -20; sc.updateProjectionMatrix(); }   // (without the update the default ±5 m box stays: no shadow past the centre circle)
+  ENG.scene.add(sun.target);
   ENG.objRoot = new THREE.Group(); ENG.scene.add(ENG.objRoot);
 
   // ── editor camera + gizmo ──
@@ -5505,6 +5511,11 @@ function engLoop() {
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
   if (nowT - (ENG._propsT || 0) > 120) engBallTick(avDt);   // 🏀 normally stepped by the LAB loop before the rigs pose (engPropsLabTick); fallback while no lab frame runs
   engRugTick(avDt);                            // 🧶 cloth rugs: solve + hands lift/drape/carry
+  if (nowT - (ENG._fsT || 0) > 350) {          // ⏱ the frame read-out (engine SDK panel): where the frame goes
+    ENG._fsT = nowT; const fs = document.getElementById('engFrameStat');
+    if (fs) { fs.style.display = ENG.sdk.on ? 'block' : 'none';
+      if (ENG.sdk.on) fs.textContent = '⏱ frame ' + (FRAME_DT.lab * 1000).toFixed(0) + ' ms · track ' + M.detect.toFixed(0) + ' · pose ' + M.pose.toFixed(1) + ' · props ' + M.props.toFixed(1) + ' ms · ' + M.fps.toFixed(0) + ' fps'; }
+  }
   engGestureTick(avDt);                        // hand gestures: grab bow, draw string
   engBowTick(avDt);                            // bow draw/loose + arrow ballistics
   // (hand depth-occluders retired: depth-only spheres punched BLACK hand-
@@ -5823,7 +5834,8 @@ function engAvCtlRefresh() {
   if (brec) {                                  // BALL strip: reset · size · frame
     const sel = ENG.sel, B = brec.ball;
     lbl.textContent = 'BASKETBALL · physics';
-    mk('📈 flight', FLIGHT.on, () => { FLIGHT.toggle(); engAvCtlRefresh(); }, 'live physics: height · speed · bounces (e, predicted vs measured rebound) · intent · the predicted arc');
+    mk('🎯 assist', AIM.on, () => { AIM.on = !AIM.on; toast(AIM.on ? '🎯 aim assist ON — a shot in the general direction of the hoop goes in' : '🎯 aim assist OFF — raw physics'); engAvCtlRefresh(); }, 'aim assist: a throw within 50° of the hoop is put on the rim (fully within 25°) — where you point, it goes');
+    mk('📈 flight', FLIGHT.open, () => { FLIGHT.toggle(); }, 'open / collapse the FLIGHT read-out (or click its bar): height · speed · bounces (e, predicted vs measured rebound) · intent · the predicted arc');
     mk('↺ drop it', false, () => { B.sphere.reset(B.center.clone().add(new THREE.Vector3(0, 0.6, 0))); B.hold = null; B.cradle = null; if (B.sim) { B.sim.wake(); B.rec.release(B.sim, { source: 'drop-button' }); } toast('🏀 dropped'); }, 'drop it from above its home');
     mk('➖', false, () => { B.setScale(B.userS / 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'smaller — or PINCH with both hands');
     mk('➕', false, () => { B.setScale(B.userS * 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'bigger — or PINCH with both hands');
@@ -6805,12 +6817,30 @@ const BASKETS = new Map();                    // eng id → { ball }
 //    transform every tick, so a hoop moved with the gizmo keeps its collision. Hands and the tracked
 //    body are kinematic sphere sets inside PropBall (they hit the ball at (1+e)× their speed).
 const ENG_SURF = [];
-const FLIGHT = new FlightHud({ id: 'engFlight', scene: ENG.scene, THREE });
+// the FLIGHT panel lives with the ball game: shown when a ball is born, hidden when the last ball goes or the
+// lane is left; collapsed to its title bar by default — a click on the bar (or 📈 flight) opens the read-out
+const FLIGHT = new FlightHud({ id: 'engFlight', scene: ENG.scene, THREE, open: false, onToggle: () => engAvCtlRefresh() });
 const _sfA = new THREE.Vector3(), _sfB = new THREE.Vector3();
 function engSurfacesTick() {
   ENG_SURF.length = 0;
   for (const rec of HOOPS.values()) {
     const g = rec.g; g.updateWorldMatrix(true, false); const M = g.matrixWorld, sx = g.scale.x || 1;
+    if (rec.court) {                                   // 🏟 a court hoop: ring / slab / stanchion fitted to the mesh (model units × the court's scale)
+      const e = rec.court, C = COURT;
+      if (!rec.surf) rec.surf = {
+        board: Surface.rect('board', new THREE.Vector3(), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1), 1, 1, MATERIALS.board, 0.04),
+        rim: Surface.ring('rim', new THREE.Vector3(), new THREE.Vector3(0, 1, 0), C.rimR * sx, 0.012, MATERIALS.rim),
+        pole: Surface.capsule('pole', new THREE.Vector3(), new THREE.Vector3(), 0.22, MATERIALS.pole),
+        arm: Surface.capsule('arm', new THREE.Vector3(), new THREE.Vector3(), 0.1, MATERIALS.pole),
+      };
+      const S = rec.surf, yF = C.floorY;
+      S.board.c.set(e.boardX, C.boardYc, 0).applyMatrix4(M); S.board.n.set(-e.sign, 0, 0).transformDirection(M); S.board.u.set(0, 0, 1).transformDirection(M);
+      S.board.v.crossVectors(S.board.n, S.board.u); S.board.hu = C.boardHalf[0] * sx; S.board.hv = C.boardHalf[1] * sx; S.board.th = 0.04;
+      S.rim.c.copy(rec.rimLocal).applyMatrix4(M); S.rim.axis.set(0, 1, 0).transformDirection(M); S.rim.R = C.rimR * sx; S.rim.tube = 0.012;
+      S.pole.a.set(e.poleX, yF, 0).applyMatrix4(M); S.pole.b.set(e.poleX, yF + 2.6 / sx, 0).applyMatrix4(M); S.pole.r = 0.22;
+      S.arm.a.set(e.poleX, yF + 2.6 / sx, 0).applyMatrix4(M); S.arm.b.set(e.boardX + e.sign * 0.15 / sx, yF + 3.3 / sx, 0).applyMatrix4(M); S.arm.r = 0.1;   // the arm meets the BACK of the glass (its cap must not poke through the face)
+      ENG_SURF.push(S.board, S.rim, S.pole, S.arm); continue;
+    }
     if (!rec.surf) rec.surf = {
       board: Surface.rect('board', new THREE.Vector3(), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0), 0.9, 0.525, MATERIALS.board, 0.04),
       rim: Surface.ring('rim', new THREE.Vector3(), new THREE.Vector3(0, 1, 0), HOOP_RIM_R, 0.012, MATERIALS.rim),
@@ -6828,7 +6858,7 @@ function engSurfacesTick() {
   return ENG_SURF;
 }
 async function engSpawnBasket(meta = {}) {
-  const mesh = await basketGeo(ENG.gltf);
+  const mesh = await basketGeo(ENG.gltf); mesh.castShadow = true;   // its shadow lands on the court
   const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
   // THE BIAS: with tracking live the ball is born within reach of the hands — a
   // palm's length in front of the nearest palm, where the DEI approach takes it the
@@ -6847,6 +6877,7 @@ async function engSpawnBasket(meta = {}) {
   // NO screen-space grasp hook here: it snaps the ball to the hand's DEPTH (inside the palm) — a webcam-mirror device.
   // In the engine the catch is physical: the pocket on the palm's inner side, the claw, the finger stop.
   ball.grasp = null;
+  ball.aim = (pos, vel, info) => engAimAssist(pos, vel, info);   // 🎯 a shot in the general direction of the hoop is put on the hoop
   ball.onGrab = (slot) => { if (!ROUND.on) CUES.cue('caught', slot + ' hand', undefined, 1300); };
   ball.onRelease = (v) => { if (!ROUND.on && v.length() > 1.6) CUES.cue('thrown', '', undefined, 1100); };
   engAdopt(mesh, { type: 'ball', label: meta.label || 'basketball ' + (ENG.seq + 1) });
@@ -6890,7 +6921,7 @@ function engBallTick(dt) {
     B.update(dt, packs, packHands(packs), bodies);
     if (first && FLIGHT.on) {                          // the FLIGHT panel + the predicted arc, for the first ball
       FLIGHT.update(B);
-      FLIGHT.arc(!B.hold && !B.cradle && B.sim && !B.sim.asleep && B.sphere.vel.length() > 0.6 ? predictArc(B.sim, { floorY: B.floorY }) : []);
+      FLIGHT.arc(FLIGHT.open && !B.hold && !B.cradle && B.sim && !B.sim.asleep && B.sphere.vel.length() > 0.6 ? predictArc(B.sim, { floorY: B.floorY }) : []);
     }
     first = false;
   }
@@ -6976,7 +7007,8 @@ function engHandTarget(out, prefer = null) {
   if (best) {
     const B = engRoundBall();                    // the POCKET: on the palm's inner side — where a ball can actually be caught
     const pack = pk && bestSlot ? pk[bestSlot === 'left' ? 'L' : 'R'] : null;
-    const P = B && B._pocketOf && pack ? B._pocketOf(bestSlot, pack, B.radius * B.userS, new THREE.Vector3()) : null;
+    const P = B && B._pocketOf && pack ? B._pocketOf(bestSlot, pack, B.radius * B.userS, new THREE.Vector3())
+            : pack ? palmPocket(pack, BASKET_R, new THREE.Vector3()) : null;   // no ball yet (the FIRST spawn): the pocket from the hand alone — never the palm centre (inside the hand)
     return P ? out.copy(P) : out.copy(best).add(new THREE.Vector3(0, 0.03, 0));
   }
   const U = ENG_USER;
@@ -6984,7 +7016,47 @@ function engHandTarget(out, prefer = null) {
   if (U.hL) return out.copy(U.handL);
   return null;
 }
-// ── 🥅 THE HOOP — regulation numbers, procedural, faces the camera ──
+// ── 🏟 THE COURT — knickscourt.glb under sdk/assets/props — a full NBA court with its two hoops, one mesh. Measured from the
+//    geometry (the ring fit in tests/_courtprobe.mjs's header): at scale 15.05 the floor is 28.6 m long, the rims sit at
+//    3.05 m (rings found at model (0.707, 0.072, 0) and (-0.722, 0.074, 0), Ø 0.457 m — the ball's 0.24 m fits), the
+//    backboards are 1.97 × 1.09 m with their bottom at 2.90 m, the stanchions stand 2 m behind the glass. Each hoop is
+//    REAL physics — the rim a ring, the board a slab, the stanchion capsules: the same Surface kinds as the procedural
+//    hoop, so the ball bounces off the iron, banks off the glass, and the goal test, the launch and the aim assist read
+//    the court's rims (the nearest one). The court's floor IS the ball's floor (its top at y = 0). Shadows on.
+const COURT_URL = 'sdkmp/assets/props/knickscourt.glb';
+const COURT = { scale: 15.05, floorY: -0.130, rimR: 0.2286 / 15.05, boardHalf: [0.065, 0.036], boardYc: 0.099,
+  ends: [{ rim: [0.707, 0.072, 0], boardX: 0.748, poleX: 0.88, sign: 1 }, { rim: [-0.722, 0.074, 0], boardX: -0.746, poleX: -0.88, sign: -1 }] };
+let _courtAsset = null;
+async function engSpawnCourt(meta = {}) {
+  toast('🏟 loading the court…', 8000);
+  if (!_courtAsset) _courtAsset = await ENG.gltf.loadAsync(COURT_URL);
+  const g = _courtAsset.scene.clone(true);
+  g.traverse(o => { if (!o.isMesh) return; o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
+    // a scanned court ships UNLIT (baked light, KHR_materials_unlit → MeshBasicMaterial): unlit receives no shadow. Re-lit
+    // as a matte standard material with the same texture — the sun and the hemisphere light it, the ball's shadow lands on it
+    const mats = Array.isArray(o.material) ? o.material : [o.material];
+    o.material = mats.map(m => (m && m.isMeshBasicMaterial) ? new THREE.MeshStandardMaterial({ map: m.map || null, color: m.color ? m.color.clone() : 0xffffff, roughness: 0.92, metalness: 0, side: m.side }) : m);
+    if (o.material.length === 1) o.material = o.material[0];
+    // the scan exports metallicFactor 1 with a packed metal/rough texture: a fully METALLIC floor has no diffuse — the sun's
+    // shadow cannot show on it. Wood and paint are dielectric: matte, the normal map kept
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.isMeshStandardMaterial) { m.metalness = 0; m.metalnessMap = null; m.roughness = 0.9; m.roughnessMap = null; m.needsUpdate = true; } });
+  const sc = COURT.scale; g.scale.setScalar(sc);
+  // the user stands at the free-throw line of the NEAR hoop (its rim 4.2 m ahead) facing it: the court's +x runs along fwd
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
+  const anchor = engHandTarget(new THREE.Vector3()) || ENG.orbit.target.clone();
+  g.rotation.y = Math.atan2(-fwd.z, fwd.x);                                                   // local +x → fwd
+  const near = COURT.ends[0], rimL = new THREE.Vector3(near.rim[0] * sc, 0, near.rim[2] * sc).applyAxisAngle(new THREE.Vector3(0, 1, 0), g.rotation.y);
+  g.position.copy(anchor).setY(0).addScaledVector(fwd, 4.2).sub(rimL); g.position.y = -COURT.floorY * sc;   // the floor's top at y = 0
+  engAdopt(g, { type: 'court', label: meta.label || 'court' });
+  if (meta.p) { g.position.fromArray(meta.p); g.rotation.fromArray(meta.r); g.scale.fromArray(meta.s); }
+  for (const e of COURT.ends) HOOPS.set(g.userData.eng.id + (e.sign > 0 ? ':a' : ':b'), { g, court: e, rimLocal: new THREE.Vector3(e.rim[0], e.rim[1], e.rim[2]) });
+  ENG.grid.visible = false;                                                                   // the court IS the floor
+  if (ENG.sun) { ENG.sun.castShadow = true; ENG.sun.target.position.copy(g.position).setY(0); ENG.sun.target.updateMatrixWorld(); }
+  engRefreshList(); engAvCtlRefresh();
+  toast('🏟 court — both hoops are live: select the ball and hit 🎯 GO!, or just shoot', 4200);
+  return g;
+}
+// ── 🥅 THE HOOP — regulation numbers, procedural, faces the camera (kept for the probes; the UI spawns the court) ──
 const HOOPS = new Map();                       // eng id → { g, rim: {r, local} }
 const HOOP_RIM_Y = 3.05, HOOP_RIM_R = 0.2286;
 function engSpawnHoop(meta = {}) {
@@ -7024,15 +7096,47 @@ function engSpawnHoop(meta = {}) {
   engRefreshList(); engAvCtlRefresh();
   return g;
 }
-const _rimW = new THREE.Vector3();
-function engRimWorld() {                       // the first hoop's rim, in world metres — or null
+const _rimW = new THREE.Vector3(), _rimRef = new THREE.Vector3();
+function engRimWorld() {                       // the rim NEAREST the user (hand, else camera), in world metres — or null
+  let best = null, bestD = Infinity;
+  const ref = engHandTarget(_rimRef) || _rimRef.copy(ENG.camera.position);
   for (const rec of HOOPS.values()) {
     rec.g.updateWorldMatrix(true, false);
     _rimW.copy(rec.rimLocal).applyMatrix4(rec.g.matrixWorld);
-    const n = new THREE.Vector3(0, 0, 1).transformDirection(rec.g.matrixWorld); n.y = 0; n.normalize();   // the hoop faces its +z (the user's side)
-    return { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: HOOP_RIM_R * (rec.g.scale.x || 1), n: { x: n.x, y: 0, z: n.z } };
+    const d = _rimW.distanceTo(ref); if (d >= bestD) continue; bestD = d;
+    const n = rec.court ? new THREE.Vector3(-rec.court.sign, 0, 0).transformDirection(rec.g.matrixWorld)   // a court rim faces the court's centre
+                        : new THREE.Vector3(0, 0, 1).transformDirection(rec.g.matrixWorld);                // the procedural hoop faces its +z (the user's side)
+    n.y = 0; n.normalize();
+    best = { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: (rec.court ? COURT.rimR : HOOP_RIM_R) * (rec.g.scale.x || 1), n: { x: n.x, y: 0, z: n.z } };
   }
-  return null;
+  return best;
+}
+// ── 🎯 AIM ASSIST: a shot thrown in the hoop's GENERAL direction is put ON the hoop. The release velocity comes from
+//    the hands (the peak palm velocity × gain); if it points within AIM.cone degrees of the rim in azimuth and is not
+//    thrown at the floor, it becomes the solved launch that drops through the ring — fully inside AIM.snap, blended out
+//    to the cone's edge. Making goals must be learnable with webcam hands: where you point, it goes. Off = raw physics.
+const AIM = { on: true, cone: 50, snap: 25, strength: 1, minSpeed: 0.5 };
+function engAimAssist(pos, vel, info = {}) {
+  if (!AIM.on) return null;
+  const rim = engRimWorld(); if (!rim) return null;
+  const speed = vel.length(); if (speed < AIM.minSpeed) return null;                                   // a drop is not a shot
+  const dx = rim.x - pos.x, dz = rim.z - pos.z, dist = Math.hypot(dx, dz); if (dist < 0.5) return null;   // under the rim: physics
+  const hs = Math.hypot(vel.x, vel.z);
+  const az = hs > 1e-6 ? Math.acos(Math.max(-1, Math.min(1, (vel.x * dx + vel.z * dz) / (hs * dist)))) * 180 / Math.PI : 0;   // azimuth error
+  const elev = Math.asin(Math.max(-1, Math.min(1, vel.y / speed))) * 180 / Math.PI;
+  if (az > AIM.cone || elev < -20) return null;                                                          // not at the hoop, or at the floor
+  const w = AIM.strength * (az <= AIM.snap ? 1 : 1 - (az - AIM.snap) / Math.max(1e-6, AIM.cone - AIM.snap));
+  if (w <= 0.02) return null;
+  const B = info.ball, g0 = B && B.sim ? B.sim.g : -9.81;
+  // a real arc (~1.0 s from 2.5 m), and never flatter than a 45° ENTRY: a shallow arc clips the front iron (the rim is a real collider)
+  const dh = rim.y + 0.02 - pos.y, tEntry = Math.sqrt(Math.max(0.1, 2 * (dh + dist) / -g0));
+  const T = Math.min(1.8, Math.max(Math.min(1.6, Math.max(0.8, 0.55 + dist * 0.18)), tEntry));
+  const g = g0, k = B && B.sim ? B.sim.k : 0;
+  const v = solveLaunchSim({ x: pos.x, y: pos.y, z: pos.z }, { x: rim.x, y: rim.y + 0.02, z: rim.z }, { g, k, T });
+  const out = new THREE.Vector3(v.vx, v.vy, v.vz); if (w < 1) out.lerp(vel, 1 - w);
+  ENG._aimed = { t: performance.now(), az: +az.toFixed(0), elev: +elev.toFixed(0), w: +w.toFixed(2), dist: +dist.toFixed(2), source: info.source };
+  CUES.cue('AIM ASSIST', az.toFixed(0) + '° off → on the hoop' + (w < 1 ? ' (' + (w * 100).toFixed(0) + ' %)' : ''), 'good', 900);
+  return { vel: out, note: 'assist ' + (w * 100).toFixed(0) + ' % · ' + az.toFixed(0) + '° off' };
 }
 // ── THE LAUNCH: put a ball on a lob that lands in the hand (solved against the ball's own integrator) ──
 function engStepDt() { return performance.now() - (ENG._propsT || 0) > 120 ? FRAME_DT.eng : FRAME_DT.ball; }   // the ball's own measured step (lab loop, pre-pose); engLoop only as fallback
@@ -7101,7 +7205,7 @@ async function engRoundStart() {
   let B = engRoundBall();
   if (!B) { await engSpawnBasket(); B = engRoundBall(); }
   if (!B) return false;
-  if (!HOOPS.size) engSpawnHoop();
+  if (!HOOPS.size) await engSpawnCourt();
   ROUND.ball = B; ROUND.on = true;
   ROUND.r.start(performance.now() / 1000);
   ROUND._state = 'idle';                        // the first tick cues GO!
@@ -7202,7 +7306,7 @@ function voiceCommand(cmd, c) {
     if (cmd === 'ball') engVoiceBall(who).catch(() => {});
     else if (cmd === 'go') { if (!ROUND.on) engRoundStart().catch(() => {}); }
     else if (cmd === 'stop') { if (ROUND.on) engRoundStop(); }
-    else if (cmd === 'hoop') { if (!HOOPS.size) engSpawnHoop(); }
+    else if (cmd === 'hoop') { if (!HOOPS.size) engSpawnCourt().catch(() => {}); }
     else if (cmd === 'drop') { const B = engRoundBall(); if (B) { B.hold = null; B.cradle = null; B.sphere.reset(B.center.clone().add(new THREE.Vector3(0, 0.6, 0))); } }
     else if (cmd === 'rug') { if (!RUGS.size) engSpawnRug().catch(() => {}); }
     else if (cmd === 'bow') document.querySelector('#engSpawnRow [data-sp="bow"]')?.click();
@@ -7274,8 +7378,8 @@ function engSdkDolly() {
 }
 ENG.round = ROUND; ENG.roundStart = engRoundStart; ENG.roundStop = engRoundStop; ENG.spawnHoop = engSpawnHoop; ENG.hoops = HOOPS;
 ENG.handTarget = (out) => engHandTarget(out || new THREE.Vector3()); ENG.syncLabCamera = engSyncLabCamera; ENG.launchBall = engLaunchBall;
-ENG.rimWorld = engRimWorld; ENG.freeBall = engFreeBall; ENG.cues = CUES; ENG.launchBallTo = launchBallTo; ENG.frameDt = () => engStepDt(); window.__lab.frameDt = () => FRAME_DT.lab;
-ENG.flight = FLIGHT; ENG.surfaces = ENG_SURF; ENG.surfacesTick = engSurfacesTick;
+ENG.rimWorld = engRimWorld; ENG.freeBall = engFreeBall; ENG.cues = CUES; ENG.launchBallTo = launchBallTo; ENG.frameDt = () => engStepDt(); window.__lab.frameDt = () => FRAME_DT.lab; window.__lab.M = M;   // frame metrics (detect · pose · props ms) for the perf probes
+ENG.flight = FLIGHT; ENG.surfaces = ENG_SURF; ENG.surfacesTick = engSurfacesTick; ENG.aim = AIM; ENG.aimAssist = engAimAssist;
 ENG.flightLog = () => { const B = engRoundBall(); return B && B.rec ? B.rec.events : []; };
 
 // ── CLOTHIFY, the component: any prop in the scene becomes cloth ──
@@ -7326,7 +7430,7 @@ function engRugFrame(o) {                      // put the camera on it
 
 ENG.spawnRug = (...a) => engSpawnRug(...a); ENG.rugs = RUGS; ENG.select = (...a) => engSelect(...a);
 ENG.clothify = (...a) => engClothify(...a); ENG.unclothify = (...a) => engUnclothify(...a);
-ENG.spawnBasket = (...a) => engSpawnBasket(...a); ENG.baskets = BASKETS;
+ENG.spawnBasket = (...a) => engSpawnBasket(...a); ENG.baskets = BASKETS; ENG.delete = (o) => engDelete(o); ENG.spawnCourt = (...a) => engSpawnCourt(...a); ENG.court = COURT;
 
 function engGestureTick(dt) {
   if (!BOWS.size) return;
@@ -7736,9 +7840,13 @@ function engDelete(o) {
   if (FOXES.get(o.userData.eng.id)?.live) engFoxSetLive(o, false);
   FOXES.delete(o.userData.eng.id);
   const bk = BASKETS.get(o.userData.eng.id);
-  if (bk) { BASKETS.delete(o.userData.eng.id); }
+  if (bk) { BASKETS.delete(o.userData.eng.id); if (!BASKETS.size) FLIGHT.hide(); }   // the panel lives with the ball game
   if (bk && ROUND.on && ROUND.ball === bk.ball) engRoundStop();
   if (HOOPS.has(o.userData.eng.id)) { HOOPS.delete(o.userData.eng.id); }
+  if (d && d.type === 'court') {
+    for (const [k, rec] of [...HOOPS]) if (rec.g === o) HOOPS.delete(k);
+    if (!ENG.objects.some(x => x !== o && x.userData.eng.type === 'court')) { ENG.grid.visible = engEls.engGridChk ? engEls.engGridChk.checked : true; if (ENG.sun) ENG.sun.castShadow = false; }
+  }
   const rg = RUGS.get(o.userData.eng.id);
   if (rg) {
     if (rg.clothified) unclothify(rg.piece);
@@ -7804,6 +7912,10 @@ async function engRestore(snap) {
       try { engSpawnHoop({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
       catch (e) { console.warn('hoop restore failed', e); }
     }
+    else if (rec.type === 'court') {
+      try { await engSpawnCourt({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
+      catch (e) { console.warn('court restore failed', e); }
+    }
     else if (rec.type === 'rug') {
       try { await engSpawnRug({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
       catch (e) { console.warn('rug restore failed', e); }
@@ -7835,12 +7947,14 @@ async function engEnter() {
   await engInit();
   ENG.on = true;
   document.body.classList.add('engine-view');
+  if (BASKETS.size) FLIGHT.show();              // a ball still in the scene: its panel comes back with the lane
   engLoop();
 }
 function engExit() {
   if (ENG.sdk.on) engSdkOff();               // never hand the lab back in a hijacked state
   ENG.on = false;
   cancelAnimationFrame(ENG.raf);
+  FLIGHT.hide();                               // the panel is the engine ball's: never over the mirror lane
   document.body.classList.remove('engine-view');
 }
 
@@ -8114,7 +8228,7 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
     return;
   }
   if (b.dataset.sp === 'hoop') {
-    engSpawnHoop(); toast('🥅 hoop — select the ball and hit 🎯 GO! for a round: it comes to your hands, you shoot', 4200);
+    engSpawnCourt().catch(e => toast('⚠ court: ' + (e.message || e), 5000));   // 🏟 the court with its two hoops (the procedural hoop stays for the probes)
     return;
   }
   if (b.dataset.sp === 'rug') {

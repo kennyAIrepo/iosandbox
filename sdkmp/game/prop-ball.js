@@ -148,6 +148,27 @@ export function makeBallMesh(r) {
 const _newPose = () => ({ pose: false, pc: new THREE.Vector3(), n: new THREE.Vector3(), pocket: new THREE.Vector3(), closure: 0, evi: 0, sign: 0,
   pcPrev: new THREE.Vector3(), step: 0, seen: false });   // step = the palm centre's motion since the last frame (m): the hold re-test skin grows with it (B1)
 
+/**
+ * The POCKET of a hand WITHOUT a ball: palm centre + inner normal · (R + palm radius + 4 mm). The inner side comes from
+ * the hand's own shape (the thumb and the fingertips lie on the volar side); a perfectly flat hand (no evidence) uses the
+ * side that faces UP — a hand held out for a ball. A ball born HERE sits on the palm; born at the palm centre it is
+ * inside the hand, the stops mutate the pack, the pose flips, and it falls through (the first-spawn bug).
+ */
+export function palmPocket(pack, R, out) {
+  if (!pack || !pack[0] || !pack[9] || !pack[5] || !pack[17]) return null;
+  const rad = packRadii(pack), palmR = (rad[5] + rad[9] + rad[13]) / 3;
+  out.set(0, 0, 0); let n = 0; for (const i of [0, 5, 9, 17]) { const q = pack[i]; if (!q) continue; out.x += q.x; out.y += q.y; out.z += q.z; n++; } out.multiplyScalar(1 / n);
+  const a = new THREE.Vector3(pack[9].x - pack[0].x, pack[9].y - pack[0].y, pack[9].z - pack[0].z), span = a.length(); if (span < 1e-4) return null;
+  const b = new THREE.Vector3(pack[5].x - pack[17].x, pack[5].y - pack[17].y, pack[5].z - pack[17].z);
+  const nrm = new THREE.Vector3().crossVectors(a, b); if (nrm.lengthSq() < 1e-10) return null; nrm.normalize();
+  let volar = 0;
+  for (const i of [1, 2]) if (pack[i]) volar += (pack[i].x - pack[0].x) * nrm.x + (pack[i].y - pack[0].y) * nrm.y + (pack[i].z - pack[0].z) * nrm.z;
+  for (const i of [8, 12, 16, 20]) if (pack[i]) volar += ((pack[i].x - out.x) * nrm.x + (pack[i].y - out.y) * nrm.y + (pack[i].z - out.z) * nrm.z) * 0.5;
+  volar /= span;
+  if (Math.abs(volar) > 0.02) { if (volar < 0) nrm.negate(); } else if (nrm.y < 0) nrm.negate();
+  return out.addScaledVector(nrm, R + palmR + 0.004);
+}
+
 export class PropBall {
   /**
    * @param {THREE.Scene|null} scene   null is fine (Node smoke tests)
@@ -172,6 +193,7 @@ export class PropBall {
     this.onExit = opts.onExit || null;
     this.onGrab = opts.onGrab || null;
     this.onRelease = opts.onRelease || null;
+    this.aim = opts.aim || null;             // (pos, vel, { source, slot, handSpeed, ball }) → { vel, note } | null — the host rewrites a release (the engine AIM ASSIST puts a shot on the hoop)
     this.userS = 1;                                            // live scale (two-hand pinch / UI)
     this.hull = PropHull.sphere(this.radius);                  // :1303 — EXACT sphere hull
     this.mesh = opts.mesh || makeBallMesh(this.radius);
@@ -374,6 +396,7 @@ export class PropBall {
     for (const s of this.surfaces) S.push(s);
     const hold0 = this.grabNear ? R + (this.grabNear.margin ?? 0.03) + 0.05 : -1;
     for (const [slot, pack] of hands) {
+      if (this._t - this._letGo[slot] < 0.12 && this.sphere.vel.lengthSq() > 0.25 && _tA.copy(this.sphere.pos).sub(this._palmC(pack, _tB)).dot(this.sphere.vel) > 0) continue;   // the ball is LEAVING this hand (a throw / push): the hand BEHIND a departing ball does not bat it again
       if (!this._fast(slot)) {                                        // a SWINGING hand bats it whatever its distance; a slow one…
         if (pack === this.attractHand) continue;                     // …that it is coming TO seats it — it does not bat it
         if (hold0 > 0 && this._minDist(pack) < hold0) continue;     // …about to take it (the ejector bug)
@@ -493,7 +516,9 @@ export class PropBall {
       // the PASS: the OTHER hand's palm faces the ball and sits on it (its pocket is where the ball is) while this
       // hand opens — or the other claws it — and the hold moves over; the giving hand may not take it back for 0.7 s
       { const o = hands.find(h => h[0] !== this.hold.slot);
-        if (o && e && this._nearGrab(o[1], R, o[0]) && (closure(e[1]) < 0.4 || (I && I.claw && I.claw.slot === o[0]))) {
+        // (a claw takes it only from a hand it out-closes: an open palm resting on the ball is not a claw — two palms on the
+        //  ball otherwise ping-pong the hold every 0.7 s, each taking it back when its refractory ends)
+        if (o && e && this._nearGrab(o[1], R, o[0]) && (closure(e[1]) < 0.4 || (I && I.claw && I.claw.slot === o[0] && closure(o[1]) > closure(e[1]) + 0.1))) {
           this._letGo[this.hold.slot] = this._t;
           const pocket = this._pocketOf(o[0], o[1], R, _pk); if (pocket) this.sphere.pos.copy(pocket);
           palmPose(o[1], _pP, _pQ);
@@ -519,9 +544,12 @@ export class PropBall {
         _tC.set(0, 0, 0); for (const v of this._velHist) _tC.add(v);
         if (this._velHist.length) _tC.divideScalar(this._velHist.length);
         this.sphere.vel.copy(_tC);                                                  // thrown / dropped with the hand's velocity
-        if (push) this.sphere.vel.copy(push.vel);                                   // the SHOT leaves at the palm's peak velocity
-        this._letGo[this.hold.slot] = this._t;                                       // and whatever let go (push, drop, open) cannot re-take it for 0.7 s — the other hand can (the pass)
-        if (this.sim) { this.sim.wake(); this.rec.release(this.sim, { source: push ? 'push' : drop ? 'drop' : 'open', handSpeed: push ? push.speed : undefined, why: push ? push.why : undefined, conf: push ? push.conf : undefined }); }
+        if (push) this.sphere.vel.copy(push.vel);                                   // the SHOT / THROW leaves at the peak palm velocity × gain
+        const source = push ? (push.kind || 'push') : drop ? 'drop' : 'open';
+        let aimed = null;                                                            // 🎯 the host may put a shot ON the hoop (never a drop)
+        if (this.aim && !drop) { aimed = this.aim(this.sphere.pos, this.sphere.vel, { source, slot: this.hold.slot, handSpeed: push ? push.speed : undefined, ball: this }); if (aimed && aimed.vel) this.sphere.vel.copy(aimed.vel); }
+        this._letGo[this.hold.slot] = this._t;                                       // and whatever let go (push, throw, drop, open) cannot re-take it for 0.7 s — the other hand can (the pass)
+        if (this.sim) { this.sim.wake(); this.rec.release(this.sim, { source, handSpeed: push ? push.speed : undefined, gain: push ? push.gain : undefined, why: push ? push.why : undefined, conf: push ? push.conf : undefined, assist: aimed ? aimed.note : undefined }); }
         if (!e || this._minDist(e[1]) > R + (this.grabNear ? (this.grabNear.margin ?? 0.03) : 0.03) + 0.15)
           this._letGo[this.hold.slot] = this._t;                                    // a real departure: no instant re-grab
         this.hold = null; this._velHist.length = 0;
@@ -585,6 +613,7 @@ export class PropBall {
       }
       if (!this.cradle) for (const [slot] of hands) {
         const P = this._pose[slot]; if (!P.pose) continue;
+        if (this._t - this._letGo[slot] < 0.7 || this._fast(slot)) continue;      // it just left this hand (a throw / push / drop): the pocket may not cradle it back — and a swinging hand never cradles
         const dx = P.pocket.x - this.sphere.pos.x, dy = P.pocket.y - this.sphere.pos.y, dz = P.pocket.z - this.sphere.pos.z;
         if (Math.hypot(dx, dz) > R * 3.5 || dy > R * 0.8 || Math.abs(dy) > 0.9) continue;   // in reach (B1 (3): 3.5 R, was 2.5), not above the ball
         const k = Math.min(1, dt * 3);

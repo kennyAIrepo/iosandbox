@@ -16,13 +16,15 @@
  *
  *   const I = new HandIntent();
  *   const r = I.update(hands, { pos, r, held, holdSlot }, dt, t);   // hands = [['left', pack], ['right', pack]]
- *   r.claw {slot, two, conf} · r.release {slot, vel, speed, dir, conf, why} · r.drop {slot} · r.blockAttract
+ *   r.claw {slot, two, conf} · r.release {slot, kind: push|throw, vel (= peak palm velocity × throwGain), speed, gain, dir, conf, why} · r.drop {slot} · r.blockAttract
  */
 import * as THREE from 'three';
 
 export const INTENT_DEFAULTS = {
   pushSpeed: 1.2,       // m/s the palm must reach to be a shot (a real shooting push is 1–2.5 m/s)
   pushDecel: -4,        // m/s² along the motion: the palm braking = the ball is gone
+  throwSpeed: 0.9,      // m/s the holding hand moving in ANY direction (not clenched) lets the ball go: a pass, a fling, a sideways shot
+  throwGain: 1.5,       // the ball leaves at the peak palm velocity × this — webcam hands move slowly; a shot needs 4–6 m/s
   clawSpan: [0.16, 0.40],
   clawClosure: [0.15, 0.85],
   clawFrames: 3,
@@ -41,7 +43,7 @@ export function closure(p) { const palm = Math.hypot(p[9].x - p[0].x, p[9].y - p
 export function tipsDir(p, out) { _a.set(0, 0, 0); _b.set(0, 0, 0); for (const i of [8, 12, 16, 20]) { const q = p[i] || p[0]; _a.x += q.x / 4; _a.y += q.y / 4; _a.z += q.z / 4; } for (const i of [5, 9, 13, 17]) { const q = p[i] || p[0]; _b.x += q.x / 4; _b.y += q.y / 4; _b.z += q.z / 4; } return out.subVectors(_a, _b).normalize(); }
 
 const handState = () => ({ seen: false, stale: false, tLast: 0, pc: new THREE.Vector3(), pcPrev: new THREE.Vector3(), n: new THREE.Vector3(), tips: new THREE.Vector3(), v: new THREE.Vector3(), vInst: new THREE.Vector3(), a: new THREE.Vector3(),
-  closure: 0, prevC: 0, dClosure: 0, speed: 0, pushArm: 0, peak: 0, peakV: new THREE.Vector3(), clawFrames: 0, dropFrames: 0 });
+  closure: 0, prevC: 0, dClosure: 0, speed: 0, pushArm: 0, peak: 0, peakV: new THREE.Vector3(), throwing: false, clawFrames: 0, dropFrames: 0 });
 
 export class HandIntent {
   constructor(o = {}) {
@@ -120,16 +122,21 @@ export class HandIntent {
       if (H.stale) continue;                                                       // the PUSH decides on fresh samples only
       const along = H.speed > 1e-6 ? H.v.dot(_b) / H.speed : 0;
       const opening = H.closure < 0.45 || H.dClosure < -0.02;
-      if (H.speed > this.pushSpeed && along > 0.3 && opening) {
-        H.pushArm = Math.min(10, H.pushArm + 1);
+      const pushing = H.speed > this.pushSpeed && along > 0.3 && opening;             // the SHOT: along the palm, opening
+      // the THROW: the holding hand moving fast in ANY direction and not clenched — a pass, a fling, a sideways shot.
+      // A real ball leaves a moving open hand; only a closed claw (closure ≥ 0.6) carries it through a swing
+      const throwing = !pushing && H.speed > this.throwSpeed && (H.closure < 0.6 || H.dClosure < -0.02);
+      if (pushing || throwing) {
+        H.pushArm = Math.min(10, H.pushArm + 1); H.throwing = throwing;
         const inst = H.vInst.length(); if (inst > H.peak && inst < 8) { H.peak = inst; H.peakV.copy(H.vInst); }   // the peak of the instantaneous palm velocity
-      } else if (H.pushArm > 0 && H.speed < this.pushSpeed * 0.5) { H.pushArm = 0; H.peak = 0; }
+      } else if (H.pushArm > 0 && H.speed < this.throwSpeed * 0.5) { H.pushArm = 0; H.peak = 0; H.throwing = false; }
       if (H.pushArm >= 2) {
         const decel = H.a.dot(H.v) / Math.max(H.speed, 1e-6);
         const opened = H.closure < 0.25, slowed = H.speed < H.peak * 0.75;
         if (decel < this.pushDecel || opened || slowed) {
-          release = { slot, vel: H.peakV.clone(), speed: +H.peak.toFixed(3), dir: H.peakV.clone().normalize(), conf: Math.min(1, H.pushArm / 4), why: decel < this.pushDecel ? 'decel' : opened ? 'open' : 'slowed' };
-          H.pushArm = 0; H.peak = 0; drop = null; H.dropFrames = 0;
+          const kind = H.throwing ? 'throw' : 'push', gain = this.throwGain;         // AMPLIFIED: the ball leaves at gain × the peak palm velocity
+          release = { slot, kind, gain, vel: H.peakV.clone().multiplyScalar(gain), speed: +H.peak.toFixed(3), dir: H.peakV.clone().normalize(), conf: Math.min(1, H.pushArm / 4), why: decel < this.pushDecel ? 'decel' : opened ? 'open' : 'slowed' };
+          H.pushArm = 0; H.peak = 0; H.throwing = false; drop = null; H.dropFrames = 0;
         }
       }
     }
@@ -140,7 +147,7 @@ export class HandIntent {
     if (ball) for (const slot of Object.keys(F)) { const H = F[slot]; if (H.speed < this.awaySpeed) continue; _b.copy(H.pc).sub(ball.pos); if (_b.lengthSq() > 1e-6 && H.v.dot(_b.normalize()) / H.speed > 0.5) away = true; }
     this.blockAttract = this.t < this.blockUntil || away;
     const Hs = Object.values(F);
-    this.state = release ? 'push' : claw ? 'claw' : drop ? 'drop' : Hs.some(H => H.pushArm > 0) ? 'push-arm' : Hs.some(H => H.closure < 0.25 && H.speed < 0.5) ? 'open' : 'idle';
+    this.state = release ? release.kind : claw ? 'claw' : drop ? 'drop' : Hs.some(H => H.pushArm > 0) ? 'push-arm' : Hs.some(H => H.closure < 0.25 && H.speed < 0.5) ? 'open' : 'idle';
     this.conf = claw ? claw.conf : release ? release.conf : 0;
     const row = { t: +this.t.toFixed(3), state: this.state, block: this.blockAttract };
     for (const slot of Object.keys(F)) { const H = F[slot]; row[slot] = { c: +H.closure.toFixed(2), s: +H.speed.toFixed(2), arm: H.pushArm, claw: H.clawFrames, drop: H.dropFrames }; }
