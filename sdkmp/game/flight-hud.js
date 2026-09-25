@@ -6,7 +6,7 @@
  *                            ball is born, hides it when the last ball is deleted or the lane is left
  *   F.open / F.setOpen(v)  — COLLAPSED to its title bar by default (the bar carries a live state chip);
  *                            a click on the bar (or F.toggle()) opens the read-out and the predicted arc
- *   F.update(ball); F.arc(points)
+ *   F.update(ball, { rim }); F.arc(points)   — ctx.rim = the hoop the game reads (engRimWorld), shown as a row
  */
 export class FlightHud {
   constructor({ id = 'engFlight', scene = null, THREE = null, open = false, onToggle = null } = {}) {
@@ -46,7 +46,7 @@ export class FlightHud {
   toggle() { return this.setOpen(!this.open); }
   _applyOpen() { if (!this.el) return; this.el.classList.toggle('open', this.open); this._lastHead = ''; if (!this.open && this.line) this.line.visible = false; }
   /** ball = a PropBall with .sim / .rec (and optionally .intent) */
-  update(ball) {
+  update(ball, ctx = null) {
     if (!this.on || !this.el || !ball || !ball.rec) return;
     const L = ball.rec.live, S = ball.sim, held = !!(ball.hold || ball.cradle);
     const f = (v, d = 2) => (v == null || !isFinite(v)) ? '—' : (+v).toFixed(d);
@@ -67,6 +67,10 @@ export class FlightHud {
     const Rl = L.release;
     if (Rl) rows.push(['release', `${Rl.source || ''} ${f(Rl.speed)} m/s · elev ${f(Rl.elev, 0)}°` + (Rl.handSpeed != null ? ` · hand ${f(Rl.handSpeed)} m/s${Rl.gain ? ' ×' + Rl.gain : ''} (${Rl.why || ''})` : '') + (Rl.assist ? ` · <span class="good">${Rl.assist}</span>` : '')]);
     if (ball.intent) { const it = ball.intent; rows.push(['intent', `<span class="${it.state === 'push' || it.state === 'throw' ? 'hot' : it.state === 'claw' ? 'good' : 'cool'}">${it.state}</span> · conf ${f(it.conf, 2)}${it.blockAttract ? ' · <span class="warn">no-glue</span>' : ''}`]); }
+    if (ctx && ctx.rim) {                                     // the hoop the game reads — where the ball is supposed to go
+      const R = ctx.rim, d = Math.hypot(R.x - S.pos.x, R.z - S.pos.z), az = Math.atan2(R.x - S.pos.x, -(R.z - S.pos.z)) * 180 / Math.PI;
+      rows.push(['hoop', `${f(d, 1)} m away · rim ${f(R.y)} m · Ø ${f(R.r * 2)} · ${f(R.y - (S.pos.y - S.r), 1)} m up · azim ${f(az, 0)}°`]);
+    }
     rows.push(['events', `${ball.rec.events.length} · impacts ${ball.rec.of('impact').length}`]);
     const html = rows.map(([k, v]) => `<div class="fl-row"><span class="fl-k">${k}</span><span class="fl-v">${v}</span></div>`).join('');
     if (html !== this._last) { this.el.querySelector('.fl-b').innerHTML = html; this._last = html; }

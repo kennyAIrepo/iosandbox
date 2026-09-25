@@ -278,7 +278,7 @@
       <button class="opt" data-sp="fox" title="rigged fox bust — your lips, expressions and head turns land on it live from the camera (select it → 🎭 mirror me)">🦊 Fox bust</button>
       <button class="opt" data-sp="ball" title="a real size-6 basketball — shape-vs-shape collision against your hands, 5-pixel avoidance skin, wrap/clip to pick it up, open to throw">🏀 Ball</button>
       <button class="opt" data-sp="rug" title="a scanned rug rebuilt as CLOTH — 45×64 simulation lattice under its own 90k-triangle surface; with HoloHands on, lift it, drape it over your palms, close a hand to carry it, pinch with both hands to resize">🧶 Rug</button>
-      <button class="opt" data-sp="hoop" title="🏟 the NBA court with its two live hoops (rims at 3.05 m, backboards, stanchions — all real collision) — you stand at the free-throw line of the near one; the GOAL for the ball round">🏟 Court</button>
+      <button class="opt" data-sp="hoop" title="🏟 the gym court with its two live hoops (rims at 3.05 m, backboards, the walls and the ceiling — all real collision) — you stand at the free-throw line of the near one; the GOAL for the ball round">🏟 Court</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -5339,7 +5339,7 @@ async function engInit() {
   const sun = new THREE.DirectionalLight(0xfff2e0, 1.6);
   sun.position.copy(sunDir).multiplyScalar(50);
   ENG.scene.add(sun);
-  ENG.sun = sun; sun.castShadow = false;                          // on with a court (engSpawnCourt): an ortho shadow box over the court
+  ENG.sun = sun; ENG.sunDir = sunDir.clone(); sun.castShadow = false;   // on with a court (engSpawnCourt): an ortho shadow box over the court
   sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
   { const sc = sun.shadow.camera; sc.near = 5; sc.far = 160; sc.left = -20; sc.right = 20; sc.top = 20; sc.bottom = -20; sc.updateProjectionMatrix(); }   // (without the update the default ±5 m box stays: no shadow past the centre circle)
   ENG.scene.add(sun.target);
@@ -6813,8 +6813,9 @@ function _pinchR(pack) {                        // thumb-tip↔index-tip / palm 
 // is batted, caught, carried and thrown by the SAME hands — and stops them.
 const BASKETS = new Map();                    // eng id → { ball }
 // ── THE SURFACES the engine ball bounces off: the floor is the ball's own; each hoop registers its
-//    backboard (a slab), its rim (a ring), its pole and arm (capsules) — rebuilt from the hoop's live
-//    transform every tick, so a hoop moved with the gizmo keeps its collision. Hands and the tracked
+//    backboard (a slab), its rim (a ring), its pole and arm (capsules); a court adds its walls and
+//    ceiling (planes) — rebuilt from the live transforms every tick, so a hoop moved with the gizmo
+//    keeps its collision. Hands and the tracked
 //    body are kinematic sphere sets inside PropBall (they hit the ball at (1+e)× their speed).
 const ENG_SURF = [];
 // the FLIGHT panel lives with the ball game: shown when a ball is born, hidden when the last ball goes or the
@@ -6825,21 +6826,21 @@ function engSurfacesTick() {
   ENG_SURF.length = 0;
   for (const rec of HOOPS.values()) {
     const g = rec.g; g.updateWorldMatrix(true, false); const M = g.matrixWorld, sx = g.scale.x || 1;
-    if (rec.court) {                                   // 🏟 a court hoop: ring / slab / stanchion fitted to the mesh (model units × the court's scale)
+    if (rec.court) {                                   // 🏟 a court hoop: ring / board box / bracket fitted to the mesh (model metres × the court's scale)
       const e = rec.court, C = COURT;
       if (!rec.surf) rec.surf = {
         board: Surface.rect('board', new THREE.Vector3(), new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1), 1, 1, MATERIALS.board, 0.04),
-        rim: Surface.ring('rim', new THREE.Vector3(), new THREE.Vector3(0, 1, 0), C.rimR * sx, 0.012, MATERIALS.rim),
-        pole: Surface.capsule('pole', new THREE.Vector3(), new THREE.Vector3(), 0.22, MATERIALS.pole),
-        arm: Surface.capsule('arm', new THREE.Vector3(), new THREE.Vector3(), 0.1, MATERIALS.pole),
+        rim: Surface.ring('rim', new THREE.Vector3(), new THREE.Vector3(0, 1, 0), C.rimR * sx, C.rimTube * sx, MATERIALS.rim),
+        arm: Surface.capsule('arm', new THREE.Vector3(), new THREE.Vector3(), 0.03, MATERIALS.pole),
       };
-      const S = rec.surf, yF = C.floorY;
-      S.board.c.set(e.boardX, C.boardYc, 0).applyMatrix4(M); S.board.n.set(-e.sign, 0, 0).transformDirection(M); S.board.u.set(0, 0, 1).transformDirection(M);
-      S.board.v.crossVectors(S.board.n, S.board.u); S.board.hu = C.boardHalf[0] * sx; S.board.hv = C.boardHalf[1] * sx; S.board.th = 0.04;
-      S.rim.c.copy(rec.rimLocal).applyMatrix4(M); S.rim.axis.set(0, 1, 0).transformDirection(M); S.rim.R = C.rimR * sx; S.rim.tube = 0.012;
-      S.pole.a.set(e.poleX, yF, 0).applyMatrix4(M); S.pole.b.set(e.poleX, yF + 2.6 / sx, 0).applyMatrix4(M); S.pole.r = 0.22;
-      S.arm.a.set(e.poleX, yF + 2.6 / sx, 0).applyMatrix4(M); S.arm.b.set(e.boardX + e.sign * 0.15 / sx, yF + 3.3 / sx, 0).applyMatrix4(M); S.arm.r = 0.1;   // the arm meets the BACK of the glass (its cap must not poke through the face)
-      ENG_SURF.push(S.board, S.rim, S.pole, S.arm); continue;
+      const S = rec.surf;
+      // the board: ONE box from the glass face back to the wall (glass + frame + mount), its face toward the court's centre
+      S.board.c.fromArray(e.board).applyMatrix4(M); S.board.n.set(-e.sign, 0, 0).transformDirection(M); S.board.u.set(0, 0, 1).transformDirection(M);
+      S.board.v.crossVectors(S.board.n, S.board.u); S.board.hu = e.boardHalf[0] * sx; S.board.hv = e.boardHalf[1] * sx; S.board.th = e.boardDepth * sx;
+      S.rim.c.copy(rec.rimLocal).applyMatrix4(M); S.rim.axis.set(0, 1, 0).transformDirection(M); S.rim.R = C.rimR * sx; S.rim.tube = C.rimTube * sx;
+      // the bracket: from the back of the ring to the glass, just under the ring's plane
+      S.arm.a.set(e.rim[0] + e.sign * C.rimR, e.rim[1] - 0.03, e.rim[2]).applyMatrix4(M); S.arm.b.set(e.glassX, e.rim[1] - 0.03, e.rim[2]).applyMatrix4(M); S.arm.r = 0.03 * sx;
+      ENG_SURF.push(S.board, S.rim, S.arm); continue;
     }
     if (!rec.surf) rec.surf = {
       board: Surface.rect('board', new THREE.Vector3(), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0), 0.9, 0.525, MATERIALS.board, 0.04),
@@ -6855,6 +6856,12 @@ function engSurfacesTick() {
     S.arm.a.set(0, 3.35, -0.6).applyMatrix4(M); S.arm.b.set(0, 3.35, -0.1).applyMatrix4(M); S.arm.r = 0.04 * sx;
     ENG_SURF.push(S.board, S.rim, S.pole, S.arm);
   }
+  for (const rec of COURTS.values()) {                 // 🏟 the hall: four walls and the ceiling are planes (inward normals) — the ball never leaves the gym
+    const g = rec.g; g.updateWorldMatrix(true, false); const M = g.matrixWorld, R = COURT.room;
+    if (!rec.surf) rec.surf = [['wall', [R.x[0], 0, 0], [1, 0, 0]], ['wall', [R.x[1], 0, 0], [-1, 0, 0]], ['wall', [0, 0, R.z[0]], [0, 0, 1]], ['wall', [0, 0, R.z[1]], [0, 0, -1]], ['ceiling', [0, R.ceiling, 0], [0, -1, 0]]]
+      .map(([id, p, n]) => Object.assign(Surface.plane(id, new THREE.Vector3(), new THREE.Vector3(0, 1, 0), MATERIALS.wall), { lp: new THREE.Vector3().fromArray(p), ln: new THREE.Vector3().fromArray(n) }));
+    for (const s of rec.surf) { s.p.copy(s.lp).applyMatrix4(M); s.n.copy(s.ln).transformDirection(M); ENG_SURF.push(s); }
+  }
   return ENG_SURF;
 }
 async function engSpawnBasket(meta = {}) {
@@ -6867,7 +6874,7 @@ async function engSpawnBasket(meta = {}) {
     ? engHandTarget(new THREE.Vector3()).add(new THREE.Vector3(0, 0.02, 0))   // the POCKET of the nearest palm (its inner side): born in the hand
     : ENG.orbit.target.clone().addScaledVector(fwd, 1.2).setY(BASKET_R + 0.02);
   const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.81, restitution: 0.72,
-    home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0),
+    home, floorY: 0, boundsR: 14, spawnOffset: new THREE.Vector3(0, 0, 0),   // 14 m: the far corner of the gym from the free-throw line is 12.4 m
     attract: { zone: 0.5, force: 0.05 },               // the DEI approach, in a world that has a floor
     grabNear: { need: 4, margin: 0.035 },
     sim: true, mass: 0.62,                             // REAL physics: substepped flight, quadratic drag, e·μ per surface, kinematic hands
@@ -6920,7 +6927,7 @@ function engBallTick(dt) {
     B.resistSkin = pxToMetres(ENG.camera, H, B.sphere.pos, BASKET_PX);
     B.update(dt, packs, packHands(packs), bodies);
     if (first && FLIGHT.on) {                          // the FLIGHT panel + the predicted arc, for the first ball
-      FLIGHT.update(B);
+      FLIGHT.update(B, { rim: engRimWorld() });   // + the hoop the game reads: where the ball is supposed to go
       FLIGHT.arc(FLIGHT.open && !B.hold && !B.cradle && B.sim && !B.sim.asleep && B.sphere.vel.length() > 0.6 ? predictArc(B.sim, { floorY: B.floorY }) : []);
     }
     first = false;
@@ -7016,30 +7023,40 @@ function engHandTarget(out, prefer = null) {
   if (U.hL) return out.copy(U.handL);
   return null;
 }
-// ── 🏟 THE COURT — knickscourt.glb under sdk/assets/props — a full NBA court with its two hoops, one mesh. Measured from the
-//    geometry (the ring fit in tests/_courtprobe.mjs's header): at scale 15.05 the floor is 28.6 m long, the rims sit at
-//    3.05 m (rings found at model (0.707, 0.072, 0) and (-0.722, 0.074, 0), Ø 0.457 m — the ball's 0.24 m fits), the
-//    backboards are 1.97 × 1.09 m with their bottom at 2.90 m, the stanchions stand 2 m behind the glass. Each hoop is
-//    REAL physics — the rim a ring, the board a slab, the stanchion capsules: the same Surface kinds as the procedural
-//    hoop, so the ball bounces off the iron, banks off the glass, and the goal test, the launch and the aim assist read
-//    the court's rims (the nearest one). The court's floor IS the ball's floor (its top at y = 0). Shadows on.
-const COURT_URL = 'sdkmp/assets/props/knickscourt.glb';
-const COURT = { scale: 15.05, floorY: -0.130, rimR: 0.2286 / 15.05, boardHalf: [0.065, 0.036], boardYc: 0.099,
-  ends: [{ rim: [0.707, 0.072, 0], boardX: 0.748, poleX: 0.88, sign: 1 }, { rim: [-0.722, 0.074, 0], boardX: -0.746, poleX: -0.88, sign: -1 }] };
+// ── 🏟 THE COURT — basketball_court.glb under sdk/assets/props — an indoor gym: the wooden floor, four walls and a ceiling,
+//    two WALL-MOUNTED hoops. Authored in metres (scale 1). Measured from the geometry (a least-squares circle fit on each
+//    ring mesh, the AABBs of the rest — tests/_courtprobe.mjs's header): the hall is 16.55 × 9.1 m under a 5.0 m ceiling,
+//    the floor's top at y = 0; the rings are centred at (40.406, 3.045, −19.035) and (25.581, 3.045, −19.040) with radius
+//    0.168 m (Ø 0.34 — the model's hoop is 74 % of regulation; the 0.24 m ball fits with 5 cm to spare), the rims at
+//    3.045 m (regulation 3.05); each backboard is a 1.43 × 0.93 m box from its glass face (x 40.619 / 25.368) back to
+//    the wall. Each hoop is REAL physics — the rim a ring, the board box a slab, the bracket a capsule — and the hall's
+//    walls and ceiling are planes: the same Surface kinds as the procedural hoop, so the ball bounces off the iron, banks
+//    off the glass, comes back off the walls, and the goal test, the launch and the aim assist read the court's rims
+//    (the nearest one — engRimWorld: centre, radius, the facing normal = where the ball is supposed to go). The court's
+//    floor IS the ball's floor (its top at y = 0). Shadows on: the hoops cast, the hall receives (a sunlit ceiling would
+//    black out the floor, so the shell never casts).
+const COURT_URL = 'sdkmp/assets/props/basketball_court.glb';
+const COURT = { scale: 1, floorY: 0, rimR: 0.168, rimTube: 0.011, centre: [33.0, 0, -19.1],
+  room: { x: [24.73, 41.28], z: [-23.65, -14.55], ceiling: 4.98 },                  // the hall's inner faces (model metres): walls + ceiling
+  // each end: the ring's centre; the board box = its centre, half sizes [along z, along y] and depth (glass face → wall); the
+  // glass face x; sign = which x end (+x is the NEAR hoop: the user faces local +x)
+  ends: [{ rim: [40.406, 3.045, -19.035], board: [40.952, 3.296, -19.043], boardHalf: [0.716, 0.464], boardDepth: 0.667, glassX: 40.619, sign: 1 },
+         { rim: [25.581, 3.045, -19.040], board: [25.034, 3.296, -19.032], boardHalf: [0.716, 0.464], boardDepth: 0.667, glassX: 25.368, sign: -1 }],
+  hoopMesh: /^(Box001|Box004|Cylinder00|Tube00)/ };                                 // the hoop assemblies (they cast shadows; the shell receives only)
+const COURTS = new Map();                      // eng id → { g, surf } — the room's planes
 let _courtAsset = null;
 async function engSpawnCourt(meta = {}) {
   toast('🏟 loading the court…', 8000);
   if (!_courtAsset) _courtAsset = await ENG.gltf.loadAsync(COURT_URL);
   const g = _courtAsset.scene.clone(true);
-  g.traverse(o => { if (!o.isMesh) return; o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false;
-    // a scanned court ships UNLIT (baked light, KHR_materials_unlit → MeshBasicMaterial): unlit receives no shadow. Re-lit
-    // as a matte standard material with the same texture — the sun and the hemisphere light it, the ball's shadow lands on it
+  g.traverse(o => { if (!o.isMesh) return; o.receiveShadow = true; o.frustumCulled = false;
+    o.castShadow = COURT.hoopMesh.test(o.name);           // the hoops cast; the hall's shell (floor, walls, CEILING, lights) receives only
+    // an unlit material (KHR_materials_unlit → MeshBasicMaterial) receives no shadow: re-lit as a matte standard material
     const mats = Array.isArray(o.material) ? o.material : [o.material];
     o.material = mats.map(m => (m && m.isMeshBasicMaterial) ? new THREE.MeshStandardMaterial({ map: m.map || null, color: m.color ? m.color.clone() : 0xffffff, roughness: 0.92, metalness: 0, side: m.side }) : m);
     if (o.material.length === 1) o.material = o.material[0];
-    // the scan exports metallicFactor 1 with a packed metal/rough texture: a fully METALLIC floor has no diffuse — the sun's
-    // shadow cannot show on it. Wood and paint are dielectric: matte, the normal map kept
-    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.isMeshStandardMaterial) { m.metalness = 0; m.metalnessMap = null; m.roughness = 0.9; m.roughnessMap = null; m.needsUpdate = true; } });
+    // the engine has no environment map — a metallic material renders BLACK. Kept as authored, metalness capped, never mirror-smooth
+    for (const m of (Array.isArray(o.material) ? o.material : [o.material])) if (m && m.isMeshStandardMaterial) { m.metalness = Math.min(m.metalness ?? 0, 0.25); m.roughness = Math.max(m.roughness ?? 0.5, 0.45); m.needsUpdate = true; } });
   const sc = COURT.scale; g.scale.setScalar(sc);
   // the user stands at the free-throw line of the NEAR hoop (its rim 4.2 m ahead) facing it: the court's +x runs along fwd
   const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
@@ -7050,8 +7067,14 @@ async function engSpawnCourt(meta = {}) {
   engAdopt(g, { type: 'court', label: meta.label || 'court' });
   if (meta.p) { g.position.fromArray(meta.p); g.rotation.fromArray(meta.r); g.scale.fromArray(meta.s); }
   for (const e of COURT.ends) HOOPS.set(g.userData.eng.id + (e.sign > 0 ? ':a' : ':b'), { g, court: e, rimLocal: new THREE.Vector3(e.rim[0], e.rim[1], e.rim[2]) });
+  COURTS.set(g.userData.eng.id, { g });                                                       // its walls + ceiling (engSurfacesTick)
   ENG.grid.visible = false;                                                                   // the court IS the floor
-  if (ENG.sun) { ENG.sun.castShadow = true; ENG.sun.target.position.copy(g.position).setY(0); ENG.sun.target.updateMatrixWorld(); }
+  if (ENG.sun) {                                                                              // the sun over the HALL's centre (the model's origin is 33 m off its geometry), a ±12 m shadow box
+    g.updateWorldMatrix(true, false); const cw = new THREE.Vector3().fromArray(COURT.centre).applyMatrix4(g.matrixWorld).setY(0);
+    ENG.sun.castShadow = true; ENG.sun.target.position.copy(cw); ENG.sun.target.updateMatrixWorld();
+    ENG.sun.position.copy(cw).addScaledVector(ENG.sunDir || new THREE.Vector3(20, 35, 15).normalize(), 50);
+    const sc = ENG.sun.shadow.camera; sc.left = -12; sc.right = 12; sc.top = 12; sc.bottom = -12; sc.updateProjectionMatrix();
+  }
   engRefreshList(); engAvCtlRefresh();
   toast('🏟 court — both hoops are live: select the ball and hit 🎯 GO!, or just shoot', 4200);
   return g;
@@ -7097,19 +7120,23 @@ function engSpawnHoop(meta = {}) {
   return g;
 }
 const _rimW = new THREE.Vector3(), _rimRef = new THREE.Vector3();
-function engRimWorld() {                       // the rim NEAREST the user (hand, else camera), in world metres — or null
-  let best = null, bestD = Infinity;
-  const ref = engHandTarget(_rimRef) || _rimRef.copy(ENG.camera.position);
-  for (const rec of HOOPS.values()) {
-    rec.g.updateWorldMatrix(true, false);
-    _rimW.copy(rec.rimLocal).applyMatrix4(rec.g.matrixWorld);
-    const d = _rimW.distanceTo(ref); if (d >= bestD) continue; bestD = d;
-    const n = rec.court ? new THREE.Vector3(-rec.court.sign, 0, 0).transformDirection(rec.g.matrixWorld)   // a court rim faces the court's centre
-                        : new THREE.Vector3(0, 0, 1).transformDirection(rec.g.matrixWorld);                // the procedural hoop faces its +z (the user's side)
-    n.y = 0; n.normalize();
-    best = { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: (rec.court ? COURT.rimR : HOOP_RIM_R) * (rec.g.scale.x || 1), n: { x: n.x, y: 0, z: n.z } };
+function engRimWorld() {                       // the rim NEAREST the user (the hands, else the editor's anchor), in world metres — or null
+  if (!HOOPS.size) return null;
+  // the reference is the hands, else the ANCHOR the court was placed from (ENG.orbit.target): the orbit camera sits metres
+  // behind that anchor, and in a 14.8 m gym it was nearer the FAR rim. Sticky: the other rim must be a metre nearer to take
+  // over, so the target never flip-flops mid-throw at mid-court
+  const ref = engHandTarget(_rimRef) || _rimRef.copy(ENG.orbit.target);
+  let key = null, bestD = Infinity;
+  for (const [k, rec] of HOOPS) { rec.g.updateWorldMatrix(true, false); const d = _rimW.copy(rec.rimLocal).applyMatrix4(rec.g.matrixWorld).distanceTo(ref); if (d < bestD) { bestD = d; key = k; } }
+  if (ENG._rimKey && ENG._rimKey !== key && HOOPS.has(ENG._rimKey)) {
+    const cur = HOOPS.get(ENG._rimKey); const d = _rimW.copy(cur.rimLocal).applyMatrix4(cur.g.matrixWorld).distanceTo(ref); if (d < bestD + 1.0) key = ENG._rimKey;
   }
-  return best;
+  ENG._rimKey = key; const rec = HOOPS.get(key);
+  _rimW.copy(rec.rimLocal).applyMatrix4(rec.g.matrixWorld);
+  const n = rec.court ? new THREE.Vector3(-rec.court.sign, 0, 0).transformDirection(rec.g.matrixWorld)   // a court rim faces the court's centre
+                      : new THREE.Vector3(0, 0, 1).transformDirection(rec.g.matrixWorld);                // the procedural hoop faces its +z (the user's side)
+  n.y = 0; n.normalize();
+  return { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: (rec.court ? COURT.rimR : HOOP_RIM_R) * (rec.g.scale.x || 1), n: { x: n.x, y: 0, z: n.z }, key };
 }
 // ── 🎯 AIM ASSIST: a shot thrown in the hoop's GENERAL direction is put ON the hoop. The release velocity comes from
 //    the hands (the peak palm velocity × gain); if it points within AIM.cone degrees of the rim in azimuth and is not
@@ -7845,6 +7872,7 @@ function engDelete(o) {
   if (HOOPS.has(o.userData.eng.id)) { HOOPS.delete(o.userData.eng.id); }
   if (d && d.type === 'court') {
     for (const [k, rec] of [...HOOPS]) if (rec.g === o) HOOPS.delete(k);
+    COURTS.delete(o.userData.eng.id);
     if (!ENG.objects.some(x => x !== o && x.userData.eng.type === 'court')) { ENG.grid.visible = engEls.engGridChk ? engEls.engGridChk.checked : true; if (ENG.sun) ENG.sun.castShadow = false; }
   }
   const rg = RUGS.get(o.userData.eng.id);

@@ -29,6 +29,7 @@ export const MATERIALS = {
   board: { e: 0.72, mu: 0.25 },
   rim:   { e: 0.62, mu: 0.20 },
   pole:  { e: 0.50, mu: 0.30 },
+  wall:  { e: 0.75, mu: 0.40 },   // a gym wall / ceiling (plaster, brick): duller than the wood
   hand:  { e: 0.45, mu: 0.60 },
   body:  { e: 0.40, mu: 0.50 },
 };
