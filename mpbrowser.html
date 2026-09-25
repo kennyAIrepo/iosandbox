@@ -717,7 +717,7 @@ import { VoiceCommands, GRAMMAR as VOICE_GRAMMAR } from './sdkmp/game/voice-comm
 // GAME UI (docs/GAME-UI.md): every game moment on this page — engine or mirror —
 // cues through this one component: the call-out, the round bar, the game banner.
 const CUES = new GameCues({ id: 'engBall' });
-const FRAME_DT = { lab: 1 / 60, eng: 1 / 60 };   // smoothed frame step per loop — the launch solver integrates with the SAME step the ball does
+const FRAME_DT = { lab: 1 / 60, eng: 1 / 60, ball: 1 / 60 };   // measured steps: the lab loop, the engine loop, the engine ball's own   // smoothed frame step per loop — the launch solver integrates with the SAME step the ball does
 import { clothify, unclothify } from './sdkmp/core/clothify.js';
 import { PropBall } from './sdkmp/game/prop-ball.js';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
@@ -3557,6 +3557,7 @@ function loop() {
   { const tP = performance.now(), rpk = AVSYNC.ovPose !== undefined ? AVSYNC.packs : packs;
     rugLab.update(dt, rpk); rugLab.resist(rpk);
     basketLab.update(dt, rpk);          // 🏀 the ball yields, then stops the hand
+    engPropsLabTick();                  // 🏀 the ENGINE's ball too — same order, so its finger stop + hand-stop land on the drawn hands
     M._p = performance.now() - tP; }
   const engCols = engPropColliders();          // 🏀 engine balls — live only while a hand is on one
   const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active || basketCollider.active || engCols)
@@ -5499,7 +5500,7 @@ function engLoop() {
   engEnvTick(avDt);                            // altitude → sky / grid / cloud layer
   engUserTick(nowT);                           // tracked user = located, logged presence
   engMindTick(avDt, nowT);                     // NPC interaction loops (post-mixer)
-  engBallTick(avDt);                           // 🏀 basketballs: bat, catch, carry, throw — and stop the hand
+  if (nowT - (ENG._propsT || 0) > 120) engBallTick(avDt);   // 🏀 normally stepped by the LAB loop before the rigs pose (engPropsLabTick); fallback while no lab frame runs
   engRugTick(avDt);                            // 🧶 cloth rugs: solve + hands lift/drape/carry
   engGestureTick(avDt);                        // hand gestures: grab bow, draw string
   engBowTick(avDt);                            // bow draw/loose + arrow ballistics
@@ -6819,6 +6820,19 @@ async function engSpawnBasket(meta = {}) {
   engRefreshList(); engAvCtlRefresh();
   return mesh;
 }
+// The engine props step in the LAB loop, BEFORE the rigs pose — the mirror lane's order: the ball
+// yields, then stops the hand, and the hands are skinned from the STOPPED packs. Stepped from engLoop
+// (after the pose) the hand-stop never reached the drawn hand: the mesh went through the ball and only
+// the per-vertex conform answered — the palm smeared over the shell, the fingers flattened.
+function engPropsLabTick() {
+  const E = window.__eng; if (!E || !E.on) return;
+  // the ball keeps its OWN clock (<= 100 ms a step, like engLoop): the lab loop clamps its dt at 50 ms, and a
+  // loaded frame would fly the ball in slow motion against the wall clock the rounds and the probes read
+  const now = performance.now(), bdt = Math.min(0.1, Math.max(0.001, (now - (E._propsT || now - 16)) / 1000));
+  E._propsT = now;
+  FRAME_DT.ball += (bdt - FRAME_DT.ball) * 0.05;
+  engBallTick(bdt);                                      // the ball: yields, then its finger stop + hand-stop land on the packs the rigs pose from
+}
 function engBallTick(dt) {
   if (!BASKETS.size) return;
   const T = window.__lab && window.__lab.AVSYNC;
@@ -6972,6 +6986,7 @@ function engRimWorld() {                       // the first hoop's rim, in world
   return null;
 }
 // ── THE LAUNCH: put a ball on a lob that lands in the hand (solved against the ball's own integrator) ──
+function engStepDt() { return performance.now() - (ENG._propsT || 0) > 120 ? FRAME_DT.eng : FRAME_DT.ball; }   // the ball's own measured step (lab loop, pre-pose); engLoop only as fallback
 function engLaunchBall(B, to, T = 1.15) { return launchBallTo(B, to, T, ENG.camera, engRimWorld()); }
 function launchBallTo(B, to, T = 1.15, cam = ENG.camera, rim = null) {
   const fwd = new THREE.Vector3(); cam.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
@@ -6979,7 +6994,7 @@ function launchBallTo(B, to, T = 1.15, cam = ENG.camera, rim = null) {
   const from = launchOrigin(rim, to, ahead);
   { const d = Math.hypot(from.x - to.x, from.y - to.y, from.z - to.z), lim = (B.boundsR || 3.4) * 0.85;   // inside the ball's bounds, or it resets mid-air
     if (d > lim) { const k = lim / d; from.x = to.x + (from.x - to.x) * k; from.y = to.y + (from.y - to.y) * k; from.z = to.z + (from.z - to.z) * k; } }
-  const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: cam === ENG.camera ? FRAME_DT.eng : FRAME_DT.lab, T });   // the step the ball will actually take
+  const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: engStepDt(), T });   // the step the ball will actually take
   B.hold = null; B.cradle = null; B._velHist.length = 0;
   B.sphere.pos.set(from.x, from.y, from.z); B.sphere.vel.set(v.vx, v.vy, v.vz);
   B.sphere.angVel.set(2, 0, 0);
@@ -7198,7 +7213,7 @@ function engSdkDolly() {
 }
 ENG.round = ROUND; ENG.roundStart = engRoundStart; ENG.roundStop = engRoundStop; ENG.spawnHoop = engSpawnHoop; ENG.hoops = HOOPS;
 ENG.handTarget = (out) => engHandTarget(out || new THREE.Vector3()); ENG.syncLabCamera = engSyncLabCamera; ENG.launchBall = engLaunchBall;
-ENG.rimWorld = engRimWorld; ENG.freeBall = engFreeBall; ENG.cues = CUES; ENG.launchBallTo = launchBallTo; ENG.frameDt = () => FRAME_DT.eng; window.__lab.frameDt = () => FRAME_DT.lab;
+ENG.rimWorld = engRimWorld; ENG.freeBall = engFreeBall; ENG.cues = CUES; ENG.launchBallTo = launchBallTo; ENG.frameDt = () => engStepDt(); window.__lab.frameDt = () => FRAME_DT.lab;
 
 // ── CLOTHIFY, the component: any prop in the scene becomes cloth ──
 // The rug ships pre-lattticed from tools/cloth; this does the same fit at

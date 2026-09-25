@@ -31,6 +31,9 @@
  *   3. open hand = release THAT frame (hold re-tested every frame with a looser 0.03 skin)
  *   4. gravity ALWAYS on: the GrabbableSphere integrates with an EMPTY hand list (its own jointsWithin/pinch grab never runs)
  *   5. hands SUPPORT and never pass through: hull.pushOut (ball yields, <= 2 cm/frame) + handResist (the pack is moved out)
+ *   5b. FINGERS stop ON it at the SKELETON (finger-stop.js): a joint inside rotates its chain out about its parent, every hand
+ *       incl. the holder — the drawn hand keeps its thickness; a caught ball sits in the POCKET (palm normal, R + palm radius),
+ *       never on a world axis
  *   6. the only "seeks" are z-only depth bias and x/z pocket attraction — never lifted, never gravity-off
  *   7. nothing here reads MediaPipe handedness or hard-codes a z sign: the inner-palm side is MEASURED (_holdPose)
  *   8. [D7] extraBodies (T9 body layer): BodyBody joint spheres SUPPORT the ball exactly like hands (hull.pushOut, <= 2 cm/frame,
@@ -38,11 +41,13 @@
  */
 import * as THREE from 'three';
 import { GrabbableSphere, JOINT_RADII } from '../core/game-physics.js';   // game-physics.js:225, :38
+import { fingerStop } from '../core/finger-stop.js';               // skeleton-level contact: fingers stop ON the ball, thickness kept
 import { PropHull } from '../core/prop-hull.js';                          // prop-hull.js:39
 
 // ── module temps (fresh copies of the page temps _sbTmpA/B/C :1067, _slP/_slQ/_slQ2 :1068,
 //    _gA/_gB/_gC/_gM :6230-6231, _lbA/_lbB :2272, _hgR :2305) ──
 const _tA = new THREE.Vector3(), _tB = new THREE.Vector3(), _tC = new THREE.Vector3();
+const _pk = new THREE.Vector3(), _pn = new THREE.Vector3();          // the pocket a caught ball sits in, and the palm normal
 const _pP = new THREE.Vector3(), _pQ = new THREE.Quaternion(), _pQ2 = new THREE.Quaternion();
 const _gA = new THREE.Vector3(), _gB = new THREE.Vector3(), _gC = new THREE.Vector3(), _gM = new THREE.Matrix4();
 const _lbA = new THREE.Vector3(), _lbB = new THREE.Vector3();
@@ -172,7 +177,8 @@ export class PropBall {
     this.mesh.renderOrder = 30;
     if (scene) scene.add(this.mesh);
     // the conform collider the HoloHandRig skin wraps onto (hand-rig.js:440-447); pass it in rig.pose(pack, [ball.collider])
-    this.collider = { type: 'sphere', center: new THREE.Vector3(), radius: this.radius, active: false };   // :1066, :1715-1717
+    this.collider = { type: 'sphere', center: new THREE.Vector3(), radius: this.radius, active: false,
+      band: opts.band ?? 0.022 };   // :1066, :1715-1717 — only the outer 22 mm of the hand wraps; deeper skin is swallowed by the opaque ball, never smeared onto its shell
     // interaction state (:1287-1294)
     this._scal = null; this.seek = null; this.seekHand = null;
     this.hold = null; this._velHist = [];                      // { slot, type:'wrap'|'clip', posOff, quatOff }
@@ -308,12 +314,32 @@ export class PropBall {
     if (n) out.multiplyScalar(1 / n);
     return out;
   }
+  /** the POCKET a caught ball sits in: the palm centre, one radius plus the palm's own joint radius (+ skin)
+   *  up the palm NORMAL — on the side the ball is already on (never through the hand), or the MEASURED inner
+   *  side when it is in the palm's plane. No camera axis, no world z: it holds under any camera. */
+  _pocketOf(slot, pack, R, out) {
+    if (!pack || !pack[0] || !pack[9] || !pack[5] || !pack[17]) return null;
+    const rad = packRadii(pack), palmR = (rad[5] + rad[9] + rad[13]) / 3;
+    this._palmC(pack, out);
+    _tA.set(pack[9].x - pack[0].x, pack[9].y - pack[0].y, pack[9].z - pack[0].z);
+    _tB.set(pack[5].x - pack[17].x, pack[5].y - pack[17].y, pack[5].z - pack[17].z);
+    _pn.crossVectors(_tA, _tB); if (_pn.lengthSq() < 1e-10) return null;
+    _pn.normalize();
+    const side = _pn.dot(_tA.set(this.sphere.pos.x - out.x, this.sphere.pos.y - out.y, this.sphere.pos.z - out.z));
+    const P = this._pose[slot];
+    if (Math.abs(side) < R * 0.35 && P && P.sign !== 0) _pn.copy(P.n);   // in the palm's plane: the measured inner side
+    else if (side < 0) _pn.negate();
+    return out.addScaledVector(_pn, R + palmR + 0.004);
+  }
   /** DEI CONTACT: enough landmarks on the ball — proximity IS the intent */
   _nearGrab(pack, R, slot) {
     if (!this.grabNear) return null;
     if (slot && this._t - this._letGo[slot] < 0.7) return null;   // you just let go of it
     const contact = R + (this.grabNear.margin ?? 0.03);
-    if (this._minDist(pack) >= contact) return null;
+    if (this.attract && slot) {                                   // on the DEI route it is taken when it SITS ON THE PALM (the pocket) — never a hover a fingertip away
+      const pocket = this._pocketOf(slot, pack, R, _pk);
+      if (!pocket || pocket.distanceTo(this.sphere.pos) > 0.03) return null;
+    } else if (this._minDist(pack) >= contact) return null;
     if (this._countNear(pack, contact + 0.1) < (this.grabNear.need ?? 4)) return null;
     return { type: 'near' };
   }
@@ -400,6 +426,20 @@ export class PropBall {
         this._velHist.push(_tC.clone()); if (this._velHist.length > 6) this._velHist.shift();
         this.sphere.vel.copy(_tC);
         this.hold.type = g.type;
+        if (this.hold.type === 'near' && this.hull) {
+          // the PALM never sinks into a held ball: the ball yields to the holder's palm joint spheres (gently, <= 1 cm/frame — after the throw velocity is taken, so a seat correction never reads as a throw)
+          // and the carry offset learns the seat — so a hand that changes shape under it keeps it ON the palm, not in it
+          this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
+          const H = this.hull.begin(this.mesh), rad = packRadii(e[1]);
+          _pk.set(0, 0, 0); let np = 0;
+          for (const i of [0, 1, 5, 9, 13, 17]) { const q = e[1][i]; if (!q) continue; const g = H.closest(q, null, _pn) - rad[i] - 0.004; if (g < 0) { _pk.addScaledVector(_pn, g); np++; } }   // the normal points OUT toward the joint: the ball moves against it
+          if (np) {
+            const m = _pk.length(); if (m > 0.01) _pk.multiplyScalar(0.01 / m);
+            this.sphere.pos.add(_pk);
+            this.hold.posOff.copy(_tB.copy(this.sphere.pos).sub(_pP).applyQuaternion(_pQ2.copy(_pQ).invert()));
+          }
+        }
+
       }
     }
     // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (6 mm skin) (:1621-1630)
@@ -411,6 +451,8 @@ export class PropBall {
       // guessed depth happened to leave it
       if (g.target) { this.sphere.pos.set(g.target.x, g.target.y, g.target.z); this.sphere.vel.set(0, 0, 0); }
       else if (g.z != null) { this.sphere.pos.z = g.z; this.sphere.vel.z = 0; }
+      else if (g.type === 'near' && this.attract) {                                // carried FROM the pocket: on the palm, not wherever it was touched
+        const pocket = this._pocketOf(slot, pack, R, _pk); if (pocket) this.sphere.pos.copy(pocket); this.sphere.vel.set(0, 0, 0); }
       palmPose(pack, _pP, _pQ);
       this.hold = { slot, type: g.type,
         posOff: _tB.copy(this.sphere.pos).sub(_pP).applyQuaternion(_pQ2.copy(_pQ).invert()).clone(),
@@ -496,23 +538,21 @@ export class PropBall {
       // the release refractory above, not a gate on the approach.
       if (bestPack && best < this.attract.zone) {
         const contact = R + ((this.grabNear && this.grabNear.margin) || 0.03);
-        this.zone = best < contact ? 'contact' : 'approach';
         this.attractHand = bestPack; this.overSlot = bestSlot;
         attracting = true;                                     // held up while it closes AND at contact (the grab fires next frame)
-        if (best > contact) {
-          // it comes to sit ON the palm — the palm centre, one radius off in
-          // depth on the side it is already on — never INTO it, which is what
-          // made the hand-stop shove the whole hand away as it arrived
-          this._palmC(bestPack, _tB);
-          const side = Math.sign(this.sphere.pos.z - _tB.z) || -1;
-          _tB.z += side * (R + 0.012);
-          _tB.sub(this.sphere.pos);
-          const len = _tB.length();
-          if (len > 1e-5) {
-            const f = (this.attract.force ?? 0.04) * (0.35 + 0.65 * (1 - best / this.attract.zone)) * Math.min(3, dt * 60);
-            this.sphere.pos.addScaledVector(_tB.divideScalar(len), Math.min(len, f));
-            this.sphere.vel.multiplyScalar(0.6);
-          }
+        // it comes to SIT ON THE PALM: the pocket — the palm centre, one radius plus the
+        // palm's own thickness up the palm NORMAL. Frame-free: the old offset ran along
+        // world z (the webcam lane's depth axis), which in the engine — whose camera looks
+        // anywhere — put it beside the palm or inside it. And it keeps coming until it is
+        // THERE: a fingertip touching it first is not a catch — a ball that stops a
+        // fingertip away hangs in the air with a gap the fingers can never close.
+        const pocket = this._pocketOf(bestSlot, bestPack, R, _pk);
+        const len = pocket ? _tB.subVectors(pocket, this.sphere.pos).length() : 0;
+        this.zone = (best < contact || len < 0.03) ? 'contact' : 'approach';
+        if (pocket && len > 0.004) {
+          const f = (this.attract.force ?? 0.04) * (0.35 + 0.65 * (1 - Math.min(1, best / this.attract.zone))) * Math.min(3, dt * 60);
+          this.sphere.pos.addScaledVector(_tB.divideScalar(len), Math.min(len, f));
+          this.sphere.vel.multiplyScalar(0.6);
         } else this.sphere.vel.set(0, 0, 0);
       }
     }
@@ -570,11 +610,18 @@ export class PropBall {
       this.sphere.vel.copy(_tC);                                                      // leaves the palm with the palm's velocity when tilted off
     }
     // ── HAND-STOP residual (mesh-true): whatever penetration is left stops the HAND — the carrying hand is exempt (:1703-1713)
-    this.gap = Infinity; this.avoiding = false;
+    this.gap = Infinity; this.avoiding = false; this.stopped = 0;
     this._t = (this._t || 0) + dt;
     if (this.hull && pk && !scaling) {
       this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
       const holder = this.hold ? this.hold.slot : null;
+      // ── FINGER STOP (skeleton-level, every hand incl. the holder): a finger joint inside the ball rotates
+      //    its chain out about the parent joint, bone lengths kept — the rigs pose from THESE packs, so the
+      //    drawn fingers wrap the surface with their thickness intact instead of being projected flat onto
+      //    it by the conform. The palm is not moved here: the carrying / attracting palm is the anchor the
+      //    pocket keeps tangent; any other hand's palm is moved out whole by the residual below.
+      { const H = this.hull.begin(this.mesh), q = (p, n) => H.closest(p, null, n);
+        for (const [, pack] of hands) { const r = fingerStop(q, pack, packRadii(pack), this.resistSkin, { palm: 'none' }); this.stopped += r.fingers; } }
       for (const [slot, pack] of hands) {
         const t = hullTouch(this.hull, this.mesh, pack);        // SHAPE vs SHAPE clearance
         if (t < this.gap) this.gap = t;
