@@ -123,6 +123,7 @@
     z-index: 30; pointer-events: none; padding: 14px 26px 14px 16px; border-radius: 22px;
     background: rgba(6, 12, 24, 0.55); backdrop-filter: blur(10px); border: 1px solid rgba(120, 200, 255, 0.25); }
   body.engine-view.eng-dragon #engFlapHud { display: flex; }
+  @media (prefers-reduced-motion: reduce) { #engBallHud .big.hot { animation: none; } }
   #engFlapHud .ring { position: relative; width: 96px; height: 96px; flex: 0 0 auto; }
   #engFlapHud .ring svg { width: 96px; height: 96px; transform: rotate(-90deg); }
   #engFlapHud .ring circle { fill: none; stroke-width: 9; }
@@ -250,6 +251,7 @@
       <button class="opt" data-sp="fox" title="rigged fox bust — your lips, expressions and head turns land on it live from the camera (select it → 🎭 mirror me)">🦊 Fox bust</button>
       <button class="opt" data-sp="ball" title="a real size-6 basketball — shape-vs-shape collision against your hands, 5-pixel avoidance skin, wrap/clip to pick it up, open to throw">🏀 Ball</button>
       <button class="opt" data-sp="rug" title="a scanned rug rebuilt as CLOTH — 45×64 simulation lattice under its own 90k-triangle surface; with HoloHands on, lift it, drape it over your palms, close a hand to carry it, pinch with both hands to resize">🧶 Rug</button>
+      <button class="opt" data-sp="hoop" title="a regulation hoop (3.05 m rim, Ø45.7 cm) — the GOAL for the ball round; spawns ahead of you and faces you">🥅 Hoop</button>
       <button class="opt" data-sp="bow" title="drawable bow — procedural string/limb morph; hold SPACE to draw, release to shoot">🏹 Bow</button>
     </div>
     <div class="sname">drops in front of the camera, seated on the floor</div>
@@ -669,6 +671,11 @@ import { HandBody, GrabbableSphere, GrabbableBox, BodyBody, JOINT_RADII } from '
 import { makeGlass, updateLens, attachEnv } from './sdk/core/glass.js';
 import { SlimeSim, SlimeSurface, CLOUD_R } from './sdk/core/slime-sim.js';
 import { buildCloth, toLocalHands, clothResistHand, updateClothWire } from './sdk/core/cloth-sim.js';
+import { solveLaunch, launchOrigin, BallRound, CallGesture } from './sdk/game/ball-round.js';
+import { GameCues, MOMENTS as CUE_MOMENTS } from './sdk/game/game-cues.js';
+// GAME UI (docs/GAME-UI.md): every game moment on this page — engine or mirror —
+// cues through this one component: the call-out, the round bar, the game banner.
+const CUES = new GameCues({ id: 'engBall' });
 import { clothify, unclothify } from './sdk/core/clothify.js';
 import { PropBall } from './sdk/game/prop-ball.js';
 import { MarchingCubes } from 'three/addons/objects/MarchingCubes.js';
@@ -1876,6 +1883,8 @@ const basketLab = {
       // the hand's truth about this ball is its SCREEN circle (see ballGraspHook)
       this.ball.grasp = ballGraspHook(this.ball, () => camera,
         () => ({ W: renderer.domElement.clientWidth || 1300, H: renderer.domElement.clientHeight || 900 }), BASKET_PX);
+      this.ball.onGrab = (slot) => CUES.cue('caught', slot + ' hand', undefined, 1300);
+      this.ball.onRelease = (v) => { if (v.length() > 1.6) CUES.cue('thrown', '', undefined, 1100); };
       if (!cubeLab.lit) {
         const sun = new THREE.DirectionalLight(0xffffff, 1.5); sun.position.set(1.4, 2.6, 2.2);
         scene.add(new THREE.HemisphereLight(0xcfe6ff, 0x141a24, 1.05), sun); cubeLab.lit = true;
@@ -2366,6 +2375,7 @@ const cubeLab = {
 
 const beatGame = new BeatGame(scene, camera, {
   onStateChange(on) {
+    CUES.cue(on ? 'start' : 'over', on ? 'punch the orbs on the beat' : '');
     els.gameBtn.textContent = on ? '■ STOP' : '▶ START ROUND';
     els.gameBtn.classList.toggle('on', on);
   },
@@ -2581,7 +2591,7 @@ function povFaceAway(pts) {
 const ENG_SKEL_FLOOR = -1.45;                 // lab-space floor line for the POV figure
 function groundEngBody(pts) {
   if (!pts || !pts[27] || !pts[28]) return pts;
-  const target = ENG_SKEL_FLOOR - Math.min(pts[27].y, pts[28].y);
+  const target = engSkelFloor() - Math.min(pts[27].y, pts[28].y);
   engGroundDy = engGroundDy === null ? target : engGroundDy + (target - engGroundDy) * 0.06;
   for (const p of pts) p.y += engGroundDy;
   return pts;
@@ -2868,6 +2878,7 @@ function labBowLoose() {                        // curled fingers OPENED at the 
     const el = Math.round(Math.asin(Math.max(-1, Math.min(1, _gW.y))) * 57.2958);
     const az = Math.round(Math.atan2(_gW.x, -_gW.z) * 57.2958);   // screen-relative
     engWorldLog('user', 'shot', Math.round(B.draw * 100) + '% power · az ' + az + '° el ' + el + '°');
+    CUES.cue('shot', '', undefined, 1000);
     B.flying.push({ mesh: B.arrow, vel: _gW.clone().multiplyScalar(1.2 + 3.3 * B.draw),
                     t: 0, from: B.arrow.position.clone() });
     toast('🏹 loosed — ' + Math.round(B.draw * 100) + '%');
@@ -3471,6 +3482,11 @@ function loop() {
 
   // 3. view adapter → world packs keyed by MEASURED mesh chirality; slots
   //    are preset anchors clamped to their half — hands can never cross.
+  // ONE CAMERA (engine POV): the hands are placed relative to THIS camera and drawn
+  // over the engine render — so it must be the engine's camera, wherever it orbits.
+  // Before this the lab camera sat parked at (0,1.6,2.2): a hand on screen and a
+  // ball on the engine floor never shared a space, and only the gizmo could touch it.
+  engSyncLabCamera();
   const packs = views.resolve([handsBySlot.left, handsBySlot.right], camera);
 
   // 4. pose rigs — POV full-body: seat the hands on the body's wrists first
@@ -3499,8 +3515,9 @@ function loop() {
     rugLab.update(dt, rpk); rugLab.resist(rpk);
     basketLab.update(dt, rpk);          // 🏀 the ball yields, then stops the hand
     M._p = performance.now() - tP; }
-  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active || basketCollider.active)
-    ? [cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider, basketCollider] : null;
+  const engCols = engPropColliders();          // 🏀 engine balls — live only while a hand is on one
+  const cols = (S.conform || bowGripCollider.active || arrowCollider.active || nockCollider.active || slimeCollider.active || basketCollider.active || engCols)
+    ? [cubeCollider, bowGripCollider, arrowCollider, nockCollider, slimeCollider, basketCollider, ...(engCols || [])] : null;
   const t1 = performance.now();
   if (rigR) { rigR.tick(now * 0.001); rigR.pose(packs.R, cols); }
   if (rigL) { rigL.tick(now * 0.001); rigL.pose(packs.L, cols); }
@@ -5309,7 +5326,9 @@ async function engInit() {
 const _cbA = new THREE.Box3(), _cbB = new THREE.Box3(), _cv = new THREE.Vector3();
 const _heldBow = o => { const bb = BOWS.get(o.userData.eng.id); return !!(bb && (bb.held || bb.holo)); };
 function engCollideTick() {
-  const objs = ENG.objects.filter(o => o.userData.eng.type !== 'tracker');
+  // balls, hoops and cloth have their OWN physics (PropBall · the rim test · XPBD): the
+  // box shove must never touch them — it deflected every shot that entered the hoop's AABB
+  const objs = ENG.objects.filter(o => !['tracker', 'ball', 'hoop', 'rug'].includes(o.userData.eng.type) && !o.userData.eng.cloth);
   if (objs.length < 2 && !AVREG.size) return;
   const boxes = objs.map(o => new THREE.Box3().setFromObject(o.userData.pickProxy || o));
   const isAv = objs.map(o => o.userData.eng.type === 'avatar');
@@ -5760,6 +5779,13 @@ function engAvCtlRefresh() {
     mk('➖', false, () => { B.setScale(B.userS / 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'smaller — or PINCH with both hands');
     mk('➕', false, () => { B.setScale(B.userS * 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'bigger — or PINCH with both hands');
     mk('📷 frame', false, () => engBallFrame(sel), 'put the camera on it');
+    if (ROUND.on) mk('■ stop round', true, () => { engRoundStop(); toast('🎯 round stopped'); }, 'end the round');
+    else mk('🎯 GO! round', false, () => { engRoundStart().catch(e => toast('⚠ ' + (e.message || e), 4000)); }, 'INCOMING → catch it → shoot at the hoop — needs IMPORT SDK on (POV)');
+    mk('🪝 to my hand', false, () => {
+      const to = engHandTarget(new THREE.Vector3());
+      if (!to) { toast('🪝 no tracked hand — turn IMPORT SDK on (POV)', 3200); return; }
+      engLaunchBall(B, { x: to.x, y: to.y, z: to.z }, 0.95); toast('🪝 incoming — open your hand', 1800);
+    }, 'lob it into your tracked hand now — or hold an open hand STILL for 0.7 s');
     return;
   }
   if (!rrec && ENG.sel && engClothable(ENG.sel)) {   // CLOTHIFY strip: make this prop cloth
@@ -6524,6 +6550,7 @@ function engBowShoot(b) {
   engAimArrow(b, arrow);
   _bV.copy(b.rig.drawDir).multiplyScalar(-1).transformDirection(b.mesh.matrixWorld);
   const vel = _bV.clone().multiplyScalar(5 + 18 * power);
+  CUES.cue('shot', '', undefined, 1000);
   b.flying.push({ mesh: arrow, vel, t: 0, dead: false, from: arrow.position.clone() });
   const A = engAimAngles(b);
   engWorldLog('user', 'shot', Math.round(power * 100) + '% power · az ' + A.az + '° el ' + A.el
@@ -6731,14 +6758,20 @@ const BASKETS = new Map();                    // eng id → { ball }
 async function engSpawnBasket(meta = {}) {
   const mesh = await basketGeo(ENG.gltf);
   const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
-  const home = ENG.orbit.target.clone().addScaledVector(fwd, 1.2);
-  home.y = BASKET_R + 0.02;
+  // THE BIAS: with tracking live the ball is born within reach of the hands — a
+  // palm's length in front of the nearest palm, where the DEI approach takes it the
+  // rest of the way. Without tracking it rests ahead of the camera as before.
+  const home = engHandTarget(new THREE.Vector3())
+    ? engHandTarget(new THREE.Vector3()).addScaledVector(fwd, -0.22).add(new THREE.Vector3(0, 0.04, 0))
+    : ENG.orbit.target.clone().addScaledVector(fwd, 1.2).setY(BASKET_R + 0.02);
   const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.0, restitution: 0.72,
     home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0),
     attract: { zone: 0.5, force: 0.05 },               // the DEI approach, in a world that has a floor
     grabNear: { need: 4, margin: 0.035 } });
   ball.grasp = ballGraspHook(ball, () => ENG.camera,
     () => ({ W: ENG.renderer.domElement.clientWidth || 1300, H: ENG.renderer.domElement.clientHeight || 900 }), BASKET_PX);
+  ball.onGrab = (slot) => { if (!ROUND.on) CUES.cue('caught', slot + ' hand', undefined, 1300); };
+  ball.onRelease = (v) => { if (!ROUND.on && v.length() > 1.6) CUES.cue('thrown', '', undefined, 1100); };
   engAdopt(mesh, { type: 'ball', label: meta.label || 'basketball ' + (ENG.seq + 1) });
   if (meta.p) { mesh.position.fromArray(meta.p); ball.sphere.reset(mesh.position.clone()); ball.center.copy(mesh.position); }
   if (meta.s) ball.setScale(meta.s[0] || 1);
@@ -6751,6 +6784,9 @@ function engBallTick(dt) {
   const T = window.__lab && window.__lab.AVSYNC;
   const packs = T && T.packsAligned ? T.packs : null;   // rendered POV HoloHands only
   const H = ENG.renderer.domElement.clientHeight || 900;
+  // the tracked FIGURE supports and bats it too (BodyBody: 37 pose joints + 10
+  // virtual colliders) — it rests on a chest, bounces off a knee, never passes through
+  const bodies = (bodyBody && bodyBody.present) ? [bodyBody] : [];
   for (const rec of BASKETS.values()) {
     const B = rec.ball;
     if (ENG.tc.dragging && ENG.sel === B.mesh) {         // the gizmo wins while you drag it
@@ -6759,8 +6795,10 @@ function engBallTick(dt) {
       continue;
     }
     B.resistSkin = pxToMetres(ENG.camera, H, B.sphere.pos, BASKET_PX);
-    B.update(dt, packs, packHands(packs));
+    B.update(dt, packs, packHands(packs), bodies);
   }
+  engCallTick(packs);                                   // 🪝 an open, still palm calls a free ball
+  engRoundTick(packs);                                  // 🎯 GO! → INCOMING → CATCH → SHOOT → GOAL
 }
 function engBallFrame(o) {
   const rec = BASKETS.get(o.userData.eng.id); if (!rec) return;
@@ -6798,6 +6836,212 @@ function engRugTick(dt) {
     if (packs) clothResist(rec.piece, packs, 1);
   }
 }
+
+// ─────────────── ENGINE PLAY — one camera, hands that reach, a ball that comes to you ───────────────
+// The mirror lane's interaction runs in the engine unchanged (PropBall, cloth, the
+// conform) — what was missing was the SPACE: the lab layer that draws the hands was
+// rendered from its own parked camera, so nothing it drew lined up with the engine
+// world. engSyncLabCamera makes the two one camera; the rest is the game on top:
+// the ball is born at the hands, an open still palm CALLS it, and 🎯 GO! runs a
+// round — it is launched TO your hand, you catch it, you shoot at the hoop.
+function engSyncLabCamera() {
+  const ENG = window.__eng;                    // the lab loop may run before the engine consts initialise
+  if (!ENG || !ENG.on || !ENG.sdk.on || ENG.sdk.view !== 'pov' || !ENG.camera) return false;
+  camera.position.copy(ENG.camera.position);
+  camera.quaternion.copy(ENG.camera.quaternion);
+  if (camera.fov !== ENG.camera.fov || camera.aspect !== ENG.camera.aspect) {
+    camera.fov = ENG.camera.fov; camera.aspect = ENG.camera.aspect; camera.updateProjectionMatrix();
+  }
+  camera.updateMatrixWorld(true);
+  return true;
+}
+function engSkelFloor() { const E = window.__eng; return (E && E.on && E.sdk.on && E.sdk.view === 'pov') ? 0 : ENG_SKEL_FLOOR; }   // the figure stands on the engine floor
+function engPropColliders() {
+  const ENG = window.__eng;
+  if (!ENG || !ENG.on || !ENG.sdk.on || !ENG.baskets || !ENG.baskets.size) return null;
+  const out = [];
+  for (const rec of ENG.baskets.values()) if (rec.ball.collider.active) out.push(rec.ball.collider);
+  return out.length ? out : null;
+}
+// The hand a ball goes TO: the open palm if there is one, else any rendered palm,
+// else the tracked body's wrist (body-only tracking). Null when nothing is tracked.
+const _htA = new THREE.Vector3();
+function engHandTarget(out, prefer = null) {
+  if (!ENG.sdk.on || ENG.sdk.view !== 'pov') return null;
+  const T = window.__lab && window.__lab.AVSYNC;
+  const pk = T && T.packsAligned ? T.packs : null;
+  let best = null, bestScore = -1;
+  if (pk) for (const [slot, pack] of [['left', pk.L], ['right', pk.R]]) {
+    if (!pack || !pack[0] || !pack[9]) continue;
+    const score = (prefer === slot ? 2 : 0) + (1 - _closure(pack));   // open beats closed, asked-for beats either
+    if (score > bestScore) { bestScore = score; best = _htA.copy(pack[0]).lerp(pack[9], 0.5); }
+  }
+  if (best) return out.copy(best).add(new THREE.Vector3(0, 0.03, 0));
+  const U = ENG_USER;
+  if (U.hR) return out.copy(U.handR);
+  if (U.hL) return out.copy(U.handL);
+  return null;
+}
+// ── 🥅 THE HOOP — regulation numbers, procedural, faces the camera ──
+const HOOPS = new Map();                       // eng id → { g, rim: {r, local} }
+const HOOP_RIM_Y = 3.05, HOOP_RIM_R = 0.2286;
+function engSpawnHoop(meta = {}) {
+  const g = new THREE.Group();
+  const grey = new THREE.MeshStandardMaterial({ color: 0x8b93a3, roughness: 0.6, metalness: 0.3 });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.06, 3.6, 12), grey); pole.position.set(0, 1.8, -0.6); g.add(pole);
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.5, 0.12, 24), grey); base.position.set(0, 0.06, -0.6); g.add(base);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.5), grey); arm.position.set(0, 3.35, -0.35); g.add(arm);
+  const board = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1.05, 0.04),
+    new THREE.MeshStandardMaterial({ color: 0xe8eef4, roughness: 0.35, metalness: 0.05, transparent: true, opacity: 0.85 }));
+  board.position.set(0, HOOP_RIM_Y + 0.35, -0.12); g.add(board);
+  const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(0.59, 0.45)), new THREE.LineBasicMaterial({ color: 0xff7a1a }));
+  box.position.set(0, HOOP_RIM_Y + 0.2, -0.095); g.add(box);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(HOOP_RIM_R, 0.012, 10, 40),
+    new THREE.MeshStandardMaterial({ color: 0xff6a1a, roughness: 0.4, metalness: 0.5 }));
+  rim.rotation.x = Math.PI / 2; rim.position.set(0, HOOP_RIM_Y, HOOP_RIM_R + 0.06); g.add(rim);
+  const netPts = [];                            // 12 strands, 3 rings, tapering — enough to read as a net
+  for (let i = 0; i < 12; i++) {
+    const a = i / 12 * Math.PI * 2, a2 = (i + 1) / 12 * Math.PI * 2;
+    for (let k = 0; k < 3; k++) {
+      const r0 = HOOP_RIM_R * (1 - k * 0.18), r1 = HOOP_RIM_R * (1 - (k + 1) * 0.18), y0 = HOOP_RIM_Y - k * 0.14, y1 = y0 - 0.14;
+      netPts.push(Math.cos(a) * r0, y0, rim.position.z + Math.sin(a) * r0, Math.cos(a2) * r1, y1, rim.position.z + Math.sin(a2) * r1);
+      netPts.push(Math.cos(a) * r0, y0, rim.position.z + Math.sin(a) * r0, Math.cos(a) * r1, y1, rim.position.z + Math.sin(a) * r1);
+    }
+  }
+  const net = new THREE.LineSegments(new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(netPts, 3)),
+    new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.55 }));
+  g.add(net);
+  // ahead of the catcher, facing them: 4.5 m along the camera's forward, rim toward the user
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
+  const anchor = engHandTarget(new THREE.Vector3()) || ENG.orbit.target.clone();
+  g.position.copy(anchor).setY(0).addScaledVector(fwd, 4.5);
+  g.rotation.y = Math.atan2(-fwd.x, -fwd.z);   // local +z (the rim side) points back at the user
+  engAdopt(g, { type: 'hoop', label: meta.label || 'hoop ' + (ENG.seq + 1) });
+  if (meta.p) { g.position.fromArray(meta.p); g.rotation.fromArray(meta.r); g.scale.fromArray(meta.s); }
+  HOOPS.set(g.userData.eng.id, { g, rimLocal: rim.position.clone() });
+  engRefreshList(); engAvCtlRefresh();
+  return g;
+}
+const _rimW = new THREE.Vector3();
+function engRimWorld() {                       // the first hoop's rim, in world metres — or null
+  for (const rec of HOOPS.values()) {
+    rec.g.updateWorldMatrix(true, false);
+    _rimW.copy(rec.rimLocal).applyMatrix4(rec.g.matrixWorld);
+    return { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: HOOP_RIM_R * (rec.g.scale.x || 1) };
+  }
+  return null;
+}
+// ── THE LAUNCH: put a ball on a lob that lands in the hand (solved against the ball's own integrator) ──
+function engLaunchBall(B, to, T = 1.15) {
+  const rim = engRimWorld();
+  const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
+  const ahead = { x: to.x + fwd.x * 4.0, y: Math.max(1.6, to.y + 0.6), z: to.z + fwd.z * 4.0 };
+  const from = launchOrigin(rim, to, ahead);
+  const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: 1 / 60, T });
+  B.hold = null; B.cradle = null; B._velHist.length = 0;
+  B.sphere.pos.set(from.x, from.y, from.z); B.sphere.vel.set(v.vx, v.vy, v.vz);
+  B.sphere.angVel.set(2, 0, 0);
+  B.center.set(to.x, to.y, to.z);              // the workspace follows the catcher (bounds are measured from it)
+  B.mesh.position.copy(B.sphere.pos);
+  return from;
+}
+function engFreeBall(near) {                   // the nearest ball nobody holds
+  let best = null, bd = Infinity;
+  for (const rec of BASKETS.values()) {
+    const B = rec.ball; if (B.hold || B.cradle) continue;
+    const d = near ? B.sphere.pos.distanceTo(near) : 0;
+    if (d < bd) { bd = d; best = B; }
+  }
+  return best;
+}
+// ── 🪝 THE CALL: an open hand held still calls a free ball to it ──
+const CALL = new CallGesture({ hold: 0.7, still: 0.04, open: 0.3, refractory: 2.0 });
+const _callP = new THREE.Vector3();
+function engCallTick(packs) {
+  if (!packs || (ROUND.on && ROUND.r.state !== 'caught')) return;   // a round owns the launches
+  const now = performance.now() / 1000;
+  for (const [slot, pack] of [['left', packs.L], ['right', packs.R]]) {
+    if (!pack || !pack[0] || !pack[9]) { CALL.drop(slot); continue; }
+    _callP.copy(pack[0]).lerp(pack[9], 0.5);
+    if (!CALL.tick(slot, _callP, _closure(pack), now)) continue;
+    const B = engFreeBall(_callP);
+    if (!B || B.sphere.pos.distanceTo(_callP) < 0.45) continue;   // already at hand
+    engLaunchBall(B, { x: _callP.x, y: _callP.y + 0.03, z: _callP.z }, 0.95);
+    toast('🪝 the ball comes to your ' + slot + ' hand', 1800);
+  }
+}
+// ── 🎯 THE ROUND ──
+const ROUND = { r: new BallRound(), ball: null, on: false, _state: 'idle', _aimed: false, _cue: '', _cueT: 0 };
+function engRoundBall() {
+  const sel = ENG.sel && BASKETS.get(ENG.sel.userData.eng.id);
+  if (sel) return sel.ball;
+  for (const rec of BASKETS.values()) return rec.ball;
+  return null;
+}
+async function engRoundStart() {
+  if (!ENG.sdk.on || ENG.sdk.view !== 'pov') { toast('🎯 turn IMPORT SDK on (POV) — the round throws the ball to YOUR hands', 4000); return false; }
+  let B = engRoundBall();
+  if (!B) { await engSpawnBasket(); B = engRoundBall(); }
+  if (!B) return false;
+  if (!HOOPS.size) engSpawnHoop();
+  ROUND.ball = B; ROUND.on = true;
+  ROUND.r.start(performance.now() / 1000);
+  ROUND._state = 'idle';                        // the first tick cues GO!
+  CUES.show().banner({ icon: '🏀', title: 'HOOP ROUND', hint: 'catch · aim · shoot' });
+  engAvCtlRefresh();
+  return true;
+}
+function engRoundStop() {
+  const r = ROUND.r;
+  ROUND.on = false; ROUND.ball = null; r.stop(performance.now() / 1000);
+  CUES.cue('ROUND OVER', r.score + (r.score === 1 ? ' goal' : ' goals') + ' · best streak ' + r.best, 'cool');
+  CUES.hideBar(1800); CUES.hideBanner(1800);    // the last cue fades first
+  engAvCtlRefresh();
+}
+// the round's phases → the component (docs/GAME-UI.md): one cue per phase, the bar drains with the phase timer
+const ROUND_KIND = { go: 'hot', incoming: 'cool', caught: 'good', shot: 'warn', goal: 'hot', miss: 'bad', lost: 'bad' };
+const ROUND_LABEL = { go: 'GO!', incoming: 'INCOMING', caught: 'AIM', shot: 'SHOOT', goal: 'GOAL!', miss: 'MISS', lost: 'DROPPED', idle: '—' };
+function engHudCue(big, sub, kind) { CUES.cue(big, sub, kind); ROUND._cue = big; ROUND._cueT = performance.now(); }
+function engHudBar(out) {
+  const score = out.score + (out.score === 1 ? ' goal' : ' goals') + ' · streak ' + out.streak + ' · best ' + out.best;
+  CUES.bar({ round: out.rounds, label: ROUND_LABEL[out.state] || out.state, right: score,
+             phase: out.phaseT ? out.phase : 0, cool: out.state === 'incoming' || out.state === 'caught' });
+}
+const _rtT = new THREE.Vector3();
+function engRoundTick(packs) {
+  if (!ROUND.on) return;
+  const B = ROUND.ball;
+  if (!B || ![...BASKETS.values()].some(r => r.ball === B)) { engRoundStop(); return; }
+  const tgt = engHandTarget(_rtT);
+  const rim = engRimWorld();
+  const now = performance.now() / 1000;
+  const obs = { pos: B.sphere.pos, vel: B.sphere.vel, held: !!(B.hold || B.cradle), r: B.radius * B.userS, floorY: B.floorY };
+  const out = ROUND.r.tick(now, obs, tgt ? { x: tgt.x, y: tgt.y, z: tgt.z } : null, rim);
+  if (out.launch) engLaunchBall(B, out.launch.to, out.launch.T);
+  if (out.state !== ROUND._state) {             // a new phase = one cue, then it fades
+    ROUND._state = out.state; ROUND._aimed = false;
+    if (out.big) engHudCue(out.big, out.sub, ROUND_KIND[out.state] || 'hot');
+  } else if (out.state === 'caught' && !ROUND._aimed && out.age >= 0.9) {
+    ROUND._aimed = true; engHudCue('AIM!', 'throw it through the rim', 'warn');
+  }
+  engHudBar(out);
+}
+// ── THE DOLLY: where the engine camera goes when tracking comes on in POV. Hands
+//    only = eye height, hands a half-arm ahead. Hand + body = behind and above the
+//    figure that stands 2.6 m ahead, so you see yourself, your hands and the hoop.
+function engSdkDolly() {
+  if (!ENG.camera || !ENG.orbit || ENG.sdk.view !== 'pov') return;
+  // ANCHORED: the spot the SDK came on at, fixed for the session — every mode places the
+  // camera relative to it, so toggling modes never walks the camera away (it did:
+  // each call moved the target and the next call built on the moved target)
+  const a = ENG.sdk.anchor || (ENG.sdk.anchor = ENG.orbit.target.clone().setY(0));
+  if (ENG.sdk.part === 'hand') { ENG.camera.position.set(a.x, 1.55, a.z + 2.2); ENG.orbit.target.set(a.x, 1.15, a.z - 1.2); }
+  else { ENG.camera.position.set(a.x, 2.3, a.z + 3.6); ENG.orbit.target.set(a.x, 1.0, a.z - 0.8); }
+  ENG.orbit.update();
+}
+ENG.round = ROUND; ENG.roundStart = engRoundStart; ENG.roundStop = engRoundStop; ENG.spawnHoop = engSpawnHoop; ENG.hoops = HOOPS;
+ENG.handTarget = (out) => engHandTarget(out || new THREE.Vector3()); ENG.syncLabCamera = engSyncLabCamera; ENG.launchBall = engLaunchBall;
+ENG.rimWorld = engRimWorld; ENG.freeBall = engFreeBall; ENG.cues = CUES;
 
 // ── CLOTHIFY, the component: any prop in the scene becomes cloth ──
 // The rug ships pre-lattticed from tools/cloth; this does the same fit at
@@ -7237,7 +7481,7 @@ function engRefreshList() {
     const d = o.userData.eng;
     const row = document.createElement('div');
     row.className = 'engRow' + (o === ENG.sel ? ' sel' : '');
-    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'ball' ? '🏀' : d.cloth || d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
+    row.innerHTML = `<span>${d.type === 'tracker' ? '📡' : d.type === 'avatar' ? (AVREG.get(d.id) && AVREG.get(d.id).role === 'user' ? '🎮' : '🧍') : d.type === 'dragon' ? '🐉' : d.type === 'fox' ? (FOXES.get(d.id)?.live ? '🎭' : '🦊') : d.type === 'ball' ? '🏀' : d.type === 'hoop' ? '🥅' : d.cloth || d.type === 'rug' ? '🧶' : d.type === 'bow' ? '🏹' : d.type === 'glb' ? '🗿' : d.type === 'sphere' ? '●' : d.type === 'cylinder' ? '▮' : d.type === 'cone' ? '▲' : '▦'}</span><span class="nm">${d.label}</span><button class="del" title="${d.type === 'tracker' ? 'reset placement' : 'delete'}">${d.type === 'tracker' ? '↺' : '🗑'}</button>`;
     row.addEventListener('click', e => { if (e.target.className !== 'del') engSelect(o); });
     row.querySelector('.del').addEventListener('click', () => engDelete(o));
     host.appendChild(row);
@@ -7258,6 +7502,8 @@ function engDelete(o) {
   FOXES.delete(o.userData.eng.id);
   const bk = BASKETS.get(o.userData.eng.id);
   if (bk) { BASKETS.delete(o.userData.eng.id); }
+  if (bk && ROUND.on && ROUND.ball === bk.ball) engRoundStop();
+  if (HOOPS.has(o.userData.eng.id)) { HOOPS.delete(o.userData.eng.id); }
   const rg = RUGS.get(o.userData.eng.id);
   if (rg) {
     if (rg.clothified) unclothify(rg.piece);
@@ -7318,6 +7564,10 @@ async function engRestore(snap) {
     else if (rec.type === 'ball') {
       try { await engSpawnBasket({ label: rec.label, p: rec.p, s: rec.s }); }
       catch (e) { console.warn('basketball restore failed', e); }
+    }
+    else if (rec.type === 'hoop') {
+      try { engSpawnHoop({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
+      catch (e) { console.warn('hoop restore failed', e); }
     }
     else if (rec.type === 'rug') {
       try { await engSpawnRug({ label: rec.label, p: rec.p, r: rec.r, s: rec.s }); }
@@ -7495,6 +7745,7 @@ async function engSdkOn() {
   }
   if (!ENG.sdk.saved) ENG.sdk.saved = { mode: S.mode, display: S.display };
   engSdkApplyView();                          // POV (beat-game framing) or Mirror (camera overlay)
+  engSdkDolly();                              // eye height for hands, over-the-shoulder for hand + body
   applyDisplay(ENG_SDK_DISP[ENG.sdk.part]);
   if (ENG.sdk.view === 'pov') engSdkOverlayStyle();
   ENG.sdk.on = true;
@@ -7508,7 +7759,7 @@ async function engSdkOn() {
       : '🖐+🧍 hand + body tracking live (POV)');
 }
 function engSdkOff() {
-  ENG.sdk.on = false;
+  ENG.sdk.on = false; ENG.sdk.anchor = null;      // next time the SDK comes on, it anchors where the camera is then
   document.body.classList.remove('eng-sdk');
   engSdkRowsRefresh();
   document.body.classList.remove('eng-mirror');
@@ -7534,7 +7785,7 @@ engEls.engSdkParts.addEventListener('click', e => {
   document.querySelectorAll('#engBodySuite .opt').forEach(x => x.classList.remove('sel'));
   ENG.sdk.part = b.dataset.part;
   engSdkRowsRefresh();
-  if (ENG.sdk.on) { applyDisplay(ENG_SDK_DISP[ENG.sdk.part]); engSdkOverlayStyle(); }   // instant switch
+  if (ENG.sdk.on) { applyDisplay(ENG_SDK_DISP[ENG.sdk.part]); engSdkOverlayStyle(); engSdkDolly(); }   // instant switch — and the dolly for that mode
 });
 
 // ── BODY SUITE presets: the lab's full-body pathways, callable from the engine.
@@ -7572,7 +7823,7 @@ engEls.engSdkView.addEventListener('click', e => {
   document.querySelectorAll('#engSdkView .opt').forEach(x => x.classList.toggle('sel', x === b));
   ENG.sdk.view = b.dataset.view;
   if (ENG.sdk.on) {
-    engSdkApplyView();
+    engSdkApplyView(); engSdkDolly();
     toast(ENG.sdk.view === 'mirror' ? '🪞 mirror — camera + tracking overlay' : '🎮 POV — tracking reaches into the engine');
   }
 });
@@ -7623,8 +7874,12 @@ document.querySelectorAll('#engSpawnRow .opt').forEach(b => b.addEventListener('
     return;
   }
   if (b.dataset.sp === 'ball') {
-    engSpawnBasket().then(() => toast('🏀 basketball — with HoloHands in POV you can bat, catch and throw it; your fingers stop on its surface', 5200))
+    engSpawnBasket().then(() => toast(ENG.sdk.on ? '🏀 basketball — it is born at your hands: bat it, catch it, throw it · hold an open hand STILL to call it · 🎯 GO! for a round' : '🏀 basketball — turn IMPORT SDK on (POV): it comes to your hands, you catch it and shoot', 5600))
       .catch(err => toast('⚠ basketball failed: ' + (err.message || err), 6000));
+    return;
+  }
+  if (b.dataset.sp === 'hoop') {
+    engSpawnHoop(); toast('🥅 hoop — select the ball and hit 🎯 GO! for a round: it comes to your hands, you shoot', 4200);
     return;
   }
   if (b.dataset.sp === 'rug') {
