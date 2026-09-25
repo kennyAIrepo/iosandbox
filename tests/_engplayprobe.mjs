@@ -102,20 +102,21 @@ await shot('2-called');
 // (4) 🎯 THE ROUND — GO! → INCOMING → CAUGHT → SHOOT → GOAL
 await page.evaluate(async () => { const W = window.__ep, B = W.ball(); B.hold = null; B.cradle = null;
   B.sphere.reset(new window.__lab.THREE.Vector3(window.__hand.x + 1.5, B.radius, window.__hand.z - 2.5)); await window.__eng.roundStart(); });
-await sleep(250);
+await sleep(450);                                         // the first engine frame after a hoop build can be long — sample the GO! cue mid-life
 out.go = await page.evaluate(() => ({ ...window.__ep.stat(), hoops: window.__eng.hoops.size, rim: window.__eng.rimWorld(), hudShown: getComputedStyle(document.getElementById('engBallHud')).display,
-  cue: document.getElementById('engBallCue').childNodes[0].nodeValue, cueShown: document.getElementById('engBallCue').classList.contains('show'), cueOpacity: +getComputedStyle(document.getElementById('engBallCue')).opacity,
+  cue: document.getElementById('engBallCueBig').textContent, cueShown: document.getElementById('engBallCue').classList.contains('show'), cueOpacity: +getComputedStyle(document.getElementById('engBallCue')).opacity,
   bar: document.getElementById('engBallPhase').textContent, fill: document.getElementById('engBallFill').style.width,
   banner: document.getElementById('engBallBanner').textContent.trim(), bannerShown: getComputedStyle(document.getElementById('engBallBanner')).display,
   cueColor: getComputedStyle(document.getElementById('engBallCue')).color, noPointer: getComputedStyle(document.getElementById('engBallHud')).pointerEvents }));
-await sleep(850);                                         // t ≈ 1.1 s: launched
-out.incoming = await page.evaluate(() => ({ ...window.__ep.stat(), cue: document.getElementById('engBallCue').childNodes[0].nodeValue, bar: document.getElementById('engBallPhase').textContent, fill: document.getElementById('engBallFill').style.width, cueColor: getComputedStyle(document.getElementById('engBallCue')).color }));
+await sleep(650);                                         // t ≈ 1.1 s: launched
+out.incoming = await page.evaluate(() => { const G = document.getElementById('engBallCueGlyph'); return { ...window.__ep.stat(), cue: document.getElementById('engBallCueBig').textContent, bar: document.getElementById('engBallPhase').textContent, fill: document.getElementById('engBallFill').style.width, cueColor: getComputedStyle(document.getElementById('engBallCue')).color,
+  glyph: window.__eng.cues.current.gesture, glyphSvg: !!G.querySelector('svg .hand-l') && !!G.querySelector('svg .ball') && getComputedStyle(G).display !== 'none', glyphEmoji: /[\u{1F300}-\u{1FAFF}]/u.test(G.textContent) }; });
 await sleep(600);                                         // t ≈ 1.7 s: still in flight — the bar has drained further
-out.incoming2 = await page.evaluate(() => ({ cue: document.getElementById('engBallCue').childNodes[0].nodeValue, opacity: +getComputedStyle(document.getElementById('engBallCue')).opacity, bar: document.getElementById('engBallPhase').textContent, fill: document.getElementById('engBallFill').style.width, barShown: getComputedStyle(document.querySelector('#engBallHud .bar')).display }));
+out.incoming2 = await page.evaluate(() => ({ cue: document.getElementById('engBallCueBig').textContent, opacity: +getComputedStyle(document.getElementById('engBallCue')).opacity, bar: document.getElementById('engBallPhase').textContent, fill: document.getElementById('engBallFill').style.width, barShown: getComputedStyle(document.querySelector('#engBallHud .bar')).display }));
 await shot('3-incoming');
 await sleep(1600);                                        // t ≈ 3.3 s: caught at ~2.1 s, AIM! popped at ~3.0 s
 out.caught = await page.evaluate(() => window.__ep.stat());
-out.aim = await page.evaluate(() => ({ cue: document.getElementById('engBallCue').childNodes[0].nodeValue, opacity: +getComputedStyle(document.getElementById('engBallCue')).opacity, round: window.__eng.round.r.state, cueLog: window.__eng.cues.log.map(x => x[1]).slice(-4) }));
+out.aim = await page.evaluate(() => ({ cue: document.getElementById('engBallCueBig').textContent, opacity: +getComputedStyle(document.getElementById('engBallCue')).opacity, round: window.__eng.round.r.state, cueLog: window.__eng.cues.log.map(x => x[1]).slice(-4), glyph: window.__eng.cues.current.gesture }));
 await shot('4-caught');
 // SHOOT: release the hand and put the ball on a lob through the rim (the solver, from the page)
 await page.evaluate(async () => {
@@ -125,7 +126,7 @@ await page.evaluate(async () => {
   const { solveLaunch } = mod;
   const rim = E.rimWorld();
   const from = { x: B.sphere.pos.x, y: B.sphere.pos.y, z: B.sphere.pos.z }, to = { x: rim.x, y: rim.y + 0.02, z: rim.z };
-  const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: 1 / 60, T: 1.2 });
+  const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: E.frameDt(), T: 1.2 });   // the page's real frame step
   B.hold = null; B.cradle = null; B.sphere.vel.set(v.vx, v.vy, v.vz);
   window.__shotFrom = from;
 });
@@ -136,7 +137,7 @@ out.goal = await page.evaluate(() => window.__ep.stat());
 await shot('5-goal');
 await page.evaluate(() => window.__eng.roundStop());
 await sleep(300);
-out.over = await page.evaluate(() => ({ cue: document.getElementById('engBallCue').childNodes[0].nodeValue, opacity: +getComputedStyle(document.getElementById('engBallCue')).opacity }));
+out.over = await page.evaluate(() => ({ cue: document.getElementById('engBallCueBig').textContent, opacity: +getComputedStyle(document.getElementById('engBallCue')).opacity }));
 await sleep(2000);
 out.afterOver = await page.evaluate(() => ({ barShown: getComputedStyle(document.querySelector('#engBallHud .bar')).display, bannerShown: getComputedStyle(document.getElementById('engBallBanner')).display, cueOpacity: +getComputedStyle(document.getElementById('engBallCue')).opacity }));
 
@@ -150,6 +151,35 @@ out.solver = await page.evaluate(async () => {
   await new Promise(res => { const step = () => { const d = Math.hypot(B.sphere.pos.x - to.x, B.sphere.pos.y - to.y, B.sphere.pos.z - to.z); if (d < best) best = d; if (performance.now() - t0 < 1400) requestAnimationFrame(step); else res(); }; requestAnimationFrame(step); });
   return { from: [from.x, from.y, from.z].map(v => +v.toFixed(2)), closest_cm: +(best * 100).toFixed(1) };
 });
+
+// (7) VOICE — the panel's LISTEN button, then the same pipeline a heard "ball" runs: the ball flies to the hand,
+//     CATCH! with the glyph, the pill and the status line show what it heard; a chip runs the same intake
+await page.evaluate(() => { const W = window.__ep, B = W.ball(); B.hold = null; B.cradle = null; B._letGo.right = -9; B._letGo.left = -9;
+  B.sphere.reset(new window.__lab.THREE.Vector3(window.__hand.x - 2.2, B.radius, window.__hand.z - 2.0)); W.feed(null, W.open(window.__hand)); });
+await sleep(400);
+const voiceFrom = await page.evaluate(() => window.__ep.stat());
+await page.click('#engVoiceBtn');                              // headless: no mic — must degrade to a STATE, never throw
+await sleep(500);
+out.voice = await page.evaluate(() => {
+  const E = window.__eng;
+  const st = { supported: typeof (window.SpeechRecognition || window.webkitSpeechRecognition) !== 'undefined', stateAfterStart: E.voice.state,
+               btn: document.getElementById('engVoiceBtn').textContent.trim(), statLine: document.getElementById('engVoiceStat').textContent.slice(0, 80) };
+  st.cmd = E.say('give me the ball');                         // the pipeline a heard phrase runs
+  const G = document.getElementById('engBallCueGlyph'), V = document.getElementById('engBallVoice');
+  return { ...st, cue: document.getElementById('engBallCueBig').textContent, glyph: E.cues.current.gesture, glyphSvg: !!G.querySelector('svg .hand-r'),
+           heard: V.querySelector('.heard').textContent, pillCmd: V.querySelector('.cmd').textContent, pillShown: getComputedStyle(V).display !== 'none',
+           bar: document.getElementById('engBallPhase').textContent, ball: window.__ep.stat(), statAfter: document.getElementById('engVoiceStat').textContent.slice(0, 80) };
+});
+await sleep(1500);
+out.voiceDone = await page.evaluate(() => window.__ep.stat());
+out.voiceMoved = +Math.hypot(...[0, 1, 2].map(i => out.voiceDone.pos[i] - voiceFrom.pos[i])).toFixed(3);
+await shot('7-voice');
+// a chip is the same intake: "drop" puts the ball back at its home
+out.chip = await page.evaluate(async () => { const W = window.__ep, B = W.ball(); const before = B.sphere.pos.clone();
+  document.querySelector('#engVoiceCmds [data-cmd="drop"]').click(); await new Promise(r => setTimeout(r, 120));
+  return { moved: +B.sphere.pos.distanceTo(before).toFixed(3), lastCmd: window.__eng.voice.lastCmd, held: !!B.hold }; });
+await page.evaluate(() => { window.__eng.voice.stop(); window.__ep.feed(null, null); });
+out.voiceOff = await page.evaluate(() => ({ state: window.__eng.voice.state, btn: document.getElementById('engVoiceBtn').textContent.trim() }));
 
 // (6) the rug: the same hands lift it
 await page.evaluate(() => window.__eng.spawnRug());
@@ -203,15 +233,22 @@ const checks = {
   'UI: the round bar shows the phase and a draining timer': R.go.bar === 'GO!' && /%$/.test(R.go.fill),
   'UI: the game banner is up (icon · name · hint)': R.go.bannerShown === 'flex' && /HOOP ROUND/.test(R.go.banner),
   'UI: nothing here takes pointer events': R.go.noPointer === 'none',
-  'UI: INCOMING! replaces it as the ball flies (cool cyan)': R.incoming.cue === 'INCOMING!' && R.incoming.bar === 'INCOMING' && /159, 240, 255/.test(R.incoming.cueColor),
+  'UI: CATCH! replaces it as the ball flies (cool cyan) — with the catch glyph, no emoji': R.incoming.cue === 'CATCH!' && R.incoming.bar === 'CATCH' && /159, 240, 255/.test(R.incoming.cueColor) && R.incoming.glyph === 'catch' && R.incoming.glyphSvg && !R.incoming.glyphEmoji,
   'UI: the bar keeps draining while the cue holds': R.incoming2.barShown !== 'none' && parseInt(R.incoming2.fill) < parseInt(R.incoming.fill) && R.incoming2.opacity > 0.5,
-  'UI: CAUGHT ✓ then AIM! while you hold it': R.aim.cueLog.includes('CAUGHT ✓') && R.aim.cue === 'AIM!' && R.aim.opacity > 0.3 && R.aim.round === 'caught',
+  'UI: CAUGHT ✓ then AIM! (with the throw glyph) while you hold it': R.aim.cueLog.includes('CAUGHT ✓') && R.aim.cue === 'AIM!' && R.aim.opacity > 0.3 && R.aim.round === 'caught' && R.aim.glyph === 'throw',
   'UI: ROUND OVER cues, then FADES (~1.7 s) and the bar and banner leave': R.over.cue === 'ROUND OVER' && R.over.opacity > 0.3 && R.afterOver.cueOpacity < 0.15 && R.afterOver.barShown === 'none' && R.afterOver.bannerShown === 'none',
   'INCOMING: the ball is launched at the hand': R.incoming.round === 'incoming' && R.incoming.vel > 0.5,
   'CAUGHT: it lands in the open hand and is held': R.caught.round === 'caught' && R.caught.held === true,
   'SHOOT: releasing it is the shot': R.shot.round === 'shot',
   'GOAL: through the rim counts, score 1': R.goal.round === 'goal' || (R.goal.score === 1),
   'the launch solver lands the ball where it is aimed (< 12 cm)': R.solver.closest_cm < 12,
+  'VOICE: the LISTEN button starts the mic and degrades to a state headless, never throws': ['listening', 'starting', 'unsupported', 'denied', 'error', 'paused'].includes(R.voice.stateAfterStart) && /LISTEN/.test(R.voice.btn),
+  'VOICE: "give me the ball" → the ball command': R.voice.cmd === 'ball',
+  'VOICE: the ball flies to the hand and is taken': R.voice.ball.vel > 0.5 && (R.voiceDone.held === true || R.voiceMoved > 1.5),
+  'VOICE: CATCH! cues with the catch glyph (drawn, not emoji)': R.voice.cue === 'CATCH!' && R.voice.glyph === 'catch' && R.voice.glyphSvg && R.voice.bar === 'CATCH',
+  'VOICE: the banner pill and the status line show what it heard and the command': R.voice.pillShown && /give me the ball/.test(R.voice.heard) && /ball/i.test(R.voice.pillCmd) && /give me the ball/.test(R.voice.statAfter) && /BALL/.test(R.voice.statAfter),
+  'VOICE: a panel chip runs the same intake ("drop" → the ball goes home)': R.chip.lastCmd === 'drop' && R.chip.moved > 0.3 && !R.chip.held,
+  'VOICE: stop → off, the button reads LISTEN again': R.voiceOff.state === 'off' && /LISTEN/.test(R.voiceOff.btn) && !/STOP/.test(R.voiceOff.btn),
   'the rug takes the same hands: a palm under it makes contact': R.rug.handsSeen && R.rug.contacts > 0 && R.rug.touching > 3,
   'and the hand is not inside the weave (< 6 mm)': R.rug.deepest_mm < 6,
   'and the sheet OVER the palm rides the lifting hand (its edges stay down — a drape)': R.rug.overAfter > R.rug.overBefore + 0.08 && R.rug.overAfter > R.rug.handY - 0.01 && R.rug.lowestAfter < R.rug.overAfter - 0.05,

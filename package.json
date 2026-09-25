@@ -28,7 +28,8 @@
     "probe:join": "node tests/_intjoin.mjs",
     "probe:gestures": "node tests/_intgest.mjs",
     "probe:int": "node tests/_intprobe.mjs solo && node tests/_intprobe.mjs 4tiles && node tests/_intprobe.mjs coach",
-    "test:round": "node tests/ball-round-smoke.mjs"
+    "test:round": "node tests/ball-round-smoke.mjs",
+    "test:voice": "node tests/voice-commands-smoke.mjs"
   },
   "dependencies": {
     "@vercel/blob": "latest"

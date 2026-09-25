@@ -6,7 +6,8 @@ cube, bow, beat, twins — cues the same way, and the look is changed in one fil
 by theme variables), never by editing a lane.
 
 Status: **template under test** (2026-09-25). Wired into: the engine 🏀 hoop round
-(all phases), the engine + mirror basketball (caught / thrown), BEAT RUSH (start /
+(all phases, with the catch and throw glyphs), voice in both lanes ("ball" →
+CATCH!), the engine + mirror basketball (caught / thrown), BEAT RUSH (start /
 over), the bow (shot). Once approved it becomes the guardrail: no ad-hoc toasts for
 game state.
 
@@ -27,6 +28,37 @@ CUES.cue('start');                                      // a MOMENTS key → "GO
 CUES.cue('INCOMING!', 'open your hand where it lands', 'cool');
 CUES.bar({ round: 3, label: 'INCOMING', right: '2 goals · streak 2 · best 4', phase: 0.35, cool: true });
 CUES.hideBar(1800); CUES.hideBanner(1800);              // after the last cue fades
+```
+
+## Gesture glyphs
+
+A cue that asks the player to DO something with their hands carries a **gesture
+glyph** above the word: drawn, animated line art in the cue's colour — never an
+emoji. `catch` (two open hands cup up, the ball drops in, the hands close a
+touch), `throw` (a hand pushes the ball up the arc to a small ring), `call` (an
+open palm, rings settling onto it), `listen` (the microphone with sound waves).
+
+```js
+CUES.cue('CATCH!', 'open your hands — it lands in your palm', 'cool', { gesture: 'catch', ms: 1900 });
+CUES.cue('catch');     // the MOMENTS key carries its gesture
+```
+
+## Voice
+
+`sdk/game/voice-commands.js` — the microphone listens continuously
+(SpeechRecognition, auto-restart on silence); a small grammar fires commands; the
+banner's **voice pill** shows the state (pulsing while listening, with your voice
+level) and what it heard. Both panels carry the same block: **🎙 LISTEN / ■ STOP**,
+a status line ("● listening · heard “…” → BALL"), and command **chips** that run
+the same pipeline the mic fires (`VOICE.inject`), so nothing is mic-only. V toggles.
+
+- engine: **"ball"** → the ball flies to your hands, `CATCH!` with the catch glyph ·
+  "go" (a round; also opens the mic) · "stop" · "hoop" · "drop"
+- mirror: **"ball"** → the basketball flies to your holo hands · "cube" · "rug" ·
+  "slime" · "bow" spawn by name · "go" / "stop" BEAT RUSH · "drop"
+
+```js
+CUES.voice({ state: 'listening', heard: 'give me the ball', cmd: 'ball', level: 0.4 });
 ```
 
 ## Tokens (`GAME_UI`)

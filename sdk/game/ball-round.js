@@ -68,8 +68,8 @@ export function launchOrigin(rim, toward, ahead) {
 export const ROUND_CUES = {
   idle:     { big: '',           sub: '' },
   go:       { big: 'GO!',        sub: 'hands up — the ball is coming to you' },
-  incoming: { big: 'INCOMING!',  sub: 'open your hand where it lands — it finds your palm' },
-  caught:   { big: 'CAUGHT ✓',   sub: 'aim at the hoop', then: { at: 0.9, big: 'AIM!', sub: 'throw it through the rim' } },
+  incoming: { big: 'CATCH!',     sub: 'open your hands where it lands — it finds your palm', gesture: 'catch' },
+  caught:   { big: 'CAUGHT ✓',   sub: 'aim at the hoop', then: { at: 0.9, big: 'AIM!', sub: 'throw it through the rim', gesture: 'throw' } },
   shot:     { big: 'SHOOT!',     sub: 'in the air…' },
   goal:     { big: 'GOAL!',      sub: 'again — it comes right back' },
   miss:     { big: 'MISS',       sub: 'no worries — incoming again' },
@@ -103,7 +103,7 @@ export class BallRound {
   _out(now, launch = null) {
     const c = ROUND_CUES[this.state] || ROUND_CUES.idle;
     const pt = this.phaseT();
-    return { state: this.state, big: c.big, sub: c.sub, launch, score: this.score, streak: this.streak, shots: this.shots,
+    return { state: this.state, big: c.big, sub: c.sub, gesture: c.gesture || '', launch, score: this.score, streak: this.streak, shots: this.shots,
              catches: this.catches, rounds: this.rounds, best: this.best, age: +(now - this.t0).toFixed(2),
              phaseT: pt, phase: pt ? Math.min(1, Math.max(0, (now - this.t0) / pt)) : 0 };
   }
