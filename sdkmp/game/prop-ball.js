@@ -42,6 +42,7 @@
 import * as THREE from 'three';
 import { GrabbableSphere, JOINT_RADII } from '../core/game-physics.js';   // game-physics.js:225, :38
 import { fingerStop } from '../core/finger-stop.js';               // skeleton-level contact: fingers stop ON the ball, thickness kept
+import { BallSim, FlightRecorder, Surface, MATERIALS } from '../core/ball-physics.js';   // REAL physics (opts.sim): flight, bounce, surfaces, recorder
 import { PropHull } from '../core/prop-hull.js';                          // prop-hull.js:39
 
 // ── module temps (fresh copies of the page temps _sbTmpA/B/C :1067, _slP/_slQ/_slQ2 :1068,
@@ -210,6 +211,23 @@ export class PropBall {
     this.gap = Infinity;                                       // min hand↔surface clearance this frame (metres)
     this.avoiding = false;                                     // …and whether that put avoidance in charge
     this.extraBodies = [];                                     // [D7] default for update(): {joints, radii, present} bodies (BodyBody) — support only
+    // ── REAL PHYSICS (opts.sim): free flight, bounces and every surface run in BallSim — the floor follows this.floorY,
+    //    this.surfaces is the page's registry (a hoop's board / rim / pole…), hands and bodies are KINEMATIC sphere sets
+    //    WITH velocity (a push bats the ball at ~(1+e)× the hand's speed along the contact normal). The recorder logs
+    //    release / apex / impact / rest for the HUD, the probes and tuning. opts.intent = a HandIntent (claw / push / drop).
+    this.sim = null; this.rec = null; this.surfaces = []; this._floorS = null; this._handS = {}; this._prevPk = {}; this._handVel = {}; this._simList = [];
+    this.onBounce = null; this.intent = opts.intent || null; this.lastIntent = null;
+    if (opts.sim) {
+      const g = opts.gravity ?? -9.81;
+      this.rec = new FlightRecorder({ gravity: g });
+      this.sim = new BallSim({ pos: this.sphere.pos, vel: this.sphere.vel, angVel: this.sphere.angVel, quat: this.sphere.quat,
+        radius: this.radius, gravity: g, mass: opts.mass ?? 0.62, onImpact: (c) => { this.rec.impact(this.sim, c); if (this.onBounce) this.onBounce(c); } });
+      this._floorS = Surface.plane('floor', new THREE.Vector3(0, this.floorY, 0), new THREE.Vector3(0, 1, 0), MATERIALS.floor);
+      for (const slot of ['left', 'right']) {
+        this._handVel[slot] = Array.from({ length: 21 }, () => new THREE.Vector3()); this._prevPk[slot] = null;
+        this._handS[slot] = Surface.spheres('hand:' + slot, [], new Float32Array(21), this._handVel[slot], MATERIALS.hand);
+      }
+    }
     this.recenter();
   }
 
@@ -228,6 +246,7 @@ export class PropBall {
     this.mesh.scale.setScalar(this.userS);
     this.sphere.radius = this.radius * this.userS;
     this.collider.radius = this.radius * this.userS;
+    if (this.sim) this.sim.r = this.radius * this.userS;
     this.mesh.updateMatrixWorld(true);
   }
   get pos() { return this.sphere.pos; }
@@ -253,7 +272,8 @@ export class PropBall {
     for (const i of [8, 12, 16, 20]) if (pack[i]) volar += ((pack[i].x - P.pc.x) * _tC.x + (pack[i].y - P.pc.y) * _tC.y + (pack[i].z - P.pc.z) * _tC.z) * 0.5;
     volar /= span;
     P.evi = P.sign === 0 ? volar : P.evi * 0.85 + volar * 0.15;
-    if (P.sign === 0 || Math.abs(P.evi) > 0.04) P.sign = P.evi >= 0 ? 1 : (P.evi < 0 ? -1 : 0);
+    // the inner side needs EVIDENCE: a perfectly flat hand (a synthetic pack) stays unmeasured instead of being handed an arbitrary side
+    if ((P.sign === 0 && Math.abs(volar) > 0.02) || (P.sign !== 0 && Math.abs(P.evi) > 0.04)) P.sign = P.evi >= 0 ? 1 : -1;
     if (P.sign === 0) return P;
     P.n.copy(_tC).multiplyScalar(P.sign);
     P.closure = closure(pack);
@@ -273,7 +293,7 @@ export class PropBall {
     const PS = slot ? this._pose[slot] : null;
     if (PS && PS.sign !== 0) {
       _tC.set(this.sphere.pos.x - PS.pc.x, this.sphere.pos.y - PS.pc.y, this.sphere.pos.z - PS.pc.z);
-      if (_tC.dot(PS.n) < 0) return null;
+      if (_tC.dot(PS.n) < -0.25 * this.radius * this.userS) return null;   // clearly BEHIND the palm (not a ball sitting in its plane)
     }
     const H = this.hull.begin(this.mesh), rad = packRadii(pack), T = this._gT, N = this._gN;
     for (let i = 0; i < 21; i++) {
@@ -307,6 +327,66 @@ export class PropBall {
       if (Math.hypot(q.x - this.sphere.pos.x, q.y - this.sphere.pos.y, q.z - this.sphere.pos.z) < within) n++; }
     return n;
   }
+  /** joint velocities from the RAW packs (before any stop mutates them) — the kinematic hands the simulator bats with */
+  _handKinematics(hands, dt) {
+    const seen = new Set(), now = this._t || 0;
+    this._prevT = this._prevT || {}; this._prevMut = this._prevMut || {}; this.stale = this.stale || {};
+    for (const [slot, pack] of hands) {
+      seen.add(slot);
+      const prev = this._prevPk[slot], vel = this._handVel[slot], mut = this._prevMut[slot];
+      if (!prev) { this._prevPk[slot] = pack.map(q => q ? new THREE.Vector3(q.x, q.y, q.z) : null); for (const v of vel) v.set(0, 0, 0); this._prevT[slot] = now; this.stale[slot] = false; continue; }
+      // a repeated pack (a 30 Hz tracker on a 60 Hz loop) is a STALE frame: keep the velocities, measure between fresh
+      // samples. A pack equal to what the STOPS left last frame is the same sample re-seen, not a hand that moved back.
+      let moved = false;
+      for (let i = 0; i < 21 && !moved; i++) { const q = pack[i], p = prev[i], m = mut && mut[i]; if (!q || !p) continue;
+        const rawSame = q.x === p.x && q.y === p.y && q.z === p.z, mutSame = !!m && q.x === m.x && q.y === m.y && q.z === m.z;
+        if (!rawSame && !mutSame) moved = true; }
+      this.stale[slot] = !moved;
+      const hs = this._handS[slot];
+      if (!moved) { hs.sweep = false; hs.stepLen = 0; continue; }   // no new sample this frame: the last fresh velocity stands (a steady swing reads steady)
+      // the previous sample → the surface sweeps from it to this one (a 3 m/s hand jumps 10–15 cm between tracker samples)
+      hs.prevPts = hs.prevPts || pack.map(() => ({ x: 0, y: 0, z: 0 })); let stepLen = 0;
+      for (let i = 0; i < 21; i++) { const p = prev[i], q = pack[i]; if (!p || !q) continue; hs.prevPts[i].x = p.x; hs.prevPts[i].y = p.y; hs.prevPts[i].z = p.z; const d = Math.hypot(q.x - p.x, q.y - p.y, q.z - p.z); if (d > stepLen) stepLen = d; }
+      hs.sweep = stepLen > 0.005 && stepLen < 0.6; hs.stepLen = stepLen;
+      const inv = 1 / Math.max(now - (this._prevT[slot] ?? now - dt), 1e-3); this._prevT[slot] = now;
+      for (let i = 0; i < 21; i++) {
+        const q = pack[i], p = prev[i];
+        if (!q) { vel[i].set(0, 0, 0); continue; }
+        if (!p) { prev[i] = new THREE.Vector3(q.x, q.y, q.z); vel[i].set(0, 0, 0); continue; }
+        _tA.set((q.x - p.x) * inv, (q.y - p.y) * inv, (q.z - p.z) * inv);
+        if (_tA.lengthSq() > 64) _tA.setLength(8);                    // a tracking jump is not an 8 m/s swat
+        vel[i].lerp(_tA, 0.6); p.set(q.x, q.y, q.z);
+      }
+    }
+    for (const slot of ['left', 'right']) if (!seen.has(slot)) this._prevPk[slot] = null;
+  }
+  /** the palm's speed this frame (m/s) from the joint velocities — a hand faster than ~1.2 m/s is swinging, not taking */
+  _palmSpeed(slot) {
+    const vel = this._handVel[slot]; if (!vel) return 0;
+    _tA.set(0, 0, 0); let n = 0; for (const i of [0, 5, 9, 13, 17]) { _tA.add(vel[i]); n++; }
+    return n ? _tA.length() / n : 0;
+  }
+  _fast(slot) { return this.sim ? this._palmSpeed(slot) > 1.2 : false; }
+  /** the surfaces this frame: the floor, the page's registry, the hands that are not about to take it, the bodies */
+  _simSurfaces(hands, R, extraBodies) {
+    const S = this._simList; S.length = 0;
+    this._floorS.p.y = this.floorY; S.push(this._floorS);
+    for (const s of this.surfaces) S.push(s);
+    const hold0 = this.grabNear ? R + (this.grabNear.margin ?? 0.03) + 0.05 : -1;
+    for (const [slot, pack] of hands) {
+      if (!this._fast(slot)) {                                        // a SWINGING hand bats it whatever its distance; a slow one…
+        if (pack === this.attractHand) continue;                     // …that it is coming TO seats it — it does not bat it
+        if (hold0 > 0 && this._minDist(pack) < hold0) continue;     // …about to take it (the ejector bug)
+      }
+      const hs = this._handS[slot]; hs.pts = pack; hs.radii.set(packRadii(pack)); S.push(hs);
+    }
+    if (extraBodies) for (const b of extraBodies) {
+      if (!b || !b.present || !b.joints || !b.joints.length) continue;
+      const bs = b._simS || (b._simS = Surface.spheres('body', b.joints, b.radii, b.vel || null, MATERIALS.body));
+      bs.pts = b.joints; bs.radii = b.radii; bs.vel = b.vel || null; S.push(bs);
+    }
+    return S;
+  }
   /** the palm centre the DEI lane carried the ball by (wrist + 3 MCPs) */
   _palmC(pack, out) {
     out.set(0, 0, 0); let n = 0;
@@ -321,15 +401,22 @@ export class PropBall {
     if (!pack || !pack[0] || !pack[9] || !pack[5] || !pack[17]) return null;
     const rad = packRadii(pack), palmR = (rad[5] + rad[9] + rad[13]) / 3;
     this._palmC(pack, out);
-    _tA.set(pack[9].x - pack[0].x, pack[9].y - pack[0].y, pack[9].z - pack[0].z);
-    _tB.set(pack[5].x - pack[17].x, pack[5].y - pack[17].y, pack[5].z - pack[17].z);
-    _pn.crossVectors(_tA, _tB); if (_pn.lengthSq() < 1e-10) return null;
-    _pn.normalize();
-    const side = _pn.dot(_tA.set(this.sphere.pos.x - out.x, this.sphere.pos.y - out.y, this.sphere.pos.z - out.z));
     const P = this._pose[slot];
-    if (Math.abs(side) < R * 0.35 && P && P.sign !== 0) _pn.copy(P.n);   // in the palm's plane: the measured inner side
-    else if (side < 0) _pn.negate();
+    if (P && P.sign !== 0) _pn.copy(P.n);                                  // the MEASURED inner side — a ball is never held on the back of a hand
+    else {                                                                 // chirality not measured yet (a perfectly flat synthetic hand): the side it is on
+      _tA.set(pack[9].x - pack[0].x, pack[9].y - pack[0].y, pack[9].z - pack[0].z);
+      _tB.set(pack[5].x - pack[17].x, pack[5].y - pack[17].y, pack[5].z - pack[17].z);
+      _pn.crossVectors(_tA, _tB); if (_pn.lengthSq() < 1e-10) return null;
+      _pn.normalize();
+      if (_pn.dot(_tA.set(this.sphere.pos.x - out.x, this.sphere.pos.y - out.y, this.sphere.pos.z - out.z)) < 0) _pn.negate();
+    }
     return out.addScaledVector(_pn, R + palmR + 0.004);
+  }
+  /** is the ball on the palm's INNER side (not clearly behind the hand)? the back of a hand never calls or takes it */
+  _facing(slot, pack, minDot = -0.2) {
+    const P = this._pose[slot]; if (!P || P.sign === 0 || !pack || !pack[0]) return true;   // unmeasured: cannot tell
+    this._palmC(pack, _pn); _pn.subVectors(this.sphere.pos, _pn); const d = _pn.length(); if (d < 1e-6) return true;
+    return _pn.divideScalar(d).dot(P.n) > minDot;
   }
   /** DEI CONTACT: enough landmarks on the ball — proximity IS the intent */
   _nearGrab(pack, R, slot) {
@@ -337,6 +424,7 @@ export class PropBall {
     if (slot && this._t - this._letGo[slot] < 0.7) return null;   // you just let go of it
     const contact = R + (this.grabNear.margin ?? 0.03);
     if (this.attract && slot) {                                   // on the DEI route it is taken when it SITS ON THE PALM (the pocket) — never a hover a fingertip away
+      if (!this._facing(slot, pack)) return null;
       const pocket = this._pocketOf(slot, pack, R, _pk);
       if (!pocket || pocket.distanceTo(this.sphere.pos) > 0.03) return null;
     } else if (this._minDist(pack) >= contact) return null;
@@ -392,13 +480,32 @@ export class PropBall {
     for (const [slot, pack] of hands) this._holdPose(slot, pack, R);               // :1596
     for (const slot of ['left', 'right']) if (!hands.some(h => h[0] === slot)) this._pose[slot].seen = false;   // absent hand: no stale step next time
     this.seek = null; this.seekHand = null;
+    if (this.sim) this._handKinematics(hands, dt);                                  // joint velocities from the RAW packs
+    this._t = (this._t || 0);
+    const I = this.intent ? this.intent.update(hands, { pos: this.sphere.pos, r: R, held: !!this.hold, holdSlot: this.hold ? this.hold.slot : null }, dt, this._t, this.stale) : null;
+    this.lastIntent = I;
     // ── HOLD (wrap/clip): re-checked EVERY frame (looser skin = hysteresis); gone -> released THAT frame (:1600-1619)
     //    B1 tolerance: the re-test runs BEFORE the ball rides the palm this frame, so a carried ball trails the hand by the frame's
     //    motion; the lane's 0.03 skin (sized for a 16 cm ball) grows by the palm's per-frame step (<= 8 cm) so a 5 cm ball survives a
     //    2-3 m/s carry. At rest the skin is exactly the lane's 0.03; an OPEN hand still releases THAT frame (no opposite finger joint).
     if (this.hold) {
-      const e = hands.find(h => h[0] === this.hold.slot);
-      const g = e
+      let e = hands.find(h => h[0] === this.hold.slot);
+      // the PASS: the OTHER hand's palm faces the ball and sits on it (its pocket is where the ball is) while this
+      // hand opens — or the other claws it — and the hold moves over; the giving hand may not take it back for 0.7 s
+      { const o = hands.find(h => h[0] !== this.hold.slot);
+        if (o && e && this._nearGrab(o[1], R, o[0]) && (closure(e[1]) < 0.4 || (I && I.claw && I.claw.slot === o[0]))) {
+          this._letGo[this.hold.slot] = this._t;
+          const pocket = this._pocketOf(o[0], o[1], R, _pk); if (pocket) this.sphere.pos.copy(pocket);
+          palmPose(o[1], _pP, _pQ);
+          this.hold = { slot: o[0], type: 'near',
+            posOff: _tB.copy(this.sphere.pos).sub(_pP).applyQuaternion(_pQ2.copy(_pQ).invert()).clone(),
+            quatOff: _pQ2.copy(_pQ).invert().multiply(this.sphere.quat).clone() };
+          this._velHist.length = 0; e = o;
+          if (this.onGrab) this.onGrab(o[0], 'pass');
+        } }
+      const push = I && I.release && I.release.slot === this.hold.slot ? I.release : null;   // the SHOT: the palm pushed and let go
+      const drop = !!(I && I.drop && I.drop.slot === this.hold.slot);                        // an open palm that no longer faces up
+      const g = (push || drop) ? null : e
         ? (this.hold.type === 'near'
             // dei_full.html re-tested the SAME contact every frame: move the
             // hand off it and it is released. Nothing else — no pose to hold.
@@ -412,6 +519,9 @@ export class PropBall {
         _tC.set(0, 0, 0); for (const v of this._velHist) _tC.add(v);
         if (this._velHist.length) _tC.divideScalar(this._velHist.length);
         this.sphere.vel.copy(_tC);                                                  // thrown / dropped with the hand's velocity
+        if (push) this.sphere.vel.copy(push.vel);                                   // the SHOT leaves at the palm's peak velocity
+        this._letGo[this.hold.slot] = this._t;                                       // and whatever let go (push, drop, open) cannot re-take it for 0.7 s — the other hand can (the pass)
+        if (this.sim) { this.sim.wake(); this.rec.release(this.sim, { source: push ? 'push' : drop ? 'drop' : 'open', handSpeed: push ? push.speed : undefined, why: push ? push.why : undefined, conf: push ? push.conf : undefined }); }
         if (!e || this._minDist(e[1]) > R + (this.grabNear ? (this.grabNear.margin ?? 0.03) : 0.03) + 0.15)
           this._letGo[this.hold.slot] = this._t;                                    // a real departure: no instant re-grab
         this.hold = null; this._velHist.length = 0;
@@ -444,7 +554,10 @@ export class PropBall {
     }
     // ── GRAB gate for a free (or cradled) ball: wrap or clip, touching (6 mm skin) (:1621-1630)
     if (!this.hold && !scaling) for (const [slot, pack] of hands) {
-      const g = this._nearGrab(pack, R, slot) || this._wrapGrab(pack, 0.006, slot) || this._graspGrab(slot, pack, R);
+      if (this._fast(slot)) continue;                                            // a swat is not a catch
+      if (this._t - this._letGo[slot] < 0.7) continue;                           // it just left this hand (a push, a drop, a pass): no re-take for 0.7 s
+      const clawed = I && I.claw && I.claw.slot === slot;
+      const g = (clawed ? { type: 'near', claw: true } : null) || this._nearGrab(pack, R, slot) || this._wrapGrab(pack, 0.006, slot) || this._graspGrab(slot, pack, R);
       if (!g) continue;
       // a SCREEN grab takes the mocked depth with it: the offset is captured
       // after the snap, so the ball is IN the hand rather than wherever its
@@ -458,6 +571,7 @@ export class PropBall {
         posOff: _tB.copy(this.sphere.pos).sub(_pP).applyQuaternion(_pQ2.copy(_pQ).invert()).clone(),
         quatOff: _pQ2.copy(_pQ).invert().multiply(this.sphere.quat).clone() };
       this._velHist.length = 0; this.sphere.vel.set(0, 0, 0); this.cradle = null;
+      if (this.sim) this.sim.wake();
       if (this.onGrab) this.onGrab(slot, g.type);
       break;
     }
@@ -524,11 +638,17 @@ export class PropBall {
     this.zone = 'far';
     let attracting = false;
     this.attractHand = null;
-    if (this.attract && !this.hold && !scaling) {
+    if (this.attract && !this.hold && !scaling && !(I && I.blockAttract)) {
       let best = Infinity, bestPack = null, bestSlot = null;
       for (const [slot, pack] of hands) {
         if (this._t - this._letGo[slot] < 0.7) continue;        // just let go: leave it alone
+        if (this._fast(slot)) continue;                          // a swinging hand bats it (the simulator); it does not call it
+        if (!this._facing(slot, pack)) continue;                  // the back of a hand does not call it
         const d = this._minDist(pack);
+        if (this.sim && d > R + 0.10) {                            // in the engine a ball in FLIGHT comes only if it is COMING (thrown to you, called, launched) —
+          this._palmC(pack, _pk); _pk.sub(this.sphere.pos); const L = _pk.length();   // one flying away or bouncing past is never pulled back (the glue)
+          if (L > 1e-6 && this.sphere.vel.dot(_pk) / L < 0.3) continue;
+        }
         if (d < best) { best = d; bestPack = pack; bestSlot = slot; }
       }
       // DEI, PLAIN: a hand in the zone and the ball comes to it. No "is it
@@ -536,7 +656,13 @@ export class PropBall {
       // per-frame approach gate fired on half the frames and gravity took the
       // ball back on the other half: it never arrived. What stops the glue is
       // the release refractory above, not a gate on the approach.
-      if (bestPack && best < this.attract.zone) {
+      // a ball RESTING on the floor is not magnetised from across the room — it has to be reached (the palm within a few cm of
+      // its surface); a ball in FLIGHT comes to a facing palm from the whole zone (the webcam catch). This is what ends the glue
+      // after a shot that lands near you.
+      const resting = this.sim ? (this.sim.asleep || (this.sim.support && this.sphere.vel.length() < 0.6)) : false;
+      const zone = resting ? R + 0.10 : this.attract.zone;
+      if (bestPack && resting) { this._palmC(bestPack, _pk); if (_pk.distanceTo(this.sphere.pos) > R + 0.06) bestPack = null; }   // resting: the PALM must TOUCH it (a resting ball is never magnetised)
+      if (bestPack && best < zone) {
         const contact = R + ((this.grabNear && this.grabNear.margin) || 0.03);
         this.attractHand = bestPack; this.overSlot = bestSlot;
         attracting = true;                                     // held up while it closes AND at contact (the grab fires next frame)
@@ -550,7 +676,7 @@ export class PropBall {
         const len = pocket ? _tB.subVectors(pocket, this.sphere.pos).length() : 0;
         this.zone = (best < contact || len < 0.03) ? 'contact' : 'approach';
         if (pocket && len > 0.004) {
-          const f = (this.attract.force ?? 0.04) * (0.35 + 0.65 * (1 - Math.min(1, best / this.attract.zone))) * Math.min(3, dt * 60);
+          const f = (this.attract.force ?? 0.04) * (0.35 + 0.65 * (1 - Math.min(1, best / zone))) * Math.min(3, dt * 60);
           this.sphere.pos.addScaledVector(_tB.divideScalar(len), Math.min(len, f));
           this.sphere.vel.multiplyScalar(0.6);
         } else this.sphere.vel.set(0, 0, 0);
@@ -559,7 +685,9 @@ export class PropBall {
     // ── free flight: gravity ALWAYS on (unless this prop floats, DEI-style);
     //    the sphere only integrates + floor — its own grab logic is never given a hand (:1675-1677)
     if (!this.hold && !scaling && !cradleP && !attracting) {
-      if (this.float) {
+      if (this.sim) {
+        this.sim.step(dt, this._simSurfaces(hands, R, extraBodies)); this.rec.tick(this.sim);
+      } else if (this.float) {
         this.sphere.pos.addScaledVector(this.sphere.vel, dt);
         this.sphere.vel.multiplyScalar(0.94);
         const w = this.sphere.angVel.length();
@@ -568,7 +696,7 @@ export class PropBall {
       } else this.sphere.update(dt, [], this.floorY);
     }
     // ── SUPPORT: a free ball is pushed OUT of every hand's joint spheres — rests on a palm, batted, never passes through (:1678-1695)
-    if (!this.hold && !scaling && this.hull) {
+    if (!this.hold && !scaling && this.hull && !this.sim) {                        // (with the simulator, hands + bodies are its kinematic surfaces)
       this.mesh.position.copy(this.sphere.pos); this.mesh.updateWorldMatrix(true, false);
       const H = this.hull.begin(this.mesh);
       const hold0 = this.grabNear ? R + (this.grabNear.margin ?? 0.03) + 0.05 : -1;
@@ -621,7 +749,7 @@ export class PropBall {
       //    it by the conform. The palm is not moved here: the carrying / attracting palm is the anchor the
       //    pocket keeps tangent; any other hand's palm is moved out whole by the residual below.
       { const H = this.hull.begin(this.mesh), q = (p, n) => H.closest(p, null, n);
-        for (const [, pack] of hands) { const r = fingerStop(q, pack, packRadii(pack), this.resistSkin, { palm: 'none' }); this.stopped += r.fingers; } }
+        for (const [slot, pack] of hands) { const P = this._pose[slot]; const r = fingerStop(q, pack, packRadii(pack), this.resistSkin, { palm: 'none', hint: P && P.sign !== 0 ? P.n : null }); this.stopped += r.fingers; } }
       for (const [slot, pack] of hands) {
         const t = hullTouch(this.hull, this.mesh, pack);        // SHAPE vs SHAPE clearance
         if (t < this.gap) this.gap = t;
@@ -631,6 +759,10 @@ export class PropBall {
         handResist(this.hull, this.mesh, pack, 1.0, this.resistSkin);
       }
     }
+    // what the stops left in the packs: a pack re-seen next frame with exactly these values is the SAME sample
+    if (this.sim && pk) { this._prevMut = this._prevMut || {};
+      for (const [slot, pack] of hands) { const m = this._prevMut[slot] || (this._prevMut[slot] = pack.map(() => new THREE.Vector3()));
+        for (let i = 0; i < 21; i++) { const q = pack[i]; if (q) m[i].set(q.x, q.y, q.z); } } }
     // latched for anything that samples between frames (UI glow, probes)
     this.avoidingHold = this.avoiding || (this._avoidAt != null && this._t - this._avoidAt < 0.3);
     // ── conform collider for the holohand skin, depth-true (:1714-1717)
@@ -667,6 +799,8 @@ export class PropBall {
     out.held = this.hold ? this.hold.slot : null;
     out.holdType = this.hold ? this.hold.type : null;
     out.cradle = this.cradle; out.seek = this.seek; out.scale = this.userS; out.zone = this.zone;
+    if (this.rec) { out.flight = this.rec.live; out.asleep = this.sim.asleep; }
+    if (this.intent) { out.intent = this.intent.state; out.intentConf = this.intent.conf; }
     return out;
   }
 

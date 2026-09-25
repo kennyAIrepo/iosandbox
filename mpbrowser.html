@@ -714,6 +714,9 @@ import { buildCloth, toLocalHands, clothResistHand, updateClothWire } from './sd
 import { solveLaunch, launchOrigin, BallRound, CallGesture } from './sdkmp/game/ball-round.js';
 import { GameCues, MOMENTS as CUE_MOMENTS } from './sdkmp/game/game-cues.js';
 import { VoiceCommands, GRAMMAR as VOICE_GRAMMAR } from './sdkmp/game/voice-commands.js';
+import { Surface, MATERIALS, solveLaunch as solveLaunchSim, predictArc, collect as collectContacts } from './sdkmp/core/ball-physics.js';   // REAL ball physics
+import { FlightHud } from './sdkmp/game/flight-hud.js';
+import { HandIntent } from './sdkmp/game/hand-intent.js';
 // GAME UI (docs/GAME-UI.md): every game moment on this page — engine or mirror —
 // cues through this one component: the call-out, the round bar, the game banner.
 const CUES = new GameCues({ id: 'engBall' });
@@ -5820,7 +5823,8 @@ function engAvCtlRefresh() {
   if (brec) {                                  // BALL strip: reset · size · frame
     const sel = ENG.sel, B = brec.ball;
     lbl.textContent = 'BASKETBALL · physics';
-    mk('↺ drop it', false, () => { B.sphere.reset(B.center.clone().add(new THREE.Vector3(0, 0.6, 0))); B.hold = null; B.cradle = null; toast('🏀 dropped'); }, 'drop it from above its home');
+    mk('📈 flight', FLIGHT.on, () => { FLIGHT.toggle(); engAvCtlRefresh(); }, 'live physics: height · speed · bounces (e, predicted vs measured rebound) · intent · the predicted arc');
+    mk('↺ drop it', false, () => { B.sphere.reset(B.center.clone().add(new THREE.Vector3(0, 0.6, 0))); B.hold = null; B.cradle = null; if (B.sim) { B.sim.wake(); B.rec.release(B.sim, { source: 'drop-button' }); } toast('🏀 dropped'); }, 'drop it from above its home');
     mk('➖', false, () => { B.setScale(B.userS / 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'smaller — or PINCH with both hands');
     mk('➕', false, () => { B.setScale(B.userS * 1.2); toast('🏀 ball ×' + B.userS.toFixed(2)); }, 'bigger — or PINCH with both hands');
     mk('📷 frame', false, () => engBallFrame(sel), 'put the camera on it');
@@ -6796,6 +6800,33 @@ function _pinchR(pack) {                        // thumb-tip↔index-tip / palm 
 // in POV the welded packs reach engine space (the anchors doctrine), so the ball
 // is batted, caught, carried and thrown by the SAME hands — and stops them.
 const BASKETS = new Map();                    // eng id → { ball }
+// ── THE SURFACES the engine ball bounces off: the floor is the ball's own; each hoop registers its
+//    backboard (a slab), its rim (a ring), its pole and arm (capsules) — rebuilt from the hoop's live
+//    transform every tick, so a hoop moved with the gizmo keeps its collision. Hands and the tracked
+//    body are kinematic sphere sets inside PropBall (they hit the ball at (1+e)× their speed).
+const ENG_SURF = [];
+const FLIGHT = new FlightHud({ id: 'engFlight', scene: ENG.scene, THREE });
+const _sfA = new THREE.Vector3(), _sfB = new THREE.Vector3();
+function engSurfacesTick() {
+  ENG_SURF.length = 0;
+  for (const rec of HOOPS.values()) {
+    const g = rec.g; g.updateWorldMatrix(true, false); const M = g.matrixWorld, sx = g.scale.x || 1;
+    if (!rec.surf) rec.surf = {
+      board: Surface.rect('board', new THREE.Vector3(), new THREE.Vector3(0, 0, 1), new THREE.Vector3(1, 0, 0), 0.9, 0.525, MATERIALS.board, 0.04),
+      rim: Surface.ring('rim', new THREE.Vector3(), new THREE.Vector3(0, 1, 0), HOOP_RIM_R, 0.012, MATERIALS.rim),
+      pole: Surface.capsule('pole', new THREE.Vector3(), new THREE.Vector3(), 0.05, MATERIALS.pole),
+      arm: Surface.capsule('arm', new THREE.Vector3(), new THREE.Vector3(), 0.04, MATERIALS.pole),
+    };
+    const S = rec.surf;
+    S.board.c.set(0, HOOP_RIM_Y + 0.35, -0.12).applyMatrix4(M); S.board.n.set(0, 0, 1).transformDirection(M); S.board.u.set(1, 0, 0).transformDirection(M);
+    S.board.v.crossVectors(S.board.n, S.board.u); S.board.hu = 0.9 * sx; S.board.hv = 0.525 * sx; S.board.th = 0.04 * sx;
+    S.rim.c.copy(rec.rimLocal).applyMatrix4(M); S.rim.axis.set(0, 1, 0).transformDirection(M); S.rim.R = HOOP_RIM_R * sx; S.rim.tube = 0.012 * sx;
+    S.pole.a.set(0, 0, -0.6).applyMatrix4(M); S.pole.b.set(0, 3.6, -0.6).applyMatrix4(M); S.pole.r = 0.05 * sx;
+    S.arm.a.set(0, 3.35, -0.6).applyMatrix4(M); S.arm.b.set(0, 3.35, -0.1).applyMatrix4(M); S.arm.r = 0.04 * sx;
+    ENG_SURF.push(S.board, S.rim, S.pole, S.arm);
+  }
+  return ENG_SURF;
+}
 async function engSpawnBasket(meta = {}) {
   const mesh = await basketGeo(ENG.gltf);
   const fwd = new THREE.Vector3(); ENG.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
@@ -6803,14 +6834,19 @@ async function engSpawnBasket(meta = {}) {
   // palm's length in front of the nearest palm, where the DEI approach takes it the
   // rest of the way. Without tracking it rests ahead of the camera as before.
   const home = engHandTarget(new THREE.Vector3())
-    ? engHandTarget(new THREE.Vector3()).addScaledVector(fwd, -0.22).add(new THREE.Vector3(0, 0.04, 0))
+    ? engHandTarget(new THREE.Vector3()).add(new THREE.Vector3(0, 0.02, 0))   // the POCKET of the nearest palm (its inner side): born in the hand
     : ENG.orbit.target.clone().addScaledVector(fwd, 1.2).setY(BASKET_R + 0.02);
-  const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.0, restitution: 0.72,
+  const ball = new PropBall(null, { radius: BASKET_R, mesh, gravity: -9.81, restitution: 0.72,
     home, floorY: 0, boundsR: 12, spawnOffset: new THREE.Vector3(0, 0, 0),
     attract: { zone: 0.5, force: 0.05 },               // the DEI approach, in a world that has a floor
-    grabNear: { need: 4, margin: 0.035 } });
-  ball.grasp = ballGraspHook(ball, () => ENG.camera,
-    () => ({ W: ENG.renderer.domElement.clientWidth || 1300, H: ENG.renderer.domElement.clientHeight || 900 }), BASKET_PX);
+    grabNear: { need: 4, margin: 0.035 },
+    sim: true, mass: 0.62,                             // REAL physics: substepped flight, quadratic drag, e·μ per surface, kinematic hands
+    intent: new HandIntent() });                       // claw → take · push → the shot leaves at the palm's peak velocity · drop
+  ball.surfaces = ENG_SURF;                            // the hoops' board / rim / pole / arm (engSurfacesTick)
+  FLIGHT.show();
+  // NO screen-space grasp hook here: it snaps the ball to the hand's DEPTH (inside the palm) — a webcam-mirror device.
+  // In the engine the catch is physical: the pocket on the palm's inner side, the claw, the finger stop.
+  ball.grasp = null;
   ball.onGrab = (slot) => { if (!ROUND.on) CUES.cue('caught', slot + ' hand', undefined, 1300); };
   ball.onRelease = (v) => { if (!ROUND.on && v.length() > 1.6) CUES.cue('thrown', '', undefined, 1100); };
   engAdopt(mesh, { type: 'ball', label: meta.label || 'basketball ' + (ENG.seq + 1) });
@@ -6838,6 +6874,8 @@ function engBallTick(dt) {
   const T = window.__lab && window.__lab.AVSYNC;
   const packs = T && T.packsAligned ? T.packs : null;   // rendered POV HoloHands only
   const H = ENG.renderer.domElement.clientHeight || 900;
+  engSurfacesTick();                                    // the hoops' collision, from their live transforms
+  let first = true;
   // the tracked FIGURE supports and bats it too (BodyBody: 37 pose joints + 10
   // virtual colliders) — it rests on a chest, bounces off a knee, never passes through
   const bodies = (bodyBody && bodyBody.present) ? [bodyBody] : [];
@@ -6850,6 +6888,11 @@ function engBallTick(dt) {
     }
     B.resistSkin = pxToMetres(ENG.camera, H, B.sphere.pos, BASKET_PX);
     B.update(dt, packs, packHands(packs), bodies);
+    if (first && FLIGHT.on) {                          // the FLIGHT panel + the predicted arc, for the first ball
+      FLIGHT.update(B);
+      FLIGHT.arc(!B.hold && !B.cradle && B.sim && !B.sim.asleep && B.sphere.vel.length() > 0.6 ? predictArc(B.sim, { floorY: B.floorY }) : []);
+    }
+    first = false;
   }
   engCallTick(packs);                                   // 🪝 an open, still palm calls a free ball
   engRoundTick(packs);                                  // 🎯 GO! → INCOMING → CATCH → SHOOT → GOAL
@@ -6924,13 +6967,18 @@ function engHandTarget(out, prefer = null) {
   if (!ENG.sdk.on || ENG.sdk.view !== 'pov') return null;
   const T = window.__lab && window.__lab.AVSYNC;
   const pk = T && T.packsAligned ? T.packs : null;
-  let best = null, bestScore = -1;
+  let best = null, bestScore = -1, bestSlot = null;
   if (pk) for (const [slot, pack] of [['left', pk.L], ['right', pk.R]]) {
     if (!pack || !pack[0] || !pack[9]) continue;
     const score = (prefer === slot ? 2 : 0) + (1 - _closure(pack));   // open beats closed, asked-for beats either
-    if (score > bestScore) { bestScore = score; best = _htA.copy(pack[0]).lerp(pack[9], 0.5); }
+    if (score > bestScore) { bestScore = score; best = _htA.copy(pack[0]).lerp(pack[9], 0.5); bestSlot = slot; }
   }
-  if (best) return out.copy(best).add(new THREE.Vector3(0, 0.03, 0));
+  if (best) {
+    const B = engRoundBall();                    // the POCKET: on the palm's inner side — where a ball can actually be caught
+    const pack = pk && bestSlot ? pk[bestSlot === 'left' ? 'L' : 'R'] : null;
+    const P = B && B._pocketOf && pack ? B._pocketOf(bestSlot, pack, B.radius * B.userS, new THREE.Vector3()) : null;
+    return P ? out.copy(P) : out.copy(best).add(new THREE.Vector3(0, 0.03, 0));
+  }
   const U = ENG_USER;
   if (U.hR) return out.copy(U.handR);
   if (U.hL) return out.copy(U.handL);
@@ -6981,7 +7029,8 @@ function engRimWorld() {                       // the first hoop's rim, in world
   for (const rec of HOOPS.values()) {
     rec.g.updateWorldMatrix(true, false);
     _rimW.copy(rec.rimLocal).applyMatrix4(rec.g.matrixWorld);
-    return { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: HOOP_RIM_R * (rec.g.scale.x || 1) };
+    const n = new THREE.Vector3(0, 0, 1).transformDirection(rec.g.matrixWorld); n.y = 0; n.normalize();   // the hoop faces its +z (the user's side)
+    return { x: _rimW.x, y: _rimW.y, z: _rimW.z, r: HOOP_RIM_R * (rec.g.scale.x || 1), n: { x: n.x, y: 0, z: n.z } };
   }
   return null;
 }
@@ -6991,15 +7040,23 @@ function engLaunchBall(B, to, T = 1.15) { return launchBallTo(B, to, T, ENG.came
 function launchBallTo(B, to, T = 1.15, cam = ENG.camera, rim = null) {
   const fwd = new THREE.Vector3(); cam.getWorldDirection(fwd); fwd.y = 0; if (fwd.lengthSq() < 1e-6) fwd.set(0, 0, -1); fwd.normalize();
   const ahead = { x: to.x + fwd.x * 4.0, y: Math.max(to.y + 1.4, to.y + 0.6), z: to.z + fwd.z * 4.0 };
-  const from = launchOrigin(rim, to, ahead);
+  const from = rim && rim.n ? { x: rim.x + rim.n.x * (rim.r + 0.45), y: rim.y - 0.25, z: rim.z + rim.n.z * (rim.r + 0.45) }   // the rim's FRONT: clear of the iron and the board
+                             : launchOrigin(rim, to, ahead);
   { const d = Math.hypot(from.x - to.x, from.y - to.y, from.z - to.z), lim = (B.boundsR || 3.4) * 0.85;   // inside the ball's bounds, or it resets mid-air
     if (d > lim) { const k = lim / d; from.x = to.x + (from.x - to.x) * k; from.y = to.y + (from.y - to.y) * k; from.z = to.z + (from.z - to.z) * k; } }
-  const v = solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: engStepDt(), T });   // the step the ball will actually take
+  if (B.sim) for (let pass = 0; pass < 3; pass++) {                                                     // the origin must be CLEAR of every surface (under the rim is inside its shell)
+    const cs = []; for (const s of B.surfaces) collectContacts(s, from, B.sim.r + 0.05, cs);
+    if (!cs.length) break;
+    for (const c of cs) { from.x += c.n.x * c.depth; from.y += c.n.y * c.depth; from.z += c.n.z * c.depth; }
+  }
+  const v = B.sim ? solveLaunchSim(from, to, { g: B.sim.g, k: B.sim.k, T })                             // the simulator's own integrator
+                  : solveLaunch(from, to, { g: B.sphere.gravity, drag: B.sphere.drag, dt: engStepDt(), T });   // the step the ball will actually take
   B.hold = null; B.cradle = null; B._velHist.length = 0;
   B.sphere.pos.set(from.x, from.y, from.z); B.sphere.vel.set(v.vx, v.vy, v.vz);
   B.sphere.angVel.set(2, 0, 0);
   B.center.set(to.x, to.y, to.z);              // the workspace follows the catcher (bounds are measured from it)
   B.mesh.position.copy(B.sphere.pos);
+  if (B.sim) { B.sim.wake(); B.rec.release(B.sim, { source: 'launch' }); }
   return from;
 }
 function engFreeBall(near) {                   // the nearest ball nobody holds
@@ -7023,7 +7080,11 @@ function engCallTick(packs) {
     if (!CALL.tick(slot, _callP, _closure(pack), now)) continue;
     const B = engFreeBall(_callP);
     if (!B || B.sphere.pos.distanceTo(_callP) < 0.45) continue;   // already at hand
-    engLaunchBall(B, { x: _callP.x, y: _callP.y + 0.03, z: _callP.z }, 0.95);
+    // a hand that just let the ball go (a shot, a drop, a pass) cannot call it back: the open, still hand after a shot IS the
+    // call pose, and the ball flying back into it a second later was the glue
+    if (B._letGo && B._t - Math.max(B._letGo.left ?? -1e9, B._letGo.right ?? -1e9) < 2.5) continue;
+    const to = engHandTarget(new THREE.Vector3(), slot) || new THREE.Vector3(_callP.x, _callP.y + 0.03, _callP.z);   // the palm's POCKET (its inner side)
+    engLaunchBall(B, { x: to.x, y: to.y, z: to.z }, 0.95);
     catchCue(0.95, slot + ' hand');
   }
 }
@@ -7214,6 +7275,8 @@ function engSdkDolly() {
 ENG.round = ROUND; ENG.roundStart = engRoundStart; ENG.roundStop = engRoundStop; ENG.spawnHoop = engSpawnHoop; ENG.hoops = HOOPS;
 ENG.handTarget = (out) => engHandTarget(out || new THREE.Vector3()); ENG.syncLabCamera = engSyncLabCamera; ENG.launchBall = engLaunchBall;
 ENG.rimWorld = engRimWorld; ENG.freeBall = engFreeBall; ENG.cues = CUES; ENG.launchBallTo = launchBallTo; ENG.frameDt = () => engStepDt(); window.__lab.frameDt = () => FRAME_DT.lab;
+ENG.flight = FLIGHT; ENG.surfaces = ENG_SURF; ENG.surfacesTick = engSurfacesTick;
+ENG.flightLog = () => { const B = engRoundBall(); return B && B.rec ? B.rec.events : []; };
 
 // ── CLOTHIFY, the component: any prop in the scene becomes cloth ──
 // The rug ships pre-lattticed from tools/cloth; this does the same fit at

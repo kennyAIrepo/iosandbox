@@ -81,11 +81,14 @@ export function fingerStop(query, pack, radii, skin = 0.004, opts = {}) {
       }
       _d0.divideScalar(L);
       _ax.crossVectors(_d0, _n);
-      if (_ax.lengthSq() < 1e-8) {                               // pointing straight in (or out): any perpendicular will do
-        _ax.set(1, 0, 0).cross(_d0); if (_ax.lengthSq() < 1e-8) _ax.set(0, 1, 0).cross(_d0);
+      if (_ax.lengthSq() < 1e-8) {                               // pointing straight in (or out): bend in the finger's CURL plane (about the palm's side axis)
+        if (opts.hint) _ax.set(opts.hint.x, opts.hint.y, opts.hint.z).cross(_d0).multiplyScalar(-1);
+        if (_ax.lengthSq() < 1e-8) { _ax.set(1, 0, 0).cross(_d0); if (_ax.lengthSq() < 1e-8) _ax.set(0, 1, 0).cross(_d0); }
       }
       _ax.normalize();
-      const thMax = Math.acos(Math.max(-1, Math.min(1, _d0.dot(_n))));   // this far, the bone points along the outward normal
+      // this far, the bone points along the outward normal — but a finger never bends more than ~95° from where the
+      // tracker put it: past that it stays partly inside and the opaque prop swallows it (never a finger folded back)
+      const thMax = Math.min(opts.maxAngle ?? 1.66, Math.acos(Math.max(-1, Math.min(1, _d0.dot(_n)))));
       if (thMax < 1e-4) continue;                                // already pointing out: only its parent could help
       const gAt = (th) => { _q.setFromAxisAngle(_ax, th); _t.copy(_d0).applyQuaternion(_q).multiplyScalar(L).add(P); return query(_t, null) - r; };
       let lo = 0, hi = thMax;
